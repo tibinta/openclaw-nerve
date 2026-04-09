@@ -18,8 +18,6 @@ interface MemoryListProps {
   onRefresh: (signal?: AbortSignal) => void | Promise<void>;
   isLoading?: boolean;
   hideHeader?: boolean;
-  /** True when the workspace lives in a remote sandbox. */
-  remoteWorkspace?: boolean;
   /** Compact mode for mobile/topbar dropdown; uses kebab actions for rows. */
   compact?: boolean;
 }
@@ -32,7 +30,7 @@ interface EditingMemoryState {
 const MEMORY_EDITOR_STATE_KIND = 'memory-editor:active';
 
 /** Searchable, editable list of agent memories with add/delete support. */
-export function MemoryList({ agentId, memories: initialMemories, onRefresh, isLoading: initialLoading, hideHeader, remoteWorkspace = false, compact = false }: MemoryListProps) {
+export function MemoryList({ agentId, memories: initialMemories, onRefresh, isLoading: initialLoading, hideHeader, compact = false }: MemoryListProps) {
   // useMemories provides optimistic state that reflects pending operations
   const { memories, addMemory, deleteMemory, error, clearError, isLoading } = useMemories(initialMemories, agentId);
   
@@ -268,16 +266,7 @@ export function MemoryList({ agentId, memories: initialMemories, onRefresh, isLo
         </div>
       )}
 
-      {/* Remote workspace notice */}
-      {remoteWorkspace ? (
-        <div className="flex-1 flex items-center justify-center px-4">
-          <div className="text-muted-foreground text-[0.733rem] text-center max-w-[240px]">
-            <p className="font-medium text-foreground/70 mb-1">Sandboxed Workspace</p>
-            <p>Memory management is not available when the workspace lives inside an OpenClaw sandbox. View and edit memories directly on the gateway host.</p>
-          </div>
-        </div>
-      ) : (
-      /* Memory list */
+      {/* Memory list */}
       <div className="flex-1 overflow-y-auto">
         {initialLoading && !memories.length ? (
           <MemorySkeletonGroup count={6} />
@@ -333,9 +322,8 @@ export function MemoryList({ agentId, memories: initialMemories, onRefresh, isLo
           </>
         )}
       </div>
-      )}
 
-      {!remoteWorkspace && (<>
+      <>
       {/* Add Memory Dialog */}
       <AddMemoryDialog
         open={addDialogOpen}
@@ -357,7 +345,7 @@ export function MemoryList({ agentId, memories: initialMemories, onRefresh, isLo
         onConfirm={handleConfirmDelete}
         isLoading={isLoading}
       />
-      </>)}
+      </>
     </div>
   );
 }
