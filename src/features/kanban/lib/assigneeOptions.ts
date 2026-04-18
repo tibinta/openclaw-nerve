@@ -32,6 +32,19 @@ function buildActiveAgentOptions(sessions: Session[], agentName = 'Agent'): Assi
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 }
 
+function buildKnownAgentOptions(agentName = 'Agent'): AssigneeOption[] {
+  return [
+    { value: 'agent:main', label: `${agentName} (main)` },
+    { value: 'agent:janes', label: 'Agent janes' },
+    { value: 'agent:reviewer', label: 'Agent reviewer' },
+    { value: 'agent:designer', label: 'Agent designer' },
+    { value: 'agent:codex', label: 'Agent codex' },
+    { value: 'agent:scout', label: 'Agent scout' },
+    { value: 'agent:standard', label: 'Agent standard' },
+    { value: 'agent:fast-worker', label: 'Agent fast worker' },
+  ];
+}
+
 function humanizeStaleValue(value: string): string {
   const readable = value
     .trim()
@@ -58,10 +71,17 @@ function buildStaleCurrentOption(currentValue: string): AssigneeOption {
 }
 
 export function buildAssigneeOptions(sessions: Session[], agentName = 'Agent'): AssigneeOption[] {
-  return [
-    ...BASE_ASSIGNEE_OPTIONS,
-    ...buildActiveAgentOptions(sessions, agentName),
-  ];
+  const active = buildActiveAgentOptions(sessions, agentName);
+  const known = buildKnownAgentOptions(agentName);
+  const merged = [...BASE_ASSIGNEE_OPTIONS, ...active];
+  const seen = new Set(merged.map((option) => option.value));
+  for (const option of known) {
+    if (!seen.has(option.value)) {
+      merged.push(option);
+      seen.add(option.value);
+    }
+  }
+  return merged;
 }
 
 export function buildAssigneeOptionsForEdit(
