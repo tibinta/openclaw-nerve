@@ -3,6 +3,10 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TopBar } from './TopBar';
 
+vi.mock('@/features/dashboard/useLimits', () => ({
+  useLimits: () => ({ codexLimits: { available: true, rotation: { available: true, activeAccount: 'alex', profileCount: 2 } } })
+}));
+
 vi.mock('./NerveLogo', () => ({
   default: () => <div data-testid="nerve-logo" />,
 }));
@@ -29,6 +33,13 @@ describe('TopBar', () => {
     renderTopBar();
 
     expect(screen.getByRole('button', { name: /switch to tasks view/i })).toBeInTheDocument();
+  });
+
+  it('shows a Codex status pill in the top bar', () => {
+    renderTopBar();
+    expect(screen.getByLabelText(/Codex watcher armed, active account alex/i)).toBeInTheDocument();
+    expect(screen.getByText(/alex/i)).toBeInTheDocument();
+    expect(screen.getByText(/watcher armed/i)).toBeInTheDocument();
   });
 
   it('hides the tasks view toggle when kanban visibility is disabled', () => {

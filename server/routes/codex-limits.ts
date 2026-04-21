@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { CODEX_DIR } from '../lib/constants.js';
 import { createCachedFetch } from '../lib/cached-fetch.js';
+import { getCodexRotationStatus, rotateCodexAuth, saveCodexProfileFromAuth } from '../lib/codex-rotation.js';
 
 const app = new Hono();
 
@@ -47,6 +48,7 @@ interface CodexLimitsResponse {
   weekly_limit?: LimitWindow;
   credits?: Credits;
   plan_type?: string | null;
+  rotation?: ReturnType<typeof getCodexRotationStatus>;
 }
 
 interface OpenAIUsageResponse {
@@ -208,13 +210,13 @@ async function getCodexLimits(): Promise<CodexLimitsResponse> {
   const token = await getAccessToken();
   if (token) {
     const apiLimits = await fetchFromAPI(token);
-    if (apiLimits) return { available: true, source: 'api', ...apiLimits };
+    if (apiLimits) return { available: true, source: 'api', ...apiLimits, rotation: getCodexRotationStatus() };
   }
 
   const localLimits = await parseLocalSessions();
-  if (localLimits) return { available: true, source: 'local', ...localLimits };
+  if (localLimits) return { available: true, source: 'local', ...localLimits, rotation: getCodexRotationStatus() };
 
-  return { available: false, error: 'No Codex data found' };
+  return { available: false, error: 'No Codex data found', rotation: getCodexRotationStatus() };
 }
 
 const getCodexLimitsCached = createCachedFetch(getCodexLimits, undefined, {
@@ -231,5 +233,31 @@ app.get('/api/codex-limits', async (c) => {
     return c.json({ available: false, error: 'Failed to fetch Codex limits' }, 500);
   }
 });
+
+app.post('/api/codex-limits/rotate', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const result = await rotateCodexAuth(typeof body?.targetId === 'string' ? body.targetId : undefined);
+    return c.json(result, result.ok ? 200 : 200);
+  } catch (error) {
+    console.error('Error rotating Codex auth:', error);
+    return c.json({ ok: false, message: 'Failed to rotate Codex auth', status: getCodexRotationStatus() }, 500);
+  }
+});
+
+app.post('/api/codex-limits/profiles/capture', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const result = await saveCodexProfileFromAuth({
+      id: typeof body?.id === 'string' ? body.id : undefined,
+      label: typeof body?.label === 'string' ? body.label : undefined,
+    });
+    return c.json(result, result.ok ? 200 : 400);
+  } catch (error) {
+    console.error('Error capturing Codex profile:', error);
+    return c.json({ ok: false, message: 'Failed to capture Codex profile', status: getCodexRotationStatus() }, 500);
+  }
+});
+
 
 export default app;

@@ -18,10 +18,27 @@ export interface CodexLimitEntry extends LimitEntry {
   resets_at_formatted: string | null; // legacy
 }
 
+export interface CodexRotationProfile {
+  id: string;
+  label: string;
+  authPath: string;
+}
+
+export interface CodexRotationStatus {
+  available: boolean;
+  blocker?: string;
+  nextAction?: string;
+  activeAccount?: string | null;
+  activeProfile?: string | null;
+  profileCount: number;
+  profiles?: CodexRotationProfile[];
+}
+
 export interface CodexLimits {
   available: boolean;
   five_hour_limit?: CodexLimitEntry;
   weekly_limit?: CodexLimitEntry;
+  rotation?: CodexRotationStatus;
 }
 
 export interface ClaudeLimitEntry extends LimitEntry {
@@ -46,7 +63,7 @@ const POLL_INTERVAL_MS = 60_000;
 const GRACE_MS = 60_000; // keep loading state for 60s before showing "unavailable"
 
 /** Hook to fetch and expose rate-limit / usage data from the gateway. */
-export function useLimits(): UseLimitsReturn {
+export function useLimits(refreshKey = 0): UseLimitsReturn {
   const [codexLimits, setCodexLimits] = useState<CodexLimits | null>(null);
   const [claudeLimits, setClaudeLimits] = useState<ClaudeCodeLimits | null>(null);
   const [codexLastChecked, setCodexLastChecked] = useState<number | null>(null);
@@ -104,7 +121,7 @@ export function useLimits(): UseLimitsReturn {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [refreshKey]);
 
   return { codexLimits, claudeLimits, codexLastChecked, claudeLastChecked };
 }

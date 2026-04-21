@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { ViewMode } from "@/features/command-palette/commands";
 import type { AgentLogEntry, EventEntry, TokenData } from "@/types";
+import { useLimits } from "@/features/dashboard/useLimits";
 import NerveLogo from "./NerveLogo";
 
 const AgentLog = lazy(() =>
@@ -212,6 +213,12 @@ export function TopBar({
     return () => document.removeEventListener("keydown", handleKey);
   }, [visiblePanel]);
 
+  const { codexLimits } = useLimits();
+  const rotation = codexLimits?.rotation;
+  const activeCodexLabel = rotation?.profiles?.find((profile) => profile.id === rotation?.activeAccount)?.label
+    || rotation?.activeAccount
+    || 'no account';
+
   const totalCost = useMemo(() => {
     if (!tokenData) return null;
     const cost = tokenData.persistent?.totalCost ?? tokenData.totalCost ?? 0;
@@ -360,25 +367,37 @@ export function TopBar({
             </button>
           )}
 
-          {/* Usage button */}
-          <button
-            onClick={() => togglePanel("usage")}
-            title="Token Usage"
-            aria-label="Toggle usage panel"
-            aria-expanded={visiblePanel === "usage"}
-            aria-haspopup="true"
-            aria-controls="topbar-panel"
-            data-active={visiblePanel === "usage"}
-            className={buttonBase}
-          >
-            <BarChart3 size={14} aria-hidden="true" />
-            <span className="hidden sm:inline">Usage</span>
-            {totalCost && (
-              <span className="hidden rounded-full bg-background/80 px-2 py-0.5 text-[0.6rem] tabular-nums text-foreground/80 lg:inline-flex">
-                {totalCost}
+          {/* Usage button + Codex status */}
+          <div className="flex flex-wrap items-center gap-2">
+              <span
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-border/60 bg-background/85 px-3 py-1.5 text-[0.667rem] text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] max-[371px]:min-h-[38px] max-[371px]:gap-1 max-[371px]:px-2.5 sm:min-h-10 sm:px-3 sm:text-[0.7rem]"
+                aria-label={rotation?.available ? 'Codex watcher armed, active account ' + activeCodexLabel : 'Codex profiles missing, active account ' + activeCodexLabel}
+              >
+                <span className={rotation?.available ? 'size-1.5 rounded-full bg-green' : 'size-1.5 rounded-full bg-orange'} />
+                <span className="font-semibold text-foreground">Codex</span>
+                <span className="whitespace-nowrap">{activeCodexLabel}</span>
+                <span className="whitespace-nowrap">·</span>
+                <span className="whitespace-nowrap">{rotation?.available ? 'watcher armed' : 'profiles missing'}</span>
               </span>
-            )}
-          </button>
+            <button
+              onClick={() => togglePanel("usage")}
+              title="Token Usage"
+              aria-label="Toggle usage panel"
+              aria-expanded={visiblePanel === "usage"}
+              aria-haspopup="true"
+              aria-controls="topbar-panel"
+              data-active={visiblePanel === "usage"}
+              className={buttonBase}
+            >
+              <BarChart3 size={14} aria-hidden="true" />
+              <span className="hidden sm:inline">Usage</span>
+              {totalCost && (
+                <span className="hidden rounded-full bg-background/80 px-2 py-0.5 text-[0.6rem] tabular-nums text-foreground/80 lg:inline-flex">
+                  {totalCost}
+                </span>
+              )}
+            </button>
+          </div>
 
           {/* Settings button */}
           <button
