@@ -121,6 +121,15 @@ export interface KanbanTask {
   estimateMin?: number;
   actualMin?: number;
   feedback: TaskFeedback[];
+  evidence_links?: string[];
+  proof_gate?: ProofGate;
+}
+
+export interface ProofGate {
+  reindex_verified?: boolean;
+  read_back_verified?: boolean;
+  live_link_or_canvas_checked?: boolean;
+  proof_log_updated?: boolean;
 }
 
 export interface KanbanBoardConfig {
@@ -264,6 +273,15 @@ export class InvalidTransitionError extends Error {
   }
 }
 
+export class ProofGateRequiredError extends Error {
+  missing: string[];
+  constructor(missing: string[]) {
+    super(`Proof gate required: ${missing.join(', ')}`);
+    this.name = 'ProofGateRequiredError';
+    this.missing = missing;
+  }
+}
+
 // ── Constants ────────────────────────────────────────────────────────
 
 const CURRENT_SCHEMA_VERSION = 1;
@@ -297,6 +315,32 @@ function getAllowedTaskStatuses(config: KanbanBoardConfig): Set<string> {
 
 function isAllowedTaskStatus(value: string, config: KanbanBoardConfig): boolean {
   return getAllowedTaskStatuses(config).has(value);
+}
+
+function hasProofGate(task: Pick<KanbanTask, 'evidence_links' | 'proof_gate'>): boolean {
+  const evidenceLinks = task.evidence_links;
+  const proofGate = task.proof_gate;
+
+  return Array.isArray(evidenceLinks)
+    && evidenceLinks.length > 0
+    && proofGate?.reindex_verified === true
+    && proofGate?.read_back_verified === true
+    && proofGate?.live_link_or_canvas_checked === true
+    && proofGate?.proof_log_updated === true;
+}
+
+function requireProofGate(task: Pick<KanbanTask, 'id' | 'status' | 'evidence_links' | 'proof_gate'>): void {
+  if (task.status !== 'done') return;
+  if (hasProofGate(task)) return;
+
+  const missing = [] as string[];
+  if (!Array.isArray(task.evidence_links) || task.evidence_links.length === 0) missing.push('evidence_links');
+  if (task.proof_gate?.reindex_verified !== true) missing.push('proof_gate.reindex_verified');
+  if (task.proof_gate?.read_back_verified !== true) missing.push('proof_gate.read_back_verified');
+  if (task.proof_gate?.live_link_or_canvas_checked !== true) missing.push('proof_gate.live_link_or_canvas_checked');
+  if (task.proof_gate?.proof_log_updated !== true) missing.push('proof_gate.proof_log_updated');
+
+  throw new ProofGateRequiredError(missing);
 }
 
 function normalizeTaskStatus(value: unknown, configColumns?: TaskStatus[]): TaskStatus {
@@ -620,6 +664,8 @@ export class KanbanStore {
     thinking?: 'off' | 'low' | 'medium' | 'high';
     dueAt?: number;
     estimateMin?: number;
+    evidence_links?: string[];
+    proof_gate?: ProofGate;
   }): Promise<KanbanTask> {
     return this.withStore(async () => {
       const data = await this.readRaw();
@@ -657,8 +703,12 @@ export class KanbanStore {
         thinking: input.thinking,
         dueAt: input.dueAt,
         estimateMin: input.estimateMin,
+        evidence_links: input.evidence_links,
+        proof_gate: input.proof_gate,
         feedback: [],
       };
+
+      requireProofGate(task);
 
       data.tasks.push(task);
       await this.writeRaw(data);
@@ -690,6 +740,8 @@ export class KanbanStore {
         | 'resultAt'
         | 'run'
         | 'feedback'
+        | 'evidence_links'
+        | 'proof_gate'
       >
     >,
     actor?: string,
@@ -723,6 +775,8 @@ export class KanbanStore {
         updatedAt: now,
         version: task.version + 1,
       };
+
+      requireProofGate(updated);
 
       // If status changed, re-compute columnOrder (append to end of new column)
       if (normalizedPatch.status && normalizedPatch.status !== task.status) {
@@ -807,6 +861,8 @@ export class KanbanStore {
       task.columnOrder = clampedIndex;
       task.updatedAt = now;
       task.version += 1;
+
+      requireProofGate(task);
 
       await this.writeRaw(data);
       await this.audit({
@@ -990,6 +1046,8 @@ export class KanbanStore {
 
       const now = Date.now();
       task.status = 'done';
+
+      requireProofGate(task);
 
       if (note) {
         task.feedback.push({
@@ -1397,8 +1455,12 @@ export class KanbanStore {
       thinking: payload.thinking as KanbanTask['thinking'],
       dueAt: payload.dueAt as number | undefined,
       estimateMin: payload.estimateMin as number | undefined,
+      evidence_links: payload.evidence_links as string[] | undefined,
+      proof_gate: payload.proof_gate as ProofGate | undefined,
       feedback: [],
     };
+
+    requireProofGate(task);
 
     data.tasks.push(task);
     return task;
@@ -1419,7 +1481,7 @@ export class KanbanStore {
     // The proposal workflow (confirm/auto) serves as the gating mechanism instead.
 
     // Build patch from payload — allowlist safe fields only
-    const ALLOWED_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'assignee', 'labels', 'result'] as const;
+    const ALLOWED_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'assignee', 'labels', 'result', 'evidence_links', 'proof_gate'] as const;
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED_UPDATE_FIELDS) {
       if (key in payload) patch[key] = payload[key];
@@ -1442,6 +1504,7 @@ export class KanbanStore {
     }
 
     const updated: KanbanTask = { ...task, ...patch, updatedAt: now, version: task.version + 1 } as KanbanTask;
+    requireProofGate(updated);
     data.tasks[idx] = updated;
     return updated;
   }

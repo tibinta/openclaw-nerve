@@ -24,6 +24,7 @@ import {
   InvalidTransitionError,
   ProposalNotFoundError,
   ProposalAlreadyResolvedError,
+  ProofGateRequiredError,
 } from '../lib/kanban-store.js';
 import { InvalidKanbanAssigneeError, resolveKanbanAssigneeRootSessionKey } from '../lib/kanban-assignee.js';
 import { invokeGatewayTool } from '../lib/gateway-client.js';
@@ -599,6 +600,44 @@ const runLinkSchema = z.object({
   error: z.string().optional(),
 });
 
+const proofGateSchema = z.object({
+  reindex_verified: z.boolean(),
+  read_back_verified: z.boolean(),
+  live_link_or_canvas_checked: z.boolean(),
+  proof_log_updated: z.boolean(),
+});
+
+const proofGateFieldsSchema = z.object({
+  evidence_links: z.array(z.string().min(1).max(2000)).max(200).optional(),
+  proof_gate: proofGateSchema.optional(),
+});
+
+function validateProofGateIfDone<T extends { status?: string; evidence_links?: string[]; proof_gate?: z.infer<typeof proofGateSchema> }>(
+  data: T,
+  ctx: z.RefinementCtx,
+): void {
+  if (data.status !== 'done') return;
+  if (!Array.isArray(data.evidence_links) || data.evidence_links.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['evidence_links'], message: 'evidence_links required when status is done' });
+  }
+  if (!data.proof_gate) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['proof_gate'], message: 'proof_gate required when status is done' });
+    return;
+  }
+  if (data.proof_gate.reindex_verified !== true) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['proof_gate', 'reindex_verified'], message: 'reindex_verified must be true when status is done' });
+  }
+  if (data.proof_gate.read_back_verified !== true) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['proof_gate', 'read_back_verified'], message: 'read_back_verified must be true when status is done' });
+  }
+  if (data.proof_gate.live_link_or_canvas_checked !== true) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['proof_gate', 'live_link_or_canvas_checked'], message: 'live_link_or_canvas_checked must be true when status is done' });
+  }
+  if (data.proof_gate.proof_log_updated !== true) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['proof_gate', 'proof_log_updated'], message: 'proof_log_updated must be true when status is done' });
+  }
+}
+
 const createTaskSchema = z.object({
   title: z.string().min(1).max(500),
   description: z.string().max(10_000).optional(),
@@ -612,7 +651,7 @@ const createTaskSchema = z.object({
   thinking: thinkingSchema.optional(),
   dueAt: z.number().optional(),
   estimateMin: z.number().min(0).optional(),
-});
+}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
 
 const updateTaskSchema = z.object({
   version: z.number().int().min(1),
@@ -631,7 +670,7 @@ const updateTaskSchema = z.object({
   resultAt: z.number().optional().nullable(),
   run: runLinkSchema.optional().nullable(),
   feedback: z.array(feedbackSchema).optional(),
-});
+}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
 
 const reorderSchema = z.object({
   version: z.number().int().min(1),
@@ -675,7 +714,7 @@ const proposalCreatePayloadSchema = z.object({
   thinking: thinkingSchema.optional(),
   dueAt: z.number().optional(),
   estimateMin: z.number().min(0).optional(),
-});
+}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
 
 const proposalUpdatePayloadSchema = z.object({
   id: z.string().min(1),
@@ -686,7 +725,7 @@ const proposalUpdatePayloadSchema = z.object({
   assignee: taskActorSchema.optional(),
   labels: z.array(z.string().max(100)).max(50).optional(),
   result: z.string().max(50_000).optional(),
-});
+}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
 
 const createProposalSchema = z.object({
   type: z.enum(['create', 'update']),
@@ -1124,6 +1163,13 @@ function handleWorkflowError(c: Context, err: unknown) {
       error: 'invalid_transition',
       from: err.from,
       to: err.to,
+      message: err.message,
+    }, 409);
+  }
+  if (err instanceof ProofGateRequiredError) {
+    return c.json({
+      error: 'proof_gate_required',
+      missing: err.missing,
       message: err.message,
     }, 409);
   }

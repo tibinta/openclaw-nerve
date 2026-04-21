@@ -11,6 +11,7 @@ import {
   ProposalNotFoundError,
   ProposalAlreadyResolvedError,
   InvalidBoardConfigError,
+  ProofGateRequiredError,
 } from './kanban-store.js';
 import type { KanbanTask } from './kanban-store.js';
 import { InvalidKanbanAssigneeError } from './kanban-assignee.js';
@@ -44,9 +45,21 @@ afterEach(async () => {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 async function createSampleTask(overrides: Partial<Parameters<KanbanStore['createTask']>[0]> = {}): Promise<KanbanTask> {
+  const proofDefaults = overrides.status === 'done' && overrides.evidence_links == null && overrides.proof_gate == null
+    ? {
+        evidence_links: ['evidence://test-proof'],
+        proof_gate: {
+          reindex_verified: true,
+          read_back_verified: true,
+          live_link_or_canvas_checked: true,
+          proof_log_updated: true,
+        },
+      }
+    : {};
   return store.createTask({
     title: 'Test task',
     createdBy: 'operator',
+    ...proofDefaults,
     ...overrides,
   });
 }
@@ -346,6 +359,11 @@ describe('updateTask', () => {
     // Should be appended after t1 in review column
     expect(updated.status).toBe('review');
     expect(updated.columnOrder).toBe(1);
+  });
+
+  it('rejects update to done without proof gate', async () => {
+    const task = await createSampleTask({ status: 'review' });
+    await expect(store.updateTask(task.id, task.version, { status: 'done' })).rejects.toThrow(ProofGateRequiredError);
   });
 
   it('throws TaskNotFoundError for missing task', async () => {
@@ -666,7 +684,16 @@ describe('executeTask', () => {
   it('throws InvalidTransitionError for done task', async () => {
     const task = await createSampleTask({ status: 'todo' });
     // Manually set to done via updateTask
-    await store.updateTask(task.id, task.version, { status: 'done' });
+    await store.updateTask(task.id, task.version, {
+      status: 'done',
+      evidence_links: ['evidence://done-task'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
 
     try {
       await store.executeTask(task.id);
@@ -804,16 +831,35 @@ describe('approveTask', () => {
     const task = await createSampleTask({ status: 'todo' });
     await store.updateTask(task.id, task.version, { status: 'review' });
     const reviewed = await store.getTask(task.id);
+    await store.updateTask(reviewed.id, reviewed.version, {
+      evidence_links: ['evidence://approve-task'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+    const proofed = await store.getTask(task.id);
 
-    const approved = await store.approveTask(reviewed.id);
+    const approved = await store.approveTask(proofed.id);
     expect(approved.status).toBe('done');
-    expect(approved.version).toBe(reviewed.version + 1);
+    expect(approved.version).toBe(proofed.version + 1);
   });
 
   it('adds feedback note when provided', async () => {
     const task = await createSampleTask({ status: 'todo' });
     await store.updateTask(task.id, task.version, { status: 'review' });
     const reviewed = await store.getTask(task.id);
+    await store.updateTask(reviewed.id, reviewed.version, {
+      evidence_links: ['evidence://approve-task'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
 
     const approved = await store.approveTask(reviewed.id, 'Looks great!', 'operator');
     expect(approved.feedback.length).toBe(1);
@@ -825,6 +871,15 @@ describe('approveTask', () => {
     const task = await createSampleTask({ status: 'todo' });
     await store.updateTask(task.id, task.version, { status: 'review' });
     const reviewed = await store.getTask(task.id);
+    await store.updateTask(reviewed.id, reviewed.version, {
+      evidence_links: ['evidence://approve-task'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
 
     const approved = await store.approveTask(reviewed.id);
     expect(approved.feedback.length).toBe(0);
@@ -846,6 +901,14 @@ describe('approveTask', () => {
 
   it('throws TaskNotFoundError for missing task', async () => {
     await expect(store.approveTask('nonexistent')).rejects.toThrow(TaskNotFoundError);
+  });
+
+  it('rejects moving review task to done without proof gate', async () => {
+    const task = await createSampleTask({ status: 'todo' });
+    await store.updateTask(task.id, task.version, { status: 'review' });
+    const reviewed = await store.getTask(task.id);
+
+    await expect(store.approveTask(reviewed.id)).rejects.toThrow(ProofGateRequiredError);
   });
 });
 
@@ -1116,6 +1179,16 @@ describe('full workflow', () => {
     const completed = await store.completeRun(executed.id, executed.run!.sessionKey, 'Done!');
     expect(completed.status).toBe('review');
 
+    await store.updateTask(completed.id, completed.version, {
+      evidence_links: ['evidence://approve-task'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
     // Approve
     const approved = await store.approveTask(completed.id, 'LGTM');
     expect(approved.status).toBe('done');
@@ -1183,7 +1256,18 @@ describe('createProposal', () => {
     const task = await createSampleTask();
     const proposal = await store.createProposal({
       type: 'update',
-      payload: { id: task.id, status: 'done', result: 'Completed' },
+      payload: {
+        id: task.id,
+        status: 'done',
+        result: 'Completed',
+        evidence_links: ['evidence://proposal-update'],
+        proof_gate: {
+          reindex_verified: true,
+          read_back_verified: true,
+          live_link_or_canvas_checked: true,
+          proof_log_updated: true,
+        },
+      },
       proposedBy: 'agent:codex',
     });
     expect(proposal.type).toBe('update');
@@ -1240,7 +1324,18 @@ describe('approveProposal', () => {
     const task = await createSampleTask({ title: 'Original' });
     const proposal = await store.createProposal({
       type: 'update',
-      payload: { id: task.id, title: 'Updated by agent', status: 'done' },
+      payload: {
+        id: task.id,
+        title: 'Updated by agent',
+        status: 'done',
+        evidence_links: ['evidence://proposal-approve-update'],
+        proof_gate: {
+          reindex_verified: true,
+          read_back_verified: true,
+          live_link_or_canvas_checked: true,
+          proof_log_updated: true,
+        },
+      },
       proposedBy: 'agent:codex',
     });
 
@@ -1271,7 +1366,17 @@ describe('approveProposal', () => {
   it('throws TaskNotFoundError when update references missing task', async () => {
     const proposal = await store.createProposal({
       type: 'update',
-      payload: { id: 'nonexistent-task', status: 'done' },
+      payload: {
+        id: 'nonexistent-task',
+        status: 'done',
+        evidence_links: ['evidence://missing-task'],
+        proof_gate: {
+          reindex_verified: true,
+          read_back_verified: true,
+          live_link_or_canvas_checked: true,
+          proof_log_updated: true,
+        },
+      },
       proposedBy: 'agent:codex',
     });
     await expect(store.approveProposal(proposal.id)).rejects.toThrow(TaskNotFoundError);

@@ -126,9 +126,21 @@ function jsonPut(body: unknown): RequestInit {
 }
 
 async function createTask(app: Hono, overrides: Record<string, unknown> = {}): Promise<KanbanTask> {
+  const proofDefaults = overrides.status === 'done' && overrides.evidence_links == null && overrides.proof_gate == null
+    ? {
+        evidence_links: ['evidence://test-proof'],
+        proof_gate: {
+          reindex_verified: true,
+          read_back_verified: true,
+          live_link_or_canvas_checked: true,
+          proof_log_updated: true,
+        },
+      }
+    : {};
   const res = await app.request('/api/kanban/tasks', json({
     title: 'Test task',
     createdBy: 'operator',
+    ...proofDefaults,
     ...overrides,
   }));
   return res.json() as Promise<KanbanTask>;
@@ -389,6 +401,19 @@ describe('POST /api/kanban/tasks', () => {
     expect(res.status).toBe(400);
   });
 
+  it('returns 400 when creating done task without proof gate', async () => {
+    const app = await buildApp();
+    const res = await app.request('/api/kanban/tasks', json({
+      title: 'Done task',
+      createdBy: 'operator',
+      status: 'done',
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; details: string };
+    expect(body.error).toBe('validation_error');
+    expect(body.details).toContain('evidence_links required when status is done');
+  });
+
   it('accepts a configured custom status', async () => {
     const app = await buildApp();
     const cfgRes = await app.request('/api/kanban/config', jsonPut({
@@ -441,6 +466,20 @@ describe('PATCH /api/kanban/tasks/:id', () => {
     expect(updated.title).toBe('Updated');
     expect(updated.priority).toBe('high');
     expect(updated.version).toBe(2);
+  });
+
+  it('returns 400 when patching to done without proof gate', async () => {
+    const app = await buildApp();
+    const task = await createTask(app);
+
+    const res = await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: 1,
+      status: 'done',
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; details: string };
+    expect(body.error).toBe('validation_error');
+    expect(body.details).toContain('evidence_links required when status is done');
   });
 
   it('returns 409 on version conflict', async () => {
@@ -1127,6 +1166,13 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
       version: 1,
       status: 'done',
+      evidence_links: ['evidence://execute-invalid-transition'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
     }));
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
@@ -1696,6 +1742,16 @@ describe('POST /api/kanban/tasks/:id/approve', () => {
       version: 1,
       status: 'review',
     }));
+    await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: 2,
+      evidence_links: ['evidence://approve-route'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    }));
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/approve`, json({}));
     expect(res.status).toBe(200);
@@ -1709,6 +1765,16 @@ describe('POST /api/kanban/tasks/:id/approve', () => {
     await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
       version: 1,
       status: 'review',
+    }));
+    await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: 2,
+      evidence_links: ['evidence://approve-route'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
     }));
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/approve`, json({
@@ -1727,6 +1793,16 @@ describe('POST /api/kanban/tasks/:id/approve', () => {
       version: 1,
       status: 'review',
     }));
+    await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: 2,
+      evidence_links: ['evidence://approve-route'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    }));
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/approve`, {
       method: 'POST',
@@ -1742,6 +1818,21 @@ describe('POST /api/kanban/tasks/:id/approve', () => {
     expect(res.status).toBe(409);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('invalid_transition');
+  });
+
+  it('returns 409 when approving review task without proof gate', async () => {
+    const app = await buildApp();
+    const task = await createTask(app, { status: 'todo' });
+    await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: 1,
+      status: 'review',
+    }));
+
+    const res = await app.request(`/api/kanban/tasks/${task.id}/approve`, json({}));
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string; missing: string[] };
+    expect(body.error).toBe('proof_gate_required');
+    expect(body.missing).toContain('evidence_links');
   });
 
   it('returns 404 for missing task', async () => {
@@ -1970,12 +2061,49 @@ describe('POST /api/kanban/proposals', () => {
 
     const res = await app.request('/api/kanban/proposals', json({
       type: 'update',
-      payload: { id: task.id, status: 'done' },
+      payload: {
+        id: task.id,
+        status: 'done',
+        evidence_links: ['evidence://proposal-update'],
+        proof_gate: {
+          reindex_verified: true,
+          read_back_verified: true,
+          live_link_or_canvas_checked: true,
+          proof_log_updated: true,
+        },
+      },
       proposedBy: 'agent:codex',
     }));
     expect(res.status).toBe(201);
     const body = await res.json() as { type: string; status: string };
     expect(body.type).toBe('update');
+  });
+
+  it('returns 400 for create proposal that marks done without proof gate', async () => {
+    const app = await buildApp();
+    const res = await app.request('/api/kanban/proposals', json({
+      type: 'create',
+      payload: { title: 'Done proposal', status: 'done' },
+      proposedBy: 'agent:codex',
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; details: string };
+    expect(body.error).toBe('validation_error');
+    expect(body.details).toContain('evidence_links required when status is done');
+  });
+
+  it('returns 400 for update proposal that marks done without proof gate', async () => {
+    const app = await buildApp();
+    const task = await createTask(app);
+    const res = await app.request('/api/kanban/proposals', json({
+      type: 'update',
+      payload: { id: task.id, status: 'done' },
+      proposedBy: 'agent:codex',
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string; details: string };
+    expect(body.error).toBe('validation_error');
+    expect(body.details).toContain('evidence_links required when status is done');
   });
 
   it('returns 400 for create payload without title', async () => {
@@ -2005,7 +2133,7 @@ describe('POST /api/kanban/proposals', () => {
       payload: { id: 'nonexistent', status: 'done' },
       proposedBy: 'agent:codex',
     }));
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(400);
   });
 
   it('returns 400 for invalid JSON', async () => {
@@ -2767,6 +2895,19 @@ describe('full workflow via HTTP', () => {
     }));
     expect(reviewRes.status).toBe(200);
     await reviewRes.json();
+
+    const proofRes = await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: latest.version + 1,
+      evidence_links: ['evidence://workflow-approve'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    }));
+    expect(proofRes.status).toBe(200);
+    await proofRes.json();
 
     // Approve
     const approveRes = await app.request(`/api/kanban/tasks/${task.id}/approve`, json({
