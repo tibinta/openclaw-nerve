@@ -706,6 +706,152 @@ describe('PATCH /api/kanban/tasks/:id', () => {
   });
 });
 
+// ── POST /api/kanban/tasks/:id/swarm-dispatch ───────────────────────
+
+function swarmPacket(overrides: Record<string, unknown> = {}) {
+  return {
+    packetId: 'crm-math-001',
+    cluster: 'crm',
+    ownerAgentId: 'james-bell---growth-director',
+    checkerAgentId: 'hannah-clark---validation-lead',
+    title: 'Calculate reachouts needed for 20 customers',
+    task: 'Use current conversion rate and compute channel targets.',
+    dod: 'Reachout target per channel is calculated and written to evidence.',
+    evidencePath: '/Users/alexnedelea/.openclaw/workspace/docs/evidence/crm-math-001.md',
+    stopCondition: 'Stop after target math is written or CRM source is unavailable.',
+    ...overrides,
+  };
+}
+
+describe('POST /api/kanban/tasks/:id/swarm-dispatch', () => {
+  it('creates child packet tasks and spawns only the first wave with explicit agent ids', async () => {
+    const invokeGatewayToolMock = vi.fn(async (_tool: string, args?: Record<string, unknown>) => ({
+      sessionKey: `agent:${String(args?.agentId)}:subagent:${String(args?.label)}`,
+      runId: `run-${String(args?.agentId)}`,
+    }));
+    const app = await buildApp({ invokeGatewayToolMock });
+    const parent = await createTask(app, { title: 'Get 20 customers today' });
+
+    const res = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json({
+      objective: 'Get 20 customers today',
+      sourceKind: 'crm_goal',
+      waveLimit: 2,
+      execute: true,
+      packets: [
+        swarmPacket(),
+        swarmPacket({
+          packetId: 'crm-copy-001',
+          ownerAgentId: 'benjamin-scott---outreach-lead',
+          title: 'Write outreach copy',
+          task: 'Write channel-specific outreach copy.',
+          evidencePath: '/Users/alexnedelea/.openclaw/workspace/docs/evidence/crm-copy-001.md',
+        }),
+        swarmPacket({
+          packetId: 'crm-qa-001',
+          cluster: 'qa',
+          ownerAgentId: 'ruby-young---qa',
+          checkerAgentId: 'hannah-clark---validation-lead',
+          title: 'Verify CRM plan',
+          task: 'Verify the CRM execution plan.',
+          evidencePath: '/Users/alexnedelea/.openclaw/workspace/docs/evidence/crm-qa-001.md',
+        }),
+      ],
+    }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      parentTaskId: parent.id,
+      created: 3,
+      deduped: 0,
+      dispatched: 2,
+      queued: 1,
+    });
+
+    expect(invokeGatewayToolMock).toHaveBeenCalledTimes(2);
+    expect(invokeGatewayToolMock).toHaveBeenCalledWith('sessions_spawn', expect.objectContaining({
+      agentId: 'james-bell---growth-director',
+      mode: 'run',
+      cleanup: 'keep',
+      runTimeoutSeconds: 900,
+    }));
+    expect(invokeGatewayToolMock).not.toHaveBeenCalledWith('sessions_spawn', expect.objectContaining({
+      agentId: 'ruby-young---qa',
+    }));
+
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const listRes = await app.request('/api/kanban/tasks?limit=20');
+    const list = await listRes.json() as { items: KanbanTask[] };
+    const children = list.items.filter((task) => task.parentTaskId === parent.id);
+    expect(children).toHaveLength(3);
+    expect(children.filter((task) => task.status === 'in-progress')).toHaveLength(2);
+    expect(children.filter((task) => task.swarmPacket?.packetStatus === 'queued')).toHaveLength(1);
+    expect(children.some((task) => task.swarmPacket?.childSessionKey?.includes('agent:james-bell---growth-director'))).toBe(true);
+
+    const parentRes = await app.request(`/api/kanban/tasks/${parent.id}`);
+    const updatedParent = await parentRes.json() as KanbanTask;
+    expect(updatedParent.swarmSummary).toMatchObject({
+      sourceKind: 'crm_goal',
+      objective: 'Get 20 customers today',
+      packetsTotal: 3,
+      packetsRunning: 2,
+      packetsPassed: 0,
+      packetsBlocked: 0,
+    });
+  });
+
+  it('dedupes packet ids under the same parent task', async () => {
+    const app = await buildApp();
+    const parent = await createTask(app, { title: 'Deduped swarm' });
+
+    const payload = {
+      objective: 'Deduplicate duplicate packet submissions',
+      sourceKind: 'manual',
+      execute: false,
+      packets: [swarmPacket()],
+    };
+
+    const first = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json(payload));
+    const second = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json(payload));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const body = await second.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ created: 0, deduped: 1, dispatched: 0, queued: 1 });
+
+    const listRes = await app.request('/api/kanban/tasks?limit=20');
+    const list = await listRes.json() as { items: KanbanTask[] };
+    expect(list.items.filter((task) => task.parentTaskId === parent.id)).toHaveLength(1);
+  });
+
+  it('marks spawn failures as blocked packet state instead of repeating chat', async () => {
+    const invokeGatewayToolMock = vi.fn(async () => {
+      throw new Error('429 provider rate limit');
+    });
+    const app = await buildApp({ invokeGatewayToolMock });
+    const parent = await createTask(app, { title: 'Rate limit swarm' });
+
+    const res = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json({
+      objective: 'Handle rate limit',
+      sourceKind: 'manual',
+      waveLimit: 1,
+      execute: true,
+      packets: [swarmPacket()],
+    }));
+
+    expect(res.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const listRes = await app.request('/api/kanban/tasks?limit=20');
+    const list = await listRes.json() as { items: KanbanTask[] };
+    const child = list.items.find((task) => task.parentTaskId === parent.id);
+    expect(child?.swarmPacket?.packetStatus).toBe('blocked');
+    expect(child?.swarmPacket?.error).toContain('429 provider rate limit');
+    expect(child?.run?.status).toBe('error');
+  });
+});
+
 // ── DELETE /api/kanban/tasks/:id ─────────────────────────────────────
 
 describe('DELETE /api/kanban/tasks/:id', () => {

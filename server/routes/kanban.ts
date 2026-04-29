@@ -38,12 +38,18 @@ import {
   buildKanbanFallbackRunKey,
   launchKanbanFallbackSubagentViaRpc,
 } from '../lib/kanban-subagent-fallback.js';
+import {
+  validateSwarmDispatchInput,
+  type SwarmDispatchPacketInput,
+} from '../lib/swarm-registry.js';
 import type {
   KanbanTask,
   TaskStatus,
   TaskPriority,
   TaskActor,
   ProposalStatus,
+  SwarmPacket,
+  SwarmSourceKind,
 } from '../lib/kanban-store.js';
 
 const app = new Hono();
@@ -69,6 +75,19 @@ function parseGatewayResponse(result: unknown): Record<string, unknown> {
     return r;
   }
   return {};
+}
+
+function getSpawnIdentity(spawnRaw: unknown): { childSessionKey?: string; runId?: string } {
+  const spawn = parseGatewayResponse(spawnRaw);
+  const childSessionKey = typeof spawn.childSessionKey === 'string'
+    ? spawn.childSessionKey
+    : typeof spawn.sessionKey === 'string'
+      ? spawn.sessionKey
+      : typeof spawn.sessionId === 'string'
+        ? spawn.sessionId
+        : undefined;
+  const runId = typeof spawn.runId === 'string' ? spawn.runId : undefined;
+  return { childSessionKey, runId };
 }
 
 // ── Active poll timer tracking (for graceful shutdown) ───────────────
@@ -803,6 +822,27 @@ const createProposalSchema = z.object({
   proposedBy: taskActorSchema.default('operator'),
 });
 
+const swarmDispatchPacketSchema = z.object({
+  packetId: z.string().min(1).max(200),
+  cluster: swarmClusterSchema,
+  ownerAgentId: z.string().min(1).max(200),
+  checkerAgentId: z.string().min(1).max(200),
+  title: z.string().min(1).max(500),
+  task: z.string().min(1).max(50_000),
+  dod: z.string().min(1).max(5000),
+  evidencePath: z.string().min(1).max(2000),
+  stopCondition: z.string().min(1).max(5000),
+  sourceUrl: z.string().max(2000).optional(),
+});
+
+const swarmDispatchSchema = z.object({
+  objective: z.string().min(1).max(5000),
+  sourceKind: swarmSourceKindSchema,
+  waveLimit: z.number().int().min(1).optional(),
+  execute: z.boolean().default(true),
+  packets: z.array(swarmDispatchPacketSchema).min(1).max(30),
+});
+
 const rejectProposalSchema = z.object({
   reason: z.string().max(5000).optional(),
 });
@@ -1279,6 +1319,270 @@ function handleWorkflowError(c: Context, err: unknown) {
   }
   throw err;
 }
+
+type KanbanStoreInstance = ReturnType<typeof getKanbanStore>;
+
+function buildSwarmPacketPrompt(parent: KanbanTask, packet: SwarmDispatchPacketInput): string {
+  return `You are executing an Executive Swarm packet.
+
+Parent task id: ${parent.id}
+Parent title: ${parent.title}
+Packet id: ${packet.packetId}
+Cluster: ${packet.cluster}
+Owner agent id: ${packet.ownerAgentId}
+Checker agent id: ${packet.checkerAgentId}
+Evidence path: ${packet.evidencePath}
+
+Task:
+${packet.task}
+
+Definition of done:
+${packet.dod}
+
+Stop condition:
+${packet.stopCondition}
+
+Rules:
+- Do only this packet. Do not take over the parent task.
+- Write evidence to the evidence path when file access is available.
+- Return structured proof with packetId, verdict, summary, and evidence_links.
+- If blocked, return the blocker clearly and stop. Do not loop or reply with Confirmed/Acknowledged.`;
+}
+
+async function updateSwarmPacketState(
+  store: KanbanStoreInstance,
+  taskId: string,
+  patch: Partial<SwarmPacket>,
+): Promise<KanbanTask | null> {
+  const latest = await store.getTask(taskId);
+  if (!latest.swarmPacket) return null;
+  return store.updateTask(taskId, latest.version, {
+    swarmPacket: {
+      ...latest.swarmPacket,
+      ...patch,
+    },
+  }, 'operator');
+}
+
+async function syncParentSwarmSummary(
+  store: KanbanStoreInstance,
+  parentTaskId: string,
+  objective: string,
+  sourceKind: SwarmSourceKind,
+): Promise<KanbanTask> {
+  const children = (await store.listTasks({ limit: 200 })).items
+    .filter((task) => task.parentTaskId === parentTaskId && task.swarmPacket);
+  const runningStatuses = new Set(['dispatched', 'running', 'review']);
+  const parent = await store.getTask(parentTaskId);
+  return store.updateTask(parentTaskId, parent.version, {
+    swarmSummary: {
+      sourceKind,
+      objective,
+      packetsTotal: children.length,
+      packetsRunning: children.filter((task) => runningStatuses.has(task.swarmPacket!.packetStatus)).length,
+      packetsPassed: children.filter((task) => task.swarmPacket?.packetStatus === 'passed').length,
+      packetsBlocked: children.filter((task) => task.swarmPacket?.packetStatus === 'blocked').length,
+      lastDispatchAt: Date.now(),
+    },
+  }, 'operator');
+}
+
+async function markSwarmSpawnFailure(
+  store: KanbanStoreInstance,
+  taskId: string,
+  sessionKey: string,
+  message: string,
+  parentTaskId: string,
+  objective: string,
+  sourceKind: SwarmSourceKind,
+): Promise<void> {
+  await store.completeRun(taskId, sessionKey, undefined, `Spawn failed: ${message}`).catch(() => {});
+  await updateSwarmPacketState(store, taskId, {
+    packetStatus: 'blocked',
+    error: message,
+  }).catch(() => null);
+  await syncParentSwarmSummary(store, parentTaskId, objective, sourceKind).catch(() => null);
+}
+
+async function launchSwarmPacket(
+  store: KanbanStoreInstance,
+  parent: KanbanTask,
+  child: KanbanTask,
+  packet: SwarmDispatchPacketInput,
+  objective: string,
+  sourceKind: SwarmSourceKind,
+): Promise<KanbanTask> {
+  const label = `swarm-${parent.id}-${packet.packetId}`;
+  const running = await store.executeTask(child.id, { sessionKey: label }, 'operator');
+  const dispatched = await updateSwarmPacketState(store, running.id, {
+    packetStatus: 'dispatched',
+  });
+
+  const spawnArgs: Record<string, unknown> = {
+    agentId: packet.ownerAgentId,
+    task: buildSwarmPacketPrompt(parent, packet),
+    label,
+    mode: 'run',
+    cleanup: 'keep',
+    runTimeoutSeconds: 900,
+  };
+
+  void trackBackgroundTask(
+    invokeGatewayTool('sessions_spawn', spawnArgs)
+      .then(async (spawnRaw) => {
+        const { childSessionKey, runId } = getSpawnIdentity(spawnRaw);
+        const linkedTask = await store.attachRunIdentifiers(child.id, label, {
+          childSessionKey,
+          runId,
+        });
+        if (!linkedTask) {
+          console.warn(`[kanban] Swarm spawn metadata arrived after task ${child.id} moved on from run ${label}`);
+          return;
+        }
+
+        await updateSwarmPacketState(store, child.id, {
+          packetStatus: 'running',
+          childSessionKey: linkedTask.run?.childSessionKey ?? childSessionKey,
+          runId: linkedTask.run?.runId ?? runId,
+        });
+
+        pollSessionCompletion(store, child.id, {
+          correlationKey: label,
+          childSessionKey: linkedTask.run?.childSessionKey ?? childSessionKey,
+          runId: linkedTask.run?.runId ?? runId,
+        });
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[kanban] Failed to spawn swarm packet ${packet.packetId} for task ${child.id}:`, err);
+        return markSwarmSpawnFailure(store, child.id, label, message, parent.id, objective, sourceKind);
+      }),
+  );
+
+  return dispatched ?? running;
+}
+
+// POST /api/kanban/tasks/:id/swarm-dispatch
+app.post('/api/kanban/tasks/:id/swarm-dispatch', rateLimitGeneral, async (c) => {
+  const store = getKanbanStore();
+  const parentTaskId = c.req.param('id');
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'validation_error', details: 'Invalid JSON body' }, 400);
+  }
+
+  const parsed = swarmDispatchSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({
+      error: 'validation_error',
+      details: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+    }, 400);
+  }
+
+  let dispatchInput: ReturnType<typeof validateSwarmDispatchInput>;
+  try {
+    dispatchInput = validateSwarmDispatchInput(parsed.data);
+  } catch (err) {
+    return c.json({
+      error: 'validation_error',
+      details: err instanceof Error ? err.message : String(err),
+    }, 400);
+  }
+
+  try {
+    const parent = await store.getTask(parentTaskId);
+    const existingTasks = (await store.listTasks({ limit: 200 })).items;
+    const existingByDedupeKey = new Map(
+      existingTasks
+        .filter((task) => task.parentTaskId === parentTaskId && task.swarmPacket)
+        .map((task) => [task.swarmPacket!.dedupeKey, task] as const),
+    );
+
+    let created = 0;
+    let deduped = 0;
+    const candidates: KanbanTask[] = [];
+
+    for (const packet of dispatchInput.packets) {
+      const dedupeKey = `${parentTaskId}:${packet.packetId}`;
+      const existing = existingByDedupeKey.get(dedupeKey);
+      if (existing) {
+        deduped += 1;
+        if (existing.swarmPacket?.packetStatus === 'queued') candidates.push(existing);
+        continue;
+      }
+
+      const child = await store.createTask({
+        title: packet.title,
+        description: packet.task,
+        status: 'todo',
+        priority: parent.priority,
+        createdBy: 'operator',
+        assignee: `agent:${packet.ownerAgentId}`,
+        labels: ['swarm', `swarm:${packet.cluster}`, `parent:${parentTaskId}`],
+        parentTaskId,
+        swarmPacket: {
+          packetId: packet.packetId,
+          cluster: packet.cluster,
+          ownerAgentId: packet.ownerAgentId,
+          checkerAgentId: packet.checkerAgentId,
+          evidencePath: packet.evidencePath,
+          stopCondition: packet.stopCondition,
+          dod: packet.dod,
+          packetStatus: 'queued',
+          dedupeKey,
+          sourceUrl: packet.sourceUrl,
+        },
+      });
+      existingByDedupeKey.set(dedupeKey, child);
+      candidates.push(child);
+      created += 1;
+    }
+
+    let dispatched = 0;
+    const blocked: string[] = [];
+    if (dispatchInput.execute) {
+      const launchWave = candidates.slice(0, dispatchInput.waveLimit);
+      for (const child of launchWave) {
+        const packet = dispatchInput.packets.find((item) => `${parentTaskId}:${item.packetId}` === child.swarmPacket?.dedupeKey);
+        if (!packet) continue;
+        try {
+          await launchSwarmPacket(store, parent, child, packet, dispatchInput.objective, dispatchInput.sourceKind);
+          dispatched += 1;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          blocked.push(`${packet.packetId}: ${message}`);
+          await updateSwarmPacketState(store, child.id, {
+            packetStatus: 'blocked',
+            error: message,
+          }).catch(() => null);
+        }
+      }
+    }
+
+    await syncParentSwarmSummary(store, parentTaskId, dispatchInput.objective, dispatchInput.sourceKind);
+
+    const refreshedChildren = (await store.listTasks({ limit: 200 })).items
+      .filter((task) => task.parentTaskId === parentTaskId && task.swarmPacket);
+    const queued = refreshedChildren.filter((task) => task.swarmPacket?.packetStatus === 'queued').length;
+
+    return c.json({
+      parentTaskId,
+      created,
+      deduped,
+      dispatched,
+      queued,
+      blocked,
+    });
+  } catch (err) {
+    if (err instanceof TaskNotFoundError) {
+      return c.json({ error: 'not_found', details: err.message }, 404);
+    }
+    return handleWorkflowError(c, err);
+  }
+});
 
 // POST /api/kanban/tasks/:id/execute
 app.post('/api/kanban/tasks/:id/execute', rateLimitGeneral, async (c) => {
