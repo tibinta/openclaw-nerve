@@ -3,6 +3,7 @@ import { createContext, useContext, useCallback, useRef, useEffect, useState, us
 import { useGateway } from './GatewayContext';
 import { useSettings } from './SettingsContext';
 import { getSessionKey, type Session, type AgentLogEntry, type EventEntry, type GatewayEvent, type EventPayload, type AgentEventPayload, type ChatEventPayload, type ContentBlock, type SessionsListResponse, type ChatHistoryResponse, type ChatMessage, type GranularAgentState } from '@/types';
+import { CONTEXT_CRITICAL_THRESHOLD } from '@/lib/constants';
 import { playPing } from '@/features/voice/audio-feedback';
 import { describeToolUse } from '@/utils/helpers';
 import { buildSessionTree } from '@/features/sessions/sessionTree';
@@ -20,6 +21,7 @@ import {
 
 const BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'delta', 'started']);
 const IDLE_STATES = new Set(['idle', 'done', 'error', 'final', 'aborted', 'completed']);
+const SESSION_BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'streaming', 'started', 'busy', 'working']);
 
 // Use the full session list for the sidebar so older root chats stay visible.
 const FULL_SESSIONS_LIMIT = 1000;
@@ -68,6 +70,19 @@ interface SessionContextValue {
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+
+function isSessionActivelyBusy(session: Session | undefined, granularBusy: boolean): boolean {
+  if (!session) return false;
+  if (granularBusy) return true;
+
+  const state = String(session.state ?? '').toLowerCase();
+  const agentState = String(session.agentState ?? '').toLowerCase();
+
+  return session.busy === true
+    || session.processing === true
+    || SESSION_BUSY_STATES.has(state)
+    || SESSION_BUSY_STATES.has(agentState);
+}
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const { connectionState, rpc, subscribe } = useGateway();
@@ -195,6 +210,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => controller.abort();
   }, []);
   const sessionsRef = useRef(sessions);
+  const autoCompactTokensRef = useRef<Record<string, number>>({});
   
   // Update refs in effect to avoid render-time mutations
   useEffect(() => {
@@ -205,6 +221,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     currentSessionRef.current = currentSession;
   }, [currentSession]);
+
+  const currentSessionData = useMemo(
+    () => sessions.find((session) => getSessionKey(session) === currentSession),
+    [currentSession, sessions],
+  );
 
   const markSessionUnread = useCallback((sessionKey: string) => {
     if (!sessionKey || currentSessionRef.current === sessionKey || unreadSessionKeysRef.current.has(sessionKey)) return;
@@ -520,6 +541,38 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setSessionsLoading(false);
     }
   }, [connectionState, listAuthoritativeSessions, setCurrentSession]);
+
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    if (!currentSession) return;
+
+    const session = currentSessionData;
+    if (!session) return;
+    if (isSessionActivelyBusy(session, Boolean(busyState[currentSession]))) return;
+
+    const sessionKey = getSessionKey(session);
+    const totalTokens = typeof session.totalTokens === 'number' ? session.totalTokens : 0;
+    const contextTokens = typeof session.contextTokens === 'number' ? session.contextTokens : 0;
+
+    if (!sessionKey || totalTokens <= 0 || contextTokens <= 0) return;
+
+    const percent = (totalTokens / contextTokens) * 100;
+    if (percent < CONTEXT_CRITICAL_THRESHOLD) return;
+
+    const lastTriggeredTokens = autoCompactTokensRef.current[sessionKey] ?? 0;
+    if (totalTokens <= lastTriggeredTokens) return;
+
+    autoCompactTokensRef.current[sessionKey] = totalTokens;
+
+    void rpc('sessions.compact', { sessionKey })
+      .then(() => {
+        // Refresh after compaction so the UI and future threshold checks use the updated token count.
+        void refreshSessions();
+      })
+      .catch((err) => {
+        console.debug('[SessionContext] Auto compact failed:', err);
+      });
+  }, [busyState, connectionState, currentSession, currentSessionData, refreshSessions, rpc]);
 
   const refreshSessionsRef = useRef(refreshSessions);
   useEffect(() => {

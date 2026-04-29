@@ -76,6 +76,19 @@ function SessionDeleteAllProbe() {
   );
 }
 
+function SessionAutoCompactProbe() {
+  const { currentSession, refreshSessions } = useSessionContext();
+
+  return (
+    <div>
+      <div data-testid="current-session">{currentSession}</div>
+      <button data-testid="refresh" onClick={() => void refreshSessions()}>
+        Refresh
+      </button>
+    </div>
+  );
+}
+
 describe('SessionContext', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -466,6 +479,56 @@ describe('SessionContext', () => {
     expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:main', deleteTranscript: true });
     expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:designer:main', deleteTranscript: true });
     expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:cron:daily-digest', deleteTranscript: true });
+  });
+
+  it('auto-compacts the current session once when context usage crosses 90 percent', async () => {
+    let sessionsListCalls = 0;
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        sessionsListCalls += 1;
+        return {
+          sessions: [
+            {
+              sessionKey: 'agent:main:main',
+              label: 'Main',
+              totalTokens: 91_000,
+              contextTokens: 100_000,
+            },
+          ],
+        };
+      }
+      if (method === 'sessions.compact') {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionAutoCompactProbe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+    });
+
+    await waitFor(() => {
+      expect(rpcMock).toHaveBeenCalledWith('sessions.compact', { sessionKey: 'agent:main:main' });
+    });
+
+    const compactCallsBeforeRefresh = rpcMock.mock.calls.filter(([method]) => method === 'sessions.compact').length;
+
+    await act(async () => {
+      screen.getByTestId('refresh').click();
+    });
+
+    await waitFor(() => {
+      expect(rpcMock.mock.calls.filter(([method]) => method === 'sessions.compact').length)
+        .toBe(compactCallsBeforeRefresh);
+    });
+
+    expect(sessionsListCalls).toBeGreaterThanOrEqual(2);
   });
 
   it('marks background top-level roots unread on start and pings when chat reaches a terminal event', async () => {
