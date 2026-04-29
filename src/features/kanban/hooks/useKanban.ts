@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { KanbanTask, DelegationProof, TaskStatus, TaskPriority } from '../types';
+import type { KanbanTask, DelegationProof, SwarmSummary, SwarmPacket, TaskStatus, TaskPriority } from '../types';
 import { COLUMNS } from '../types';
 
 /* ── API response shape ── */
@@ -47,6 +47,9 @@ export interface CreateTaskPayload {
     proof_log_updated: boolean;
   };
   delegation_proof?: DelegationProof;
+  parentTaskId?: string;
+  swarmSummary?: SwarmSummary;
+  swarmPacket?: SwarmPacket;
 }
 
 export interface UpdateTaskPayload {
@@ -64,6 +67,9 @@ export interface UpdateTaskPayload {
     proof_log_updated: boolean;
   };
   delegation_proof?: DelegationProof;
+  parentTaskId?: string;
+  swarmSummary?: SwarmSummary;
+  swarmPacket?: SwarmPacket;
   version: number;
 }
 

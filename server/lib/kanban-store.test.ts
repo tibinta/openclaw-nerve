@@ -433,6 +433,95 @@ describe('updateTask', () => {
     expect(persisted.delegation_proof).toEqual(delegationProof);
   });
 
+  it('creates a child task with typed swarm packet state', async () => {
+    const task = await createSampleTask({
+      title: 'Research channel targets',
+      parentTaskId: 'parent-growth-task',
+      swarmSummary: {
+        sourceKind: 'crm_goal',
+        objective: 'Get 20 customers today',
+        packetsTotal: 5,
+        packetsRunning: 0,
+        packetsPassed: 0,
+        packetsBlocked: 0,
+      },
+      swarmPacket: {
+        packetId: 'crm-math-001',
+        cluster: 'crm',
+        ownerAgentId: 'james-bell---growth-director',
+        checkerAgentId: 'hannah-clark---validation-lead',
+        evidencePath: '/tmp/crm-math-001.md',
+        stopCondition: 'Stop after target math is written.',
+        dod: 'Reachout targets are calculated.',
+        packetStatus: 'queued',
+        dedupeKey: 'parent-growth-task:crm-math-001',
+      },
+    } as any);
+
+    expect((task as any).parentTaskId).toBe('parent-growth-task');
+    expect((task as any).swarmSummary.objective).toBe('Get 20 customers today');
+    expect((task as any).swarmPacket.packetId).toBe('crm-math-001');
+
+    const persisted = await store.getTask(task.id);
+    expect((persisted as any).swarmPacket.dedupeKey).toBe('parent-growth-task:crm-math-001');
+  });
+
+  it('updates a swarm packet status without disturbing proof fields', async () => {
+    const task = await createSampleTask({
+      assignee: 'agent:james-bell---growth-director',
+      evidence_links: ['evidence://existing-proof'],
+      proof_gate: {
+        reindex_verified: false,
+        read_back_verified: false,
+        live_link_or_canvas_checked: false,
+        proof_log_updated: false,
+      },
+      delegation_proof: {
+        packetId: 'packet://existing',
+        blocker: 'waiting',
+      },
+      swarmPacket: {
+        packetId: 'crm-math-001',
+        cluster: 'crm',
+        ownerAgentId: 'james-bell---growth-director',
+        checkerAgentId: 'hannah-clark---validation-lead',
+        evidencePath: '/tmp/crm-math-001.md',
+        stopCondition: 'Stop after target math is written.',
+        dod: 'Reachout targets are calculated.',
+        packetStatus: 'queued',
+        dedupeKey: 'parent-growth-task:crm-math-001',
+      },
+    } as any);
+
+    const updated = await store.updateTask(task.id, task.version, {
+      swarmPacket: {
+        ...(task as any).swarmPacket,
+        packetStatus: 'running',
+        childSessionKey: 'agent:james-bell---growth-director:subagent:crm-math',
+      },
+    } as any);
+
+    expect((updated as any).swarmPacket.packetStatus).toBe('running');
+    expect(updated.delegation_proof?.packetId).toBe('packet://existing');
+    expect(updated.proof_gate?.proof_log_updated).toBe(false);
+  });
+
+  it('rejects a swarm packet when owner and checker are the same agent', async () => {
+    await expect(createSampleTask({
+      swarmPacket: {
+        packetId: 'bad-packet',
+        cluster: 'growth',
+        ownerAgentId: 'hannah-clark---validation-lead',
+        checkerAgentId: 'hannah-clark---validation-lead',
+        evidencePath: '/tmp/bad-packet.md',
+        stopCondition: 'Stop after validation.',
+        dod: 'Validation complete.',
+        packetStatus: 'queued',
+        dedupeKey: 'parent-task:bad-packet',
+      },
+    } as any)).rejects.toThrow('swarm_packet_checker_must_differ');
+  });
+
   it('rejects delegated update to done without delegation proof', async () => {
     const task = await createSampleTask({
       status: 'review',

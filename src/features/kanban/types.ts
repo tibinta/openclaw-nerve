@@ -44,6 +44,9 @@ export const COLUMN_LABELS: Record<string, string> = {
 };
 export type TaskActor = 'operator' | `agent:${string}`;
 export type DelegationVerdict = 'pass' | 'blocked' | 'fail';
+export type SwarmSourceKind = 'prompt' | 'media_url' | 'uploaded_media' | 'crm_goal' | 'manual';
+export type SwarmCluster = 'growth' | 'ops' | 'finance' | 'product' | 'qa' | 'docs' | 'media' | 'crm';
+export type SwarmPacketStatus = 'queued' | 'dispatched' | 'running' | 'review' | 'passed' | 'blocked' | 'failed';
 
 export interface DelegationProofActor {
   agentId: string;
@@ -59,6 +62,32 @@ export interface DelegationProof {
   worker?: DelegationProofActor;
   checker?: DelegationProofActor;
   blocker?: string;
+}
+
+export interface SwarmSummary {
+  sourceKind: SwarmSourceKind;
+  objective: string;
+  packetsTotal: number;
+  packetsRunning: number;
+  packetsPassed: number;
+  packetsBlocked: number;
+  lastDispatchAt?: number;
+}
+
+export interface SwarmPacket {
+  packetId: string;
+  cluster: SwarmCluster;
+  ownerAgentId: string;
+  checkerAgentId: string;
+  evidencePath: string;
+  stopCondition: string;
+  dod: string;
+  packetStatus: SwarmPacketStatus;
+  dedupeKey: string;
+  sourceUrl?: string;
+  childSessionKey?: string;
+  runId?: string;
+  error?: string;
 }
 
 export interface TaskFeedback {
@@ -108,4 +137,7 @@ export interface KanbanTask {
     proof_log_updated: boolean;
   };
   delegation_proof?: DelegationProof;
+  parentTaskId?: string;
+  swarmSummary?: SwarmSummary;
+  swarmPacket?: SwarmPacket;
 }

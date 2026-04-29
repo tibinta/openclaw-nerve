@@ -637,6 +637,50 @@ const delegationProofFieldsSchema = z.object({
   delegation_proof: delegationProofSchema.optional(),
 });
 
+const swarmSourceKindSchema = z.enum(['prompt', 'media_url', 'uploaded_media', 'crm_goal', 'manual']);
+const swarmClusterSchema = z.enum(['growth', 'ops', 'finance', 'product', 'qa', 'docs', 'media', 'crm']);
+const swarmPacketStatusSchema = z.enum(['queued', 'dispatched', 'running', 'review', 'passed', 'blocked', 'failed']);
+
+const swarmSummarySchema = z.object({
+  sourceKind: swarmSourceKindSchema,
+  objective: z.string().min(1).max(5000),
+  packetsTotal: z.number().int().min(0).max(30),
+  packetsRunning: z.number().int().min(0).max(30),
+  packetsPassed: z.number().int().min(0).max(30),
+  packetsBlocked: z.number().int().min(0).max(30),
+  lastDispatchAt: z.number().optional(),
+});
+
+const swarmPacketSchema = z.object({
+  packetId: z.string().min(1).max(200),
+  cluster: swarmClusterSchema,
+  ownerAgentId: z.string().min(1).max(200),
+  checkerAgentId: z.string().min(1).max(200),
+  evidencePath: z.string().min(1).max(2000),
+  stopCondition: z.string().min(1).max(5000),
+  dod: z.string().min(1).max(5000),
+  packetStatus: swarmPacketStatusSchema,
+  dedupeKey: z.string().min(1).max(500),
+  sourceUrl: z.string().max(2000).optional(),
+  childSessionKey: z.string().max(500).optional(),
+  runId: z.string().max(500).optional(),
+  error: z.string().max(5000).optional(),
+}).superRefine((packet, ctx) => {
+  if (packet.ownerAgentId === packet.checkerAgentId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['checkerAgentId'],
+      message: 'checkerAgentId must differ from ownerAgentId',
+    });
+  }
+});
+
+const swarmFieldsSchema = z.object({
+  parentTaskId: z.string().min(1).max(500).optional(),
+  swarmSummary: swarmSummarySchema.optional(),
+  swarmPacket: swarmPacketSchema.optional(),
+});
+
 function validateProofGateIfDone<T extends { status?: string; evidence_links?: string[]; proof_gate?: z.infer<typeof proofGateSchema> }>(
   data: T,
   ctx: z.RefinementCtx,
@@ -676,7 +720,7 @@ const createTaskSchema = z.object({
   thinking: thinkingSchema.optional(),
   dueAt: z.number().optional(),
   estimateMin: z.number().min(0).optional(),
-}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).merge(swarmFieldsSchema);
 
 const updateTaskSchema = z.object({
   version: z.number().int().min(1),
@@ -695,7 +739,7 @@ const updateTaskSchema = z.object({
   resultAt: z.number().optional().nullable(),
   run: runLinkSchema.optional().nullable(),
   feedback: z.array(feedbackSchema).optional(),
-}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).merge(swarmFieldsSchema);
 
 const reorderSchema = z.object({
   version: z.number().int().min(1),
@@ -739,7 +783,7 @@ const proposalCreatePayloadSchema = z.object({
   thinking: thinkingSchema.optional(),
   dueAt: z.number().optional(),
   estimateMin: z.number().min(0).optional(),
-}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).superRefine(validateProofGateIfDone);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).merge(swarmFieldsSchema).superRefine(validateProofGateIfDone);
 
 const proposalUpdatePayloadSchema = z.object({
   id: z.string().min(1),
@@ -750,7 +794,7 @@ const proposalUpdatePayloadSchema = z.object({
   assignee: taskActorSchema.optional(),
   labels: z.array(z.string().max(100)).max(50).optional(),
   result: z.string().max(50_000).optional(),
-}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).superRefine(validateProofGateIfDone);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).merge(swarmFieldsSchema).superRefine(validateProofGateIfDone);
 
 const createProposalSchema = z.object({
   type: z.enum(['create', 'update']),

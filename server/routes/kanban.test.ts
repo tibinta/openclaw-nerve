@@ -637,6 +637,73 @@ describe('PATCH /api/kanban/tasks/:id', () => {
     const updated = await res.json() as KanbanTask;
     expect(updated.delegation_proof?.packetId).toBe('packet://delegation-proof');
   });
+
+  it('accepts typed swarm fields in create and patch updates', async () => {
+    const app = await buildApp();
+    const created = await createTask(app, {
+      parentTaskId: 'parent-growth-task',
+      swarmSummary: {
+        sourceKind: 'crm_goal',
+        objective: 'Get 20 customers today',
+        packetsTotal: 5,
+        packetsRunning: 0,
+        packetsPassed: 0,
+        packetsBlocked: 0,
+      },
+      swarmPacket: {
+        packetId: 'crm-math-001',
+        cluster: 'crm',
+        ownerAgentId: 'james-bell---growth-director',
+        checkerAgentId: 'hannah-clark---validation-lead',
+        evidencePath: '/tmp/crm-math-001.md',
+        stopCondition: 'Stop after target math is written.',
+        dod: 'Reachout targets are calculated.',
+        packetStatus: 'queued',
+        dedupeKey: 'parent-growth-task:crm-math-001',
+      },
+    });
+
+    expect((created as any).parentTaskId).toBe('parent-growth-task');
+    expect((created as any).swarmPacket.packetStatus).toBe('queued');
+
+    const res = await app.request(`/api/kanban/tasks/${created.id}`, jsonPatch({
+      version: created.version,
+      swarmPacket: {
+        ...(created as any).swarmPacket,
+        packetStatus: 'running',
+        runId: 'run-123',
+      },
+    }));
+
+    expect(res.status).toBe(200);
+    const updated = await res.json() as KanbanTask;
+    expect((updated as any).swarmPacket.packetStatus).toBe('running');
+    expect((updated as any).swarmPacket.runId).toBe('run-123');
+  });
+
+  it('rejects create payloads with identical swarm owner and checker', async () => {
+    const app = await buildApp();
+
+    const res = await app.request('/api/kanban/tasks', json({
+      title: 'Bad swarm packet',
+      createdBy: 'operator',
+      swarmPacket: {
+        packetId: 'bad-packet',
+        cluster: 'growth',
+        ownerAgentId: 'hannah-clark---validation-lead',
+        checkerAgentId: 'hannah-clark---validation-lead',
+        evidencePath: '/tmp/bad-packet.md',
+        stopCondition: 'Stop after validation.',
+        dod: 'Validation complete.',
+        packetStatus: 'queued',
+        dedupeKey: 'parent-task:bad-packet',
+      },
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { details: string };
+    expect(body.details).toContain('checkerAgentId');
+  });
 });
 
 // ── DELETE /api/kanban/tasks/:id ─────────────────────────────────────

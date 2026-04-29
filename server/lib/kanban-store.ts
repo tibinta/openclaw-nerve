@@ -81,6 +81,9 @@ export type TaskStatus = string;
 export type TaskPriority = 'critical' | 'high' | 'normal' | 'low';
 export type TaskActor = 'operator' | `agent:${string}`;
 export type DelegationVerdict = 'pass' | 'blocked' | 'fail';
+export type SwarmSourceKind = 'prompt' | 'media_url' | 'uploaded_media' | 'crm_goal' | 'manual';
+export type SwarmCluster = 'growth' | 'ops' | 'finance' | 'product' | 'qa' | 'docs' | 'media' | 'crm';
+export type SwarmPacketStatus = 'queued' | 'dispatched' | 'running' | 'review' | 'passed' | 'blocked' | 'failed';
 
 export interface TaskFeedback {
   at: number;
@@ -115,6 +118,32 @@ export interface DelegationProof {
   blocker?: string;
 }
 
+export interface SwarmSummary {
+  sourceKind: SwarmSourceKind;
+  objective: string;
+  packetsTotal: number;
+  packetsRunning: number;
+  packetsPassed: number;
+  packetsBlocked: number;
+  lastDispatchAt?: number;
+}
+
+export interface SwarmPacket {
+  packetId: string;
+  cluster: SwarmCluster;
+  ownerAgentId: string;
+  checkerAgentId: string;
+  evidencePath: string;
+  stopCondition: string;
+  dod: string;
+  packetStatus: SwarmPacketStatus;
+  dedupeKey: string;
+  sourceUrl?: string;
+  childSessionKey?: string;
+  runId?: string;
+  error?: string;
+}
+
 export interface KanbanTask {
   id: string;
   title: string;
@@ -141,6 +170,9 @@ export interface KanbanTask {
   evidence_links?: string[];
   proof_gate?: ProofGate;
   delegation_proof?: DelegationProof;
+  parentTaskId?: string;
+  swarmSummary?: SwarmSummary;
+  swarmPacket?: SwarmPacket;
 }
 
 export interface ProofGate {
@@ -405,6 +437,13 @@ function collectDelegationProofMissing(task: Pick<KanbanTask, 'assignee' | 'dele
   }
 
   return missing;
+}
+
+function assertValidSwarmPacket(packet?: SwarmPacket): void {
+  if (!packet) return;
+  if (packet.ownerAgentId === packet.checkerAgentId) {
+    throw new Error('swarm_packet_checker_must_differ: checkerAgentId must differ from ownerAgentId');
+  }
 }
 
 function requireProofGate(task: Pick<KanbanTask, 'id' | 'status' | 'assignee' | 'evidence_links' | 'proof_gate' | 'delegation_proof'>): void {
@@ -902,6 +941,9 @@ export class KanbanStore {
     evidence_links?: string[];
     proof_gate?: ProofGate;
     delegation_proof?: DelegationProof;
+    parentTaskId?: string;
+    swarmSummary?: SwarmSummary;
+    swarmPacket?: SwarmPacket;
   }): Promise<KanbanTask> {
     return this.withStore(async () => {
       const data = await this.readRaw();
@@ -942,9 +984,13 @@ export class KanbanStore {
         evidence_links: input.evidence_links,
         proof_gate: input.proof_gate,
         delegation_proof: input.delegation_proof,
+        parentTaskId: input.parentTaskId,
+        swarmSummary: input.swarmSummary,
+        swarmPacket: input.swarmPacket,
         feedback: [],
       };
 
+      assertValidSwarmPacket(task.swarmPacket);
       requireProofGate(task);
 
       data.tasks.push(task);
@@ -980,6 +1026,9 @@ export class KanbanStore {
         | 'evidence_links'
         | 'proof_gate'
         | 'delegation_proof'
+        | 'parentTaskId'
+        | 'swarmSummary'
+        | 'swarmPacket'
       >
     >,
     actor?: string,
@@ -1014,6 +1063,7 @@ export class KanbanStore {
         version: task.version + 1,
       };
 
+      assertValidSwarmPacket(updated.swarmPacket);
       requireProofGate(updated);
 
       // If status changed, re-compute columnOrder (append to end of new column)
@@ -1696,9 +1746,13 @@ export class KanbanStore {
       evidence_links: payload.evidence_links as string[] | undefined,
       proof_gate: payload.proof_gate as ProofGate | undefined,
       delegation_proof: payload.delegation_proof as DelegationProof | undefined,
+      parentTaskId: payload.parentTaskId as string | undefined,
+      swarmSummary: payload.swarmSummary as SwarmSummary | undefined,
+      swarmPacket: payload.swarmPacket as SwarmPacket | undefined,
       feedback: [],
     };
 
+    assertValidSwarmPacket(task.swarmPacket);
     requireProofGate(task);
 
     data.tasks.push(task);
@@ -1720,7 +1774,7 @@ export class KanbanStore {
     // The proposal workflow (confirm/auto) serves as the gating mechanism instead.
 
     // Build patch from payload — allowlist safe fields only
-    const ALLOWED_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'assignee', 'labels', 'result', 'evidence_links', 'proof_gate', 'delegation_proof'] as const;
+    const ALLOWED_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'assignee', 'labels', 'result', 'evidence_links', 'proof_gate', 'delegation_proof', 'parentTaskId', 'swarmSummary', 'swarmPacket'] as const;
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED_UPDATE_FIELDS) {
       if (key in payload) patch[key] = payload[key];
@@ -1743,6 +1797,7 @@ export class KanbanStore {
     }
 
     const updated: KanbanTask = { ...task, ...patch, updatedAt: now, version: task.version + 1 } as KanbanTask;
+    assertValidSwarmPacket(updated.swarmPacket);
     requireProofGate(updated);
     data.tasks[idx] = updated;
     return updated;
