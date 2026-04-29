@@ -147,27 +147,38 @@ describe('parseKanbanMarkers', () => {
 
   // ── Safety limits ──────────────────────────────────────────────────
 
-  it('truncates at 5 markers', () => {
+  it('accepts up to 8 markers', () => {
     const parts: string[] = [];
     for (let i = 0; i < 8; i++) {
       parts.push(`[kanban:create]{"title":"Task ${i}"}[/kanban:create]`);
     }
     const markers = parseKanbanMarkers(parts.join('\n'));
-    expect(markers).toHaveLength(5);
+    expect(markers).toHaveLength(8);
   });
 
-  it('skips payload exceeding 2KB', () => {
-    const bigString = 'x'.repeat(3000);
+  it('ignores the 9th marker', () => {
+    const parts: string[] = [];
+    for (let i = 0; i < 9; i++) {
+      parts.push(`[kanban:create]{"title":"Task ${i}"}[/kanban:create]`);
+    }
+    const markers = parseKanbanMarkers(parts.join('\n'));
+    expect(markers).toHaveLength(8);
+    expect(markers[7].payload.title).toBe('Task 7');
+  });
+
+  it('skips payload exceeding 4KB', () => {
+    const bigString = 'x'.repeat(5000);
     const text = `[kanban:create]{"title":"${bigString}"}[/kanban:create]`;
     const markers = parseKanbanMarkers(text);
     expect(markers).toHaveLength(0);
   });
 
-  it('keeps markers under 2KB limit', () => {
-    const smallString = 'x'.repeat(100);
-    const text = `[kanban:create]{"title":"${smallString}"}[/kanban:create]`;
+  it('accepts packet metadata up to 4KB', () => {
+    const metadata = 'x'.repeat(3900);
+    const text = `[kanban:create]{"title":"Packet metadata","description":"${metadata}"}[/kanban:create]`;
     const markers = parseKanbanMarkers(text);
     expect(markers).toHaveLength(1);
+    expect(markers[0].payload.description).toBe(metadata);
   });
 
   // ── Edge cases ─────────────────────────────────────────────────────

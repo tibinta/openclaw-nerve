@@ -40,10 +40,24 @@ describe('parseKanbanMarkers (server)', () => {
     expect(parseKanbanMarkers(text)).toEqual([]);
   });
 
-  it('enforces max 5 markers', () => {
+  it('accepts up to 8 markers', () => {
     const marker = '[kanban:create]{"title":"t"}[/kanban:create]';
     const text = Array(8).fill(marker).join('\n');
-    expect(parseKanbanMarkers(text)).toHaveLength(5);
+    expect(parseKanbanMarkers(text)).toHaveLength(8);
+  });
+
+  it('ignores the 9th marker', () => {
+    const marker = '[kanban:create]{"title":"t"}[/kanban:create]';
+    const text = Array(9).fill(marker).join('\n');
+    expect(parseKanbanMarkers(text)).toHaveLength(8);
+  });
+
+  it('accepts packet metadata up to 4KB', () => {
+    const metadata = 'x'.repeat(3900);
+    const text = `[kanban:create]{"title":"Packet metadata","description":"${metadata}"}[/kanban:create]`;
+    const markers = parseKanbanMarkers(text);
+    expect(markers).toHaveLength(1);
+    expect(markers[0].payload.description).toBe(metadata);
   });
 
   it('parses multiple mixed markers', () => {

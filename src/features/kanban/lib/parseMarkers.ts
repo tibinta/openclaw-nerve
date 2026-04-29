@@ -6,8 +6,8 @@
  *   [kanban:update]{"id":"abc","status":"done"}[/kanban:update]
  *
  * Safety limits:
- *   - Max 5 markers per message
- *   - Max 2KB per JSON payload
+ *   - Max 8 markers per message
+ *   - Max 4KB per JSON payload
  *
  * Security note: Only parse markers from final assistant content.
  * Markers in tool results or quoted user content should NOT be parsed —
@@ -24,8 +24,8 @@ export interface ParsedMarker {
   raw: string;
 }
 
-const MAX_MARKERS = 5;
-const MAX_PAYLOAD_BYTES = 2048;
+const MAX_MARKERS = 8;
+const MAX_PAYLOAD_BYTES = 4096;
 
 const MARKER_RE = /\[kanban:(create|update)\]([\s\S]*?)\[\/kanban:\1\]/g;
 
