@@ -27,8 +27,8 @@ describe('workspaceScope', () => {
   });
 
   it('falls back to main for unknown session keys', () => {
-    expect(getWorkspaceAgentId('weird-session-key')).toBe('main');
-    expect(getWorkspaceRootSessionKey('weird-session-key')).toBe('agent:main:main');
+    expect(getWorkspaceAgentId('weird-session-key')).toBe('jane-whitmore---ceo');
+    expect(getWorkspaceRootSessionKey('weird-session-key')).toBe('agent:jane-whitmore---ceo:main');
   });
 
   it('namespaces storage keys per agent', () => {

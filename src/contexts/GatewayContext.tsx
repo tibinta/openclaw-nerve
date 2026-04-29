@@ -2,7 +2,11 @@
 import { createContext, useContext, useCallback, useRef, useEffect, useState, useMemo, type ReactNode } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import type { GatewayEvent } from '@/types';
-import { isTopLevelAgentSessionKey } from '@/features/sessions/sessionKeys';
+import {
+  LEGACY_MAIN_SESSION_KEY,
+  PRIMARY_AGENT_SESSION_KEY,
+  isTopLevelAgentSessionKey,
+} from '@/features/sessions/sessionKeys';
 
 type EventHandler = (msg: GatewayEvent) => void;
 
@@ -101,7 +105,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
         try {
           const sr = await currentRpc('sessions.list', { activeMinutes: SESSIONS_ACTIVE_MINUTES, limit: SESSIONS_LIMIT }) as Record<string, unknown>;
           const list = (sr?.sessions as Array<{ sessionKey?: string; key?: string; model?: string; thinking?: string }>) || [];
-          const primarySession = list.find(s => (s.sessionKey || s.key) === 'agent:main:main')
+          const primarySession = list.find(s => (s.sessionKey || s.key) === PRIMARY_AGENT_SESSION_KEY)
+            || list.find(s => (s.sessionKey || s.key) === LEGACY_MAIN_SESSION_KEY)
             || list.find(s => isTopLevelAgentSessionKey(s.sessionKey || s.key || ''));
           if (clean === '--' && primarySession?.model) clean = normalizeModel(primarySession.model);
           if (!hasThinking && primarySession?.thinking) {

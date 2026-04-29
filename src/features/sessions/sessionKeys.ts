@@ -1,6 +1,9 @@
 import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 
+export const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
+export const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
+
 const ROOT_AGENT_RE = /^agent:([^:]+):main$/;
 const SUBAGENT_RE = /^((?:agent:[^:]+)):subagent:.+$/;
 const CRON_RE = /^((?:agent:[^:]+)):cron:[^:]+$/;
@@ -121,8 +124,10 @@ export function getTopLevelAgentSessions(sessions: Session[]): Session[] {
     .sort((a, b) => {
       const keyA = getSessionKey(a);
       const keyB = getSessionKey(b);
-      if (keyA === 'agent:main:main') return -1;
-      if (keyB === 'agent:main:main') return 1;
+      if (keyA === PRIMARY_AGENT_SESSION_KEY) return -1;
+      if (keyB === PRIMARY_AGENT_SESSION_KEY) return 1;
+      if (keyA === LEGACY_MAIN_SESSION_KEY) return -1;
+      if (keyB === LEGACY_MAIN_SESSION_KEY) return 1;
 
       const labelA = (a.displayName || a.label || keyA).toLowerCase();
       const labelB = (b.displayName || b.label || keyB).toLowerCase();
@@ -133,7 +138,7 @@ export function getTopLevelAgentSessions(sessions: Session[]): Session[] {
 export function getSessionDisplayLabel(session: Session, agentName = 'Agent'): string {
   const sessionKey = getSessionKey(session);
 
-  if (sessionKey === 'agent:main:main') {
+  if (sessionKey === PRIMARY_AGENT_SESSION_KEY || sessionKey === LEGACY_MAIN_SESSION_KEY) {
     return `${agentName} (main)`;
   }
 

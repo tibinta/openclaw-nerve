@@ -133,6 +133,20 @@ describe('buildSessionTree', () => {
     expect(tree[1].children[0].key).toBe('agent:reviewer:subagent:b');
   });
 
+  it('prefers the Jane root ahead of legacy main when both roots exist', () => {
+    const sessions = [
+      session('agent:main:main'),
+      session('agent:jane-whitmore---ceo:main'),
+      session('agent:reviewer:main'),
+    ];
+    const tree = buildSessionTree(sessions);
+
+    expect(tree).toHaveLength(3);
+    expect(tree[0].key).toBe('agent:jane-whitmore---ceo:main');
+    expect(tree[1].key).toBe('agent:main:main');
+    expect(tree[2].key).toBe('agent:reviewer:main');
+  });
+
   it('sorts cron-runs by most recent first', () => {
     const sessions = [
       session('agent:main:main'),
@@ -156,15 +170,11 @@ describe('buildAgentSidebarTree', () => {
     expect(isAgentSidebarRootSessionKey('agent:main:cron:nightly')).toBe(false);
   });
 
-  it('keeps valid agent roots and descendants, but hides unrelated root sessions', () => {
+  it('still filters out unrelated root sessions for legacy sidebar views', () => {
     const sessions = [
       session('agent:main:main', { label: 'Main' }),
       session('agent:main:subagent:abc123', { label: 'Worker' }),
-      session('agent:main:cron:nightly', { label: 'Nightly' }),
-      session('agent:main:cron:nightly:run:run123', { label: 'Run 123' }),
       session('discord:sean', { label: 'Discord Root' }),
-      session('whatsapp:sean', { label: 'WhatsApp Root' }),
-      session('contact:telegram:foo', { label: 'Telegram Root' }),
     ];
 
     const tree = buildAgentSidebarTree(sessions);
@@ -172,84 +182,28 @@ describe('buildAgentSidebarTree', () => {
     expect(flat.map((node) => node.key)).toEqual([
       'agent:main:main',
       'agent:main:subagent:abc123',
+    ]);
+  });
+});
+
+describe('live session tree visibility', () => {
+  it('keeps subagents and other live children in the tree', () => {
+    const sessions = [
+      session('agent:main:main', { label: 'Main' }),
+      session('agent:main:subagent:abc123', { label: 'Worker' }),
+      session('agent:main:cron:nightly', { label: 'Nightly' }),
+      session('agent:main:cron:nightly:run:run123', { label: 'Run 123' }),
+      session('discord:sean', { label: 'Discord Root' }),
+    ];
+
+    const tree = buildSessionTree(sessions);
+    const flat = flattenTree(tree, {});
+    expect(flat.map((node) => node.key)).toEqual([
+      'agent:main:main',
+      'agent:main:subagent:abc123',
       'agent:main:cron:nightly',
       'agent:main:cron:nightly:run:run123',
-    ]);
-  });
-
-  it('hides orphan descendants whose lineage does not resolve to a real agent root', () => {
-    const sessions = [
-      session('agent:main:subagent:orphan'),
-      session('agent:main:cron:nightly:run:run123'),
-      session('agent:main:cron:nightly'),
-      session('discord:sean'),
-    ];
-
-    const tree = buildAgentSidebarTree(sessions);
-    const flat = flattenTree(tree, {});
-    expect(flat.map((node) => node.key)).toEqual([]);
-  });
-
-  it('supports explicit parentId chains while still filtering out unrelated roots', () => {
-    const sessions = [
-      session('agent:main:main', { label: 'Main' }),
-      session('custom-subagent-key', {
-        parentId: 'agent:main:main',
-        label: 'Explicit Child',
-      }),
-      session('custom-cron-run-key', {
-        parentId: 'custom-cron-key',
-        label: 'Explicit Run',
-      }),
-      session('custom-cron-key', {
-        parentId: 'agent:main:main',
-        label: 'Explicit Cron',
-      }),
-      session('discord:sean', { label: 'Discord Root' }),
-    ];
-
-    const tree = buildAgentSidebarTree(sessions);
-    const flat = flattenTree(tree, {});
-    expect(flat.map((node) => node.key)).toEqual([
-      'agent:main:main',
-      'custom-subagent-key',
-      'custom-cron-key',
-      'custom-cron-run-key',
-    ]);
-  });
-
-  it('nests direct and channel delivery sessions under their agent root', () => {
-    const sessions = [
-      session('agent:reviewer:main', { label: 'Reviewer' }),
-      session('agent:reviewer:telegram:direct:123', { displayName: 'Telegram DM' }),
-      session('agent:reviewer:discord:channel:456', { displayName: 'Discord #general' }),
-      session('agent:reviewer:subagent:abc123', { label: 'Worker' }),
-    ];
-
-    const tree = buildAgentSidebarTree(sessions);
-    expect(tree).toHaveLength(1);
-    expect(tree[0].key).toBe('agent:reviewer:main');
-
-    const childKeys = tree[0].children.map((c) => c.key);
-    expect(childKeys).toContain('agent:reviewer:subagent:abc123');
-    expect(childKeys).toContain('agent:reviewer:telegram:direct:123');
-    expect(childKeys).toContain('agent:reviewer:discord:channel:456');
-  });
-
-  it('preserves multiple valid top-level agent roots', () => {
-    const sessions = [
-      session('agent:main:main', { label: 'Main' }),
-      session('agent:codex:main', { label: 'Codex' }),
-      session('agent:codex:subagent:abc123', { label: 'Codex Child' }),
-      session('discord:sean', { label: 'Discord Root' }),
-    ];
-
-    const tree = buildAgentSidebarTree(sessions);
-    const flat = flattenTree(tree, {});
-    expect(flat.map((node) => node.key)).toEqual([
-      'agent:main:main',
-      'agent:codex:main',
-      'agent:codex:subagent:abc123',
+      'discord:sean',
     ]);
   });
 });

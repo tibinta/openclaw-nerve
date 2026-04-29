@@ -85,12 +85,27 @@ describe('sessionKeys', () => {
     expect(pickDefaultSessionKey(sessions)).toBe('agent:main:main');
   });
 
+  it('prefers the Jane root before legacy main when both are present', () => {
+    const sessions = [
+      session('agent:main:main', { label: 'Main' }),
+      session('agent:jane-whitmore---ceo:main', { label: 'Jane Whitmore' }),
+      session('agent:reviewer:main', { label: 'Reviewer' }),
+    ];
+    expect(getTopLevelAgentSessions(sessions).map(getSessionKey)).toEqual([
+      'agent:jane-whitmore---ceo:main',
+      'agent:main:main',
+      'agent:reviewer:main',
+    ]);
+    expect(pickDefaultSessionKey(sessions)).toBe('agent:jane-whitmore---ceo:main');
+  });
+
   it('builds display labels from label, displayName, then root id', () => {
     expect(getSessionDisplayLabel(session('agent:reviewer:main', { label: 'Reviewer', displayName: 'webchat:reviewer' }), 'Nerve')).toBe('Reviewer');
     expect(getSessionDisplayLabel(session('agent:reviewer:main', { displayName: 'Reviewer Prime' }), 'Nerve')).toBe('Reviewer Prime');
     expect(getSessionDisplayLabel(session('agent:reviewer:main', { label: 'Reviewer' }), 'Nerve')).toBe('Reviewer');
     expect(getSessionDisplayLabel(session('agent:reviewer:main'), 'Nerve')).toBe('Agent reviewer');
     expect(getSessionDisplayLabel(session('agent:main:main'), 'Nerve')).toBe('Nerve (main)');
+    expect(getSessionDisplayLabel(session('agent:jane-whitmore---ceo:main'), 'Nerve')).toBe('Nerve (main)');
   });
 
   it('keeps the main root label canonical even if gateway metadata says heartbeat', () => {

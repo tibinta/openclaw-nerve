@@ -1,6 +1,12 @@
 import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
-import { getSessionType, isTopLevelAgentSessionKey, resolveParentSessionKey } from './sessionKeys';
+import {
+  LEGACY_MAIN_SESSION_KEY,
+  PRIMARY_AGENT_SESSION_KEY,
+  getSessionType,
+  isTopLevelAgentSessionKey,
+  resolveParentSessionKey,
+} from './sessionKeys';
 
 export interface TreeNode {
   session: Session;
@@ -92,8 +98,10 @@ function buildTreeNodes(
       const keyB = getSessionKey(b);
 
       if (parentKey === null) {
-        if (keyA === 'agent:main:main') return -1;
-        if (keyB === 'agent:main:main') return 1;
+        if (keyA === PRIMARY_AGENT_SESSION_KEY) return -1;
+        if (keyB === PRIMARY_AGENT_SESSION_KEY) return 1;
+        if (keyA === LEGACY_MAIN_SESSION_KEY) return -1;
+        if (keyB === LEGACY_MAIN_SESSION_KEY) return 1;
       }
 
       const ta = typeOrder[getSessionType(keyA)] ?? 9;

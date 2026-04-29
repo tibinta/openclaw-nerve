@@ -479,6 +479,35 @@ describe('gateway routes', () => {
       expect(json.thinking).toBe('high');
     });
 
+    it('prefers the Jane root over legacy main when both are present', async () => {
+      setDefaults();
+      invokeGatewayImpl = (tool: string) => {
+        if (tool === 'sessions_list') {
+          return {
+            sessions: [
+              {
+                sessionKey: 'agent:main:main',
+                model: 'anthropic/claude-haiku-4',
+                thinking: 'low',
+              },
+              {
+                sessionKey: 'agent:jane-whitmore---ceo:main',
+                model: 'anthropic/claude-opus-4',
+                thinking: 'high',
+              },
+            ],
+          };
+        }
+        return {};
+      };
+      const app = buildApp();
+      const res = await app.request('/api/gateway/session-info');
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.model).toBe('anthropic/claude-opus-4');
+      expect(json.thinking).toBe('high');
+    });
+
     it('returns empty object when gateway is unreachable', async () => {
       setDefaults();
       invokeGatewayImpl = () => { throw new Error('ECONNREFUSED'); };

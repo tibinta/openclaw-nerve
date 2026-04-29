@@ -1,7 +1,7 @@
 import { getRootAgentId, getRootAgentSessionKey } from '@/features/sessions/sessionKeys';
 
-const DEFAULT_WORKSPACE_AGENT_ID = 'main';
-const DEFAULT_WORKSPACE_ROOT_SESSION_KEY = 'agent:main:main';
+const DEFAULT_WORKSPACE_AGENT_ID = 'jane-whitmore---ceo';
+const DEFAULT_WORKSPACE_ROOT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
 
 export function getWorkspaceAgentId(sessionKey: string): string {
   return getRootAgentId(sessionKey) ?? DEFAULT_WORKSPACE_AGENT_ID;

@@ -344,6 +344,30 @@ describe('SessionContext', () => {
     expect(spawnRouteCalled).toBe(false);
   });
 
+  it('prefers the Jane root over legacy main when both are available', async () => {
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { sessionKey: 'agent:main:main', label: 'Main' },
+            { sessionKey: 'agent:jane-whitmore---ceo:main', label: 'Jane Whitmore' },
+          ],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionLabels />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-session').textContent).toBe('agent:jane-whitmore---ceo:main');
+    });
+  });
+
   it('uses a unique config name when spawning a duplicate root agent', async () => {
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'sessions.list') {
