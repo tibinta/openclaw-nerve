@@ -6,7 +6,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSessionContext } from '@/contexts/SessionContext';
-import { COLUMN_LABELS, type KanbanTask, type TaskStatus, type TaskPriority } from './types';
+import { COLUMN_LABELS, type DelegationProof, type DelegationProofActor, type KanbanTask, type TaskStatus, type TaskPriority } from './types';
 import type { UpdateTaskPayload, VersionConflictError } from './hooks/useKanban';
 import { AssigneeCombobox } from './components/AssigneeCombobox';
 import { buildAssigneeOptionsForEdit } from './lib/assigneeOptions';
@@ -37,6 +37,37 @@ function RunElapsed({ startedAt }: { startedAt: number }) {
   );
 }
 
+function stripAgentPrefix(value?: string | null): string {
+  return value?.startsWith('agent:') ? value.slice('agent:'.length) : value || '';
+}
+
+function defaultCheckerFor(workerAgentId: string): string {
+  return workerAgentId === 'hannah-clark---validation-lead'
+    ? 'ruby-young---qa'
+    : 'hannah-clark---validation-lead';
+}
+
+function buildProofActor(params: {
+  agentId: string;
+  role: 'worker' | 'checker';
+  taskTitle: string;
+  sessionKey?: string;
+  evidenceLinks: string[];
+}): DelegationProofActor {
+  const cleanAgentId = stripAgentPrefix(params.agentId);
+  const summary = params.role === 'worker'
+    ? `Worker proof recorded: ${params.taskTitle} is complete and the attached evidence was produced or verified.`
+    : `Checker proof recorded: ${params.taskTitle} passed validation against the attached evidence.`;
+  return {
+    agentId: cleanAgentId,
+    sessionKey: params.sessionKey || `agent:${cleanAgentId}:manual-ui-proof`,
+    verdict: 'pass',
+    at: Date.now(),
+    summary,
+    evidence_links: params.evidenceLinks,
+  };
+}
+
 interface TaskDetailDrawerProps {
   task: KanbanTask | null;
   onClose: () => void;
@@ -62,6 +93,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [proofPanelOpen, setProofPanelOpen] = useState(false);
+  const [delegationProofState, setDelegationProofState] = useState<DelegationProof | undefined>(undefined);
   const drawerRef = useRef<HTMLDivElement>(null);
 
   /* Populate fields when task changes */
@@ -75,6 +107,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
       setEditAssignee(task.assignee || '');
       setEditProofUrl((task.evidence_links ?? [])[0] ?? '');
       setProofLinks(task.evidence_links ?? []);
+      setDelegationProofState(task.delegation_proof);
       setProofPanelOpen(task.status === 'review');
       setGateState({
         reindex_verified: task.proof_gate?.reindex_verified === true,
@@ -214,7 +247,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
   }, [task, workflowLoading, editProofUrl, onUpdate, editVersion]);
 
   const isDelegatedTask = task?.assignee?.startsWith('agent:') ?? false;
-  const delegationProof = task?.delegation_proof;
+  const delegationProof = delegationProofState ?? task?.delegation_proof;
   const proofGateReady = proofLinks.length > 0
     && gateState.reindex_verified
     && gateState.read_back_verified
@@ -267,6 +300,55 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
       });
     markDirty();
   }, [task, gateState, onUpdate, editVersion, markDirty]);
+
+  const handleDelegationProofPass = useCallback(async (role: 'worker' | 'checker') => {
+    if (!task || workflowLoading) return;
+    const currentProof = delegationProof;
+    const workerAgentId = stripAgentPrefix(currentProof?.worker?.agentId || task.assignee || 'charlotte-price---operations-director');
+    const checkerAgentId = stripAgentPrefix(currentProof?.checker?.agentId || defaultCheckerFor(workerAgentId));
+    const nextEvidence = proofLinks.length ? proofLinks : (task.evidence_links ?? []);
+    const nextProof: DelegationProof = {
+      packetId: currentProof?.packetId || `packet://${task.id}`,
+      worker: currentProof?.worker,
+      checker: currentProof?.checker,
+      blocker: currentProof?.blocker,
+    };
+
+    if (role === 'worker') {
+      nextProof.worker = buildProofActor({
+        agentId: workerAgentId,
+        role: 'worker',
+        taskTitle: task.title,
+        sessionKey: currentProof?.worker?.sessionKey,
+        evidenceLinks: nextEvidence,
+      });
+    } else {
+      const safeCheckerId = checkerAgentId === workerAgentId ? defaultCheckerFor(workerAgentId) : checkerAgentId;
+      nextProof.checker = buildProofActor({
+        agentId: safeCheckerId,
+        role: 'checker',
+        taskTitle: task.title,
+        sessionKey: currentProof?.checker?.sessionKey,
+        evidenceLinks: nextEvidence,
+      });
+    }
+
+    setWorkflowLoading(role === 'worker' ? 'worker-proof' : 'checker-proof');
+    setError(null);
+    try {
+      const updated = await onUpdate(task.id, {
+        version: editVersion,
+        delegation_proof: nextProof,
+      });
+      setEditVersion(updated.version);
+      setDelegationProofState(updated.delegation_proof ?? nextProof);
+      setDirty(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Proof update failed');
+    } finally {
+      setWorkflowLoading(null);
+    }
+  }, [task, workflowLoading, proofLinks, onUpdate, editVersion, delegationProof]);
 
   const handleApprove = useCallback(async () => {
     if (!task || !onApprove || workflowLoading) return;
@@ -670,7 +752,19 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                           </div>
                           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
-                              <div className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Worker</div>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Worker</div>
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  onClick={() => handleDelegationProofPass('worker')}
+                                  disabled={workflowLoading !== null}
+                                  className="h-7 px-2 text-[0.667rem]"
+                                >
+                                  {workflowLoading === 'worker-proof' ? <Loader2 size={10} className="animate-spin" /> : <CheckCircle2 size={10} />}
+                                  Pass worker
+                                </Button>
+                              </div>
                               {delegationProof.worker ? (
                                 <div className="mt-1 space-y-1">
                                   <div className="font-medium text-foreground">{delegationProof.worker.agentId}</div>
@@ -683,7 +777,19 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                               )}
                             </div>
                             <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
-                              <div className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Checker</div>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Checker</div>
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  onClick={() => handleDelegationProofPass('checker')}
+                                  disabled={workflowLoading !== null}
+                                  className="h-7 px-2 text-[0.667rem]"
+                                >
+                                  {workflowLoading === 'checker-proof' ? <Loader2 size={10} className="animate-spin" /> : <CheckCircle2 size={10} />}
+                                  Pass checker
+                                </Button>
+                              </div>
                               {delegationProof.checker ? (
                                 <div className="mt-1 space-y-1">
                                   <div className="font-medium text-foreground">{delegationProof.checker.agentId}</div>
@@ -704,8 +810,30 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                           </div>
                         </div>
                       ) : (
-                        <div className="text-muted-foreground">
-                          {isDelegatedTask ? 'Waiting for typed worker and checker proof.' : 'No typed delegation proof recorded.'}
+                        <div className="space-y-3">
+                          <div className="text-muted-foreground">
+                            {isDelegatedTask ? 'Waiting for typed worker and checker proof.' : 'No typed delegation proof recorded.'}
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => handleDelegationProofPass('worker')}
+                              disabled={workflowLoading !== null}
+                            >
+                              {workflowLoading === 'worker-proof' ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                              Pass worker
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => handleDelegationProofPass('checker')}
+                              disabled={workflowLoading !== null}
+                            >
+                              {workflowLoading === 'checker-proof' ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                              Pass checker
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>

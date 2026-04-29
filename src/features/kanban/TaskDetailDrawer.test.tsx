@@ -218,6 +218,71 @@ describe('TaskDetailDrawer', () => {
     expect(updates.length).toBeGreaterThanOrEqual(5);
   });
 
+  it('lets the user add missing worker and checker proof from the UI', async () => {
+    const user = userEvent.setup();
+    const task = makeTask({
+      status: 'review',
+      assignee: 'agent:charlotte-price---operations-director',
+      evidence_links: ['/tmp/evidence.md'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+      delegation_proof: {
+        packetId: 'packet://task-1',
+      },
+    });
+    let currentTask = task;
+    const onUpdate = vi.fn(async (_id: string, payload: any) => {
+      currentTask = makeTask({
+        ...currentTask,
+        version: payload.version + 1,
+        delegation_proof: payload.delegation_proof ?? currentTask.delegation_proof,
+      });
+      return currentTask;
+    });
+
+    renderDrawer(task, onUpdate);
+
+    expect(screen.getByText('Missing worker proof.')).toBeInTheDocument();
+    expect(screen.getByText('Missing checker proof.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Pass worker' }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith('task-1', expect.objectContaining({
+        delegation_proof: expect.objectContaining({
+          worker: expect.objectContaining({
+            agentId: 'charlotte-price---operations-director',
+            verdict: 'pass',
+            evidence_links: ['/tmp/evidence.md'],
+          }),
+        }),
+      }));
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Pass checker' }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenLastCalledWith('task-1', expect.objectContaining({
+        delegation_proof: expect.objectContaining({
+          worker: expect.objectContaining({ verdict: 'pass' }),
+          checker: expect.objectContaining({
+            agentId: 'hannah-clark---validation-lead',
+            verdict: 'pass',
+            evidence_links: ['/tmp/evidence.md'],
+          }),
+        }),
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Ready to close')).toBeInTheDocument();
+    });
+  });
+
   it('shows parent swarm summary in the drawer', () => {
     renderDrawer(makeTask({
       status: 'in-progress',
