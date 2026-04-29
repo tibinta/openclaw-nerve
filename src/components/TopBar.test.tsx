@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { TopBar } from './TopBar';
 
@@ -47,5 +48,21 @@ describe('TopBar', () => {
 
     expect(screen.queryByRole('button', { name: /switch to tasks view/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /switch to chat view/i })).toBeInTheDocument();
+  });
+
+  it('shows Targets beside Chat and Tasks when enabled', async () => {
+    const user = userEvent.setup();
+    const onOpenAccountability = vi.fn();
+    renderTopBar({ onOpenAccountability });
+
+    const chat = screen.getByRole('button', { name: /switch to chat view/i });
+    const tasks = screen.getByRole('button', { name: /switch to tasks view/i });
+    const targets = screen.getByRole('button', { name: /open targets/i });
+
+    expect(chat.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tasks.compareDocumentPosition(targets) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(targets);
+    expect(onOpenAccountability).toHaveBeenCalledTimes(1);
   });
 });

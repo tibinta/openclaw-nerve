@@ -55,6 +55,7 @@ const WorkspacePanel = lazy(() => import('@/features/workspace/WorkspacePanel').
 
 // Lazy-loaded view modes
 const KanbanPanel = lazy(() => import('@/features/kanban/KanbanPanel').then(m => ({ default: m.KanbanPanel })));
+const TargetBoardModal = lazy(() => import('@/features/kanban/TargetBoardModal').then(m => ({ default: m.TargetBoardModal })));
 
 interface AppProps {
   onLogout?: () => void;
@@ -144,6 +145,7 @@ export default function App({ onLogout }: AppProps) {
     kind: 'file' | 'directory';
     agentId: string;
   } | null>(null);
+  const [accountabilityOpen, setAccountabilityOpen] = useState(false);
   const fileTreeChangeSequenceRef = useRef(0);
 
   const initialCompactLayout = typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches;
@@ -870,6 +872,8 @@ export default function App({ onLogout }: AppProps) {
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           showKanbanView={kanbanVisible}
+          onOpenAccountability={() => setAccountabilityOpen((open) => !open)}
+          accountabilityOpen={accountabilityOpen}
         />
       )}
       
@@ -1053,6 +1057,12 @@ export default function App({ onLogout }: AppProps) {
         onOpenChange={setSpawnDialogOpen}
         onSpawn={handleSpawnSession}
       />
+
+      <PanelErrorBoundary name="Targets">
+        <Suspense fallback={null}>
+          <TargetBoardModal open={accountabilityOpen} onClose={() => setAccountabilityOpen(false)} currentActiveTask={null} taskCount={0} />
+        </Suspense>
+      </PanelErrorBoundary>
     </div>
   );
 }

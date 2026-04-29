@@ -17,6 +17,7 @@ import {
   Brain,
   MessageSquare,
   LayoutGrid,
+  Target,
 } from "lucide-react";
 import type { ViewMode } from "@/features/command-palette/commands";
 import type { AgentLogEntry, EventEntry, TokenData } from "@/types";
@@ -111,6 +112,10 @@ interface TopBarProps {
   onViewModeChange?: (mode: ViewMode) => void;
   /** Whether the Tasks/Kanban view toggle should be shown. */
   showKanbanView?: boolean;
+  /** Optional cockpit accountability control. */
+  onOpenAccountability?: () => void;
+  /** Whether the accountability control is currently open. */
+  accountabilityOpen?: boolean;
 }
 
 /**
@@ -134,6 +139,8 @@ export function TopBar({
   viewMode = "chat",
   onViewModeChange,
   showKanbanView = true,
+  onOpenAccountability,
+  accountabilityOpen = false,
 }: TopBarProps) {
   const [activePanel, setActivePanel] = useState<PanelId>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -281,6 +288,19 @@ export function TopBar({
               >
                 <LayoutGrid size={13} aria-hidden="true" />
                 <span>Tasks</span>
+              </button>
+            )}
+            {onOpenAccountability && (
+              <button
+                onClick={onOpenAccountability}
+                title="Targets"
+                aria-label="Open targets"
+                aria-pressed={accountabilityOpen}
+                data-active={accountabilityOpen}
+                className="shell-chip min-h-11 flex-1 justify-center text-[0.733rem] uppercase tracking-[0.14em] max-[371px]:min-h-[38px] max-[371px]:gap-1 max-[371px]:px-2 max-[371px]:text-[0.667rem] max-[371px]:tracking-[0.08em] max-[371px]:[&_svg]:size-3 sm:min-h-10 sm:flex-none"
+              >
+                <Target size={13} aria-hidden="true" />
+                <span>Targets</span>
               </button>
             )}
           </div>

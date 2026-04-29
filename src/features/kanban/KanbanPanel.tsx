@@ -10,7 +10,6 @@ import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { useSessionContext } from '@/contexts/SessionContext';
 import { getRootAgentSessionKey } from '@/features/sessions/sessionKeys';
 import { Button } from '@/components/ui/button';
-import { TargetBoardModal } from './TargetBoardModal';
 
 interface KanbanPanelProps {
   /** If set, auto-open the drawer for this task ID on mount. */
@@ -61,7 +60,6 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
-  const [targetBoardOpen, setTargetBoardOpen] = useState(false);
   const consumedRef = useRef<string | null>(null);
 
   const currentSessionRootKey = useMemo(
@@ -176,8 +174,6 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
         onApproveProposal={async (id) => { await approveProposal(id); await fetchTasks(); }}
         onRejectProposal={async (id) => { await rejectProposal(id); }}
         onArchiveDone={handleArchive}
-        onOpenTargetBoard={() => setTargetBoardOpen((v) => !v)}
-        targetBoardOpen={targetBoardOpen}
       />
 
       <div className="px-4 pb-3">
@@ -252,13 +248,6 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreate={handleCreate}
-      />
-
-      <TargetBoardModal
-        open={targetBoardOpen}
-        onClose={() => setTargetBoardOpen(false)}
-        currentActiveTask={currentActiveTask}
-        taskCount={tasks.length}
       />
 
       {/* Task Detail Drawer */}
