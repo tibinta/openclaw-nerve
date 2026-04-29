@@ -1,9 +1,9 @@
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
-import type { SpawnSessionOpts } from '@/contexts/SessionContext';
+import type { SpawnSessionOpts, GatewayAgentRegistration } from '@/contexts/SessionContext';
 import { SessionSkeletonGroup } from '@/components/skeletons';
-import { buildAgentSidebarTree, buildSessionTree, flattenTree, getSessionType } from './sessionTree';
+import { buildSessionTree, flattenTree, getSessionType } from './sessionTree';
 import { getSessionDisplayLabel, isTopLevelAgentSessionKey } from './sessionKeys';
 import { SessionNode } from './SessionNode';
 import type { GranularAgentState } from '@/types';
@@ -16,7 +16,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, Plus, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { SpawnAgentDialog } from './SpawnAgentDialog';
 
 interface SessionListProps {
@@ -28,11 +28,13 @@ interface SessionListProps {
   onSelect: (key: string) => void;
   onRefresh: () => void;
   onDelete?: (sessionKey: string) => Promise<void>;
+  onDeleteAllSessions?: () => Promise<void>;
   onSpawn?: (opts: SpawnSessionOpts) => Promise<void | boolean>;
   onRename?: (sessionKey: string, label: string) => Promise<void>;
   onAbort?: (sessionKey: string) => Promise<void>;
   isLoading?: boolean;
   agentName?: string;
+  agents?: GatewayAgentRegistration[];
   /** Render in compact dropdown mode (chat-first topbar panel). */
   compact?: boolean;
 }
@@ -52,9 +54,11 @@ function findNodeByKey(nodes: ReturnType<typeof buildSessionTree>, key: string):
 }
 
 /** Sidebar list of agent sessions with tree structure and context menus. */
-export function SessionList({ sessions, currentSession, busyState, agentStatus, unreadSessions, onSelect, onRefresh, onDelete, onSpawn, onRename, onAbort, isLoading, agentName = 'Agent', compact = false }: SessionListProps) {
+export function SessionList({ sessions, currentSession, busyState, agentStatus, unreadSessions, onSelect, onRefresh, onDelete, onDeleteAllSessions, onSpawn, onRename, onAbort, isLoading, agentName = 'Agent', agents = [], compact = false }: SessionListProps) {
   const [deleteTarget, setDeleteTarget] = useState<{ key: string; label: string; descendantCount: number; isRootAgent: boolean } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
   const [spawnOpen, setSpawnOpen] = useState(false);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -73,6 +77,19 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
       setDeleteTarget(null);
     }
   }, [deleteTarget, onDelete]);
+
+  const handleDeleteAll = useCallback(async () => {
+    if (!onDeleteAllSessions) return;
+    setDeletingAll(true);
+    try {
+      await onDeleteAllSessions();
+    } catch (err) {
+      console.error('Failed to delete all sessions:', err);
+    } finally {
+      setDeletingAll(false);
+      setDeleteAllOpen(false);
+    }
+  }, [onDeleteAllSessions]);
 
   const startRename = useCallback((sessionKey: string, currentLabel: string) => {
     setRenamingKey(sessionKey);
@@ -132,8 +149,50 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     });
   }, [sessions]);
 
+  const configuredAgentSessions = useMemo<Session[]>(() => agents.flatMap((agent) => {
+    const id = agent.id.trim();
+    if (!id || id === 'main') return [];
+    return [{
+      sessionKey: `agent:${id}:main`,
+      label: agent.name?.trim() || agent.label?.trim() || `Agent ${id}`,
+      displayName: agent.identityName?.trim() || agent.name?.trim() || agent.label?.trim() || undefined,
+      state: 'idle',
+      agentState: 'idle',
+      status: 'idle',
+    } as Session];
+  }), [agents]);
+
+  const displaySessions = useMemo<Session[]>(() => {
+    if (configuredAgentSessions.length === 0) return sessions;
+
+    const liveSessionsByKey = new Map(sessions.map((session) => [getSessionKey(session), session] as const));
+
+    const mergedConfigured = configuredAgentSessions.map((configuredSession): Session => {
+      const key = getSessionKey(configuredSession);
+      const liveSession = liveSessionsByKey.get(key);
+      if (!liveSession) return configuredSession;
+
+      return {
+        ...configuredSession,
+        ...liveSession,
+        label: liveSession.label?.trim() || configuredSession.label,
+        displayName: liveSession.displayName?.trim() || configuredSession.displayName,
+      };
+    });
+
+    const seen = new Set(mergedConfigured.map((session) => getSessionKey(session)));
+    const merged: Session[] = [...mergedConfigured];
+    for (const session of sessions) {
+      const key = getSessionKey(session);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(session);
+    }
+    return merged;
+  }, [configuredAgentSessions, sessions]);
+
   // Build tree and flatten for rendering
-  const tree = useMemo(() => buildAgentSidebarTree(sessions), [sessions]);
+  const tree = useMemo(() => buildSessionTree(displaySessions), [displaySessions]);
   const flatNodes = useMemo(() => flattenTree(tree, expandedState), [tree, expandedState]);
 
   const handleSetDeleteTarget = useCallback((key: string, label: string) => {
@@ -164,6 +223,20 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
             >
               <Plus size={16} />
             </button>
+          )}
+          {onDeleteAllSessions && (
+            <>
+              {/* Keep the bulk reset in the header, but gate it behind a confirm dialog. */}
+              <button
+                type="button"
+                onClick={() => setDeleteAllOpen(true)}
+                aria-label="Delete all sessions"
+                title="Delete all sessions"
+                className="shell-icon-button size-10 px-0 text-red"
+              >
+                <Trash2 size={16} aria-hidden="true" />
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -230,6 +303,46 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
           );
         })}
       </div>
+
+      {/* Bulk delete confirmation dialog */}
+      <Dialog open={deleteAllOpen} onOpenChange={(open) => !open && !deletingAll && setDeleteAllOpen(false)}>
+        <DialogContent className="bg-card border-border max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-red font-mono text-sm tracking-wider uppercase flex items-center gap-2">
+              <AlertTriangle size={16} />
+              Delete All Sessions
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground text-xs">
+              This will permanently delete every loaded session and transcript, then reset the current session to a fresh blank state.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="bg-background border border-border/60 px-3 py-2">
+              <p className="text-[0.733rem] text-muted-foreground uppercase tracking-wider mb-1">Loaded sessions:</p>
+              <p className="text-[0.8rem] text-foreground font-mono">{sessions.length}</p>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteAllOpen(false)}
+              disabled={deletingAll}
+              className="font-mono text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleDeleteAll}
+              disabled={deletingAll}
+              className="font-mono text-xs bg-red text-foreground hover:bg-red/90"
+            >
+              {deletingAll ? 'Deleting...' : 'Delete All'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirmation dialog */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>

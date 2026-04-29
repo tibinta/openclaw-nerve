@@ -24,6 +24,13 @@ const IDLE_STATES = new Set(['idle', 'done', 'error', 'final', 'aborted', 'compl
 // Use the full session list for the sidebar so older root chats stay visible.
 const FULL_SESSIONS_LIMIT = 1000;
 
+export interface GatewayAgentRegistration {
+  id: string;
+  name?: string;
+  identityName?: string;
+  label?: string;
+}
+
 export type SubagentCleanupMode = 'keep' | 'delete';
 
 export interface SpawnSessionOpts {
@@ -40,6 +47,8 @@ export interface SpawnSessionOpts {
 interface SessionContextValue {
   sessions: Session[];
   sessionsLoading: boolean;
+  agents: GatewayAgentRegistration[];
+  agentsLoading: boolean;
   currentSession: string;
   setCurrentSession: (key: string) => void;
   busyState: Record<string, boolean>;
@@ -49,6 +58,7 @@ interface SessionContextValue {
   abortSession: (sessionKey: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   deleteSession: (sessionKey: string) => Promise<void>;
+  deleteAllSessions: () => Promise<void>;
   spawnSession: (opts: SpawnSessionOpts) => Promise<void>;
   renameSession: (sessionKey: string, label: string) => Promise<void>;
   updateSession: (sessionKey: string, updates: Partial<Session>) => void;
@@ -64,6 +74,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const { soundEnabled } = useSettings();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [agents, setAgents] = useState<GatewayAgentRegistration[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
   const [currentSession, setCurrentSessionRaw] = useState('');
   const [agentLogEntries, setAgentLogEntries] = useState<AgentLogEntry[]>([]);
   const [eventEntries, setEventEntries] = useState<EventEntry[]>([]);
@@ -145,7 +157,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return merged;
   }, []);
 
+  const refreshAgents = useCallback(async () => {
+    setAgentsLoading(true);
+    try {
+      const res = await fetch('/api/gateway/agents');
+      const data = await res.json() as { agents?: GatewayAgentRegistration[] };
+      setAgents(Array.isArray(data.agents) ? data.agents : []);
+    } catch (err) {
+      console.debug('[SessionContext] Failed to load agents registry:', err);
+      setAgents([]);
+    } finally {
+      setAgentsLoading(false);
+    }
+  }, []);
+
   // Fetch agent name from server-info on mount
+  useEffect(() => {
+    void refreshAgents();
+  }, [refreshAgents]);
+
   useEffect(() => {
     const controller = new AbortController();
     (async () => {
@@ -733,6 +763,39 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [findDescendantSessionKeys, listAuthoritativeSessions, rpc, setCurrentSession]);
 
+  // Bulk reset stays on the canonical delete RPC so backend transcript cleanup remains consistent.
+  const deleteAllSessions = useCallback(async () => {
+    const authoritativeSessions = await listAuthoritativeSessions();
+    const keysToDelete = authoritativeSessions
+      .map((session) => getSessionKey(session))
+      .sort((a, b) => {
+        const depthDiff = b.split(':').length - a.split(':').length;
+        return depthDiff !== 0 ? depthDiff : a.localeCompare(b);
+      });
+
+    if (keysToDelete.length === 0) {
+      setCurrentSession('');
+      return;
+    }
+
+    for (const key of keysToDelete) {
+      await rpc('sessions.delete', { key, deleteTranscript: true });
+      const timeout = doneTimeoutsRef.current[key];
+      if (timeout) {
+        clearTimeout(timeout);
+        delete doneTimeoutsRef.current[key];
+      }
+    }
+
+    setSessions([]);
+    setAgentStatus({});
+    if (unreadSessionKeysRef.current.size > 0) {
+      unreadSessionKeysRef.current = new Set<string>();
+      setUnreadSessionKeys(new Set<string>());
+    }
+    setCurrentSession('');
+  }, [listAuthoritativeSessions, rpc, setCurrentSession]);
+
   const spawnSession = useCallback(async (opts: SpawnSessionOpts) => {
     const authoritativeSessions = await listAuthoritativeSessions();
 
@@ -821,6 +884,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SessionContextValue>(() => ({
     sessions,
     sessionsLoading,
+    agents,
+    agentsLoading,
     currentSession,
     setCurrentSession,
     busyState,
@@ -830,6 +895,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     abortSession,
     refreshSessions,
     deleteSession,
+    deleteAllSessions,
     spawnSession,
     renameSession,
     updateSession: updateSessionFromEvent,
@@ -837,9 +903,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     eventEntries,
     agentName,
   }), [
-    sessions, sessionsLoading, currentSession, setCurrentSession, busyState, agentStatus,
+    sessions, sessionsLoading, agents, agentsLoading, currentSession, setCurrentSession, busyState, agentStatus,
     unreadSessions, markSessionRead,
-    abortSession, refreshSessions, deleteSession, spawnSession, renameSession,
+    abortSession, refreshSessions, deleteSession, deleteAllSessions, spawnSession, renameSession,
     updateSessionFromEvent, agentLogEntries, eventEntries, agentName,
   ]);
 

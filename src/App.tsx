@@ -99,7 +99,7 @@ export default function App({ onLogout }: AppProps) {
   // Session state
   const {
     sessions, sessionsLoading, currentSession, setCurrentSession,
-    busyState, agentStatus, unreadSessions, refreshSessions, deleteSession, abortSession, spawnSession, renameSession,
+    busyState, agentStatus, unreadSessions, refreshSessions, deleteSession, deleteAllSessions, abortSession, spawnSession, renameSession,
     agentLogEntries, eventEntries,
     agentName,
   } = useSessionContext();
@@ -727,6 +727,7 @@ export default function App({ onLogout }: AppProps) {
               onSelect={onSelect}
               onRefresh={refreshSessions}
               onDelete={deleteSession}
+              onDeleteAllSessions={deleteAllSessions}
               onSpawn={handleSpawnSession}
               onRename={renameSession}
               onAbort={abortSession}
@@ -764,6 +765,7 @@ export default function App({ onLogout }: AppProps) {
           onSelect={handleSessionChange}
           onRefresh={refreshSessions}
           onDelete={deleteSession}
+          onDeleteAllSessions={deleteAllSessions}
           onSpawn={handleSpawnSession}
           onRename={renameSession}
           onAbort={abortSession}

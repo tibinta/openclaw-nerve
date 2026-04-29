@@ -63,6 +63,19 @@ function SessionStatusProbe() {
   return <div data-testid="reviewer-status">{agentStatus['agent:reviewer:main']?.status ?? 'NONE'}</div>;
 }
 
+function SessionDeleteAllProbe() {
+  const { currentSession, deleteAllSessions } = useSessionContext();
+
+  return (
+    <div>
+      <div data-testid="current-session">{currentSession}</div>
+      <button data-testid="delete-all" onClick={() => void deleteAllSessions()}>
+        Delete all
+      </button>
+    </div>
+  );
+}
+
 describe('SessionContext', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -416,6 +429,43 @@ describe('SessionContext', () => {
 
     expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 1000 });
     expect(rpcMock).not.toHaveBeenCalledWith('sessions.list', expect.objectContaining({ activeMinutes: expect.any(Number) }));
+  });
+
+  it('deletes every loaded session and resets the current session to blank', async () => {
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { sessionKey: 'agent:main:main', label: 'Main' },
+            { sessionKey: 'agent:designer:main', label: 'Designer' },
+            { sessionKey: 'agent:main:cron:daily-digest', label: 'Cron: Daily Digest' },
+          ],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionDeleteAllProbe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+    });
+
+    await act(async () => {
+      screen.getByTestId('delete-all').click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-session').textContent).toBe('');
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:main', deleteTranscript: true });
+    expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:designer:main', deleteTranscript: true });
+    expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:cron:daily-digest', deleteTranscript: true });
   });
 
   it('marks background top-level roots unread on start and pings when chat reaches a terminal event', async () => {
