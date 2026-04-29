@@ -227,6 +227,14 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
     && delegationProof.worker.agentId !== delegationProof.checker.agentId,
   );
   const readyToClose = proofGateReady && (!isDelegatedTask || delegationProofReady);
+  const swarmSummary = task?.swarmSummary;
+  const swarmPacket = task?.swarmPacket;
+  const swarmReadyToClose = Boolean(
+    swarmSummary
+    && swarmSummary.packetsTotal > 0
+    && swarmSummary.packetsPassed === swarmSummary.packetsTotal
+    && swarmSummary.packetsBlocked === 0,
+  );
 
   const canApprove = task?.status === 'review' && readyToClose;
 
@@ -482,6 +490,75 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                   </div>
                 </div>
               </div>
+
+              {(swarmSummary || swarmPacket) && (
+                <div className="cockpit-note space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="cockpit-field-label">Swarm</h4>
+                    <span className={swarmReadyToClose || swarmPacket?.packetStatus === 'passed' ? 'text-[0.733rem] text-green' : 'text-[0.733rem] text-muted-foreground'}>
+                      {swarmReadyToClose || swarmPacket?.packetStatus === 'passed' ? 'Ready to close' : 'Missing proof'}
+                    </span>
+                  </div>
+                  {swarmSummary && (
+                    <div className="grid grid-cols-2 gap-2 text-[0.733rem] sm:grid-cols-4">
+                      <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                        <div className="text-muted-foreground">Packets</div>
+                        <div className="font-semibold text-foreground">{swarmSummary.packetsTotal}</div>
+                      </div>
+                      <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                        <div className="text-muted-foreground">Running</div>
+                        <div className="font-semibold text-foreground">{swarmSummary.packetsRunning}</div>
+                      </div>
+                      <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                        <div className="text-muted-foreground">Passed</div>
+                        <div className="font-semibold text-foreground">{swarmSummary.packetsPassed}</div>
+                      </div>
+                      <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                        <div className="text-muted-foreground">Blocked</div>
+                        <div className="font-semibold text-foreground">{swarmSummary.packetsBlocked}</div>
+                      </div>
+                    </div>
+                  )}
+                  {swarmPacket && (
+                    <div className="space-y-2 text-[0.733rem]">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                          <div className="text-muted-foreground">Packet</div>
+                          <div className="break-all font-semibold text-foreground">{swarmPacket.packetId}</div>
+                        </div>
+                        <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                          <div className="text-muted-foreground">Status</div>
+                          <div className="font-semibold text-foreground">{swarmPacket.packetStatus}</div>
+                        </div>
+                        <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                          <div className="text-muted-foreground">Owner</div>
+                          <div className="break-all text-foreground">{swarmPacket.ownerAgentId}</div>
+                        </div>
+                        <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                          <div className="text-muted-foreground">Checker</div>
+                          <div className="break-all text-foreground">{swarmPacket.checkerAgentId}</div>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                        <div className="text-muted-foreground">Evidence path</div>
+                        <div className="break-all text-foreground">{swarmPacket.evidencePath}</div>
+                      </div>
+                      {swarmPacket.childSessionKey && (
+                        <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                          <div className="text-muted-foreground">Session key</div>
+                          <div className="break-all text-foreground">{swarmPacket.childSessionKey}</div>
+                        </div>
+                      )}
+                      {swarmPacket.error && (
+                        <div className="rounded-xl border border-destructive/25 bg-destructive/8 px-3 py-2">
+                          <div className="text-muted-foreground">Blocker</div>
+                          <div className="break-words text-destructive">{swarmPacket.error}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {task.run && (
                 <div className="cockpit-note space-y-2">

@@ -41,6 +41,36 @@ function RunBadge({ status }: { status: string }) {
   }
 }
 
+function SwarmSummaryLine({ task }: { task: KanbanTask }) {
+  if (task.swarmSummary) {
+    const summary = task.swarmSummary;
+    return (
+      <div className="mt-1.5 ml-4 rounded-xl border border-primary/15 bg-primary/[0.06] px-2 py-1 text-[0.667rem] font-medium text-primary">
+        Swarm: {summary.packetsTotal} packets, {summary.packetsRunning} running, {summary.packetsBlocked} blocked
+      </div>
+    );
+  }
+
+  if (task.swarmPacket) {
+    const packet = task.swarmPacket;
+    return (
+      <div className="mt-1.5 ml-4 flex flex-wrap gap-1 text-[0.667rem]">
+        <span className="rounded-full border border-border/55 bg-background/50 px-2 py-0.5 font-medium text-muted-foreground">
+          {packet.cluster}
+        </span>
+        <span className="rounded-full border border-border/55 bg-background/50 px-2 py-0.5 font-medium text-muted-foreground">
+          {packet.packetStatus}
+        </span>
+        <span className="truncate rounded-full border border-border/55 bg-background/50 px-2 py-0.5 font-medium text-muted-foreground">
+          {packet.ownerAgentId}
+        </span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 interface KanbanCardProps {
   task: KanbanTask;
   onClick: (task: KanbanTask) => void;
@@ -147,6 +177,8 @@ function CardContent({
           )}
         </div>
       )}
+
+      <SwarmSummaryLine task={task} />
 
       {/* Row 3: meta line (assignee, run status, time) */}
       <div className="flex items-center gap-2 mt-1.5 ml-4 text-[0.733rem] text-muted-foreground">
