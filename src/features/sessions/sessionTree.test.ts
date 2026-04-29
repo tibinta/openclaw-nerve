@@ -133,6 +133,37 @@ describe('buildSessionTree', () => {
     expect(tree[1].children[0].key).toBe('agent:reviewer:subagent:b');
   });
 
+  it('sorts top-level roots by most recent activity first', () => {
+    const sessions = [
+      session('agent:older:main', { updatedAt: 1_000 }),
+      session('agent:newer:main', { updatedAt: 2_000 }),
+      session('agent:middle:main', { updatedAt: 1_500 }),
+    ];
+
+    const tree = buildSessionTree(sessions);
+
+    expect(tree.map((node) => node.key)).toEqual([
+      'agent:newer:main',
+      'agent:middle:main',
+      'agent:older:main',
+    ]);
+  });
+
+  it('sorts siblings by most recent activity first', () => {
+    const sessions = [
+      session('agent:main:main'),
+      session('agent:main:subagent:old', { updatedAt: 1_000 }),
+      session('agent:main:subagent:new', { updatedAt: 2_000 }),
+    ];
+
+    const tree = buildSessionTree(sessions);
+
+    expect(tree[0].children.map((node) => node.key)).toEqual([
+      'agent:main:subagent:new',
+      'agent:main:subagent:old',
+    ]);
+  });
+
   it('prefers the Jane root ahead of legacy main when both roots exist', () => {
     const sessions = [
       session('agent:main:main'),

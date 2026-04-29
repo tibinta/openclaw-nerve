@@ -1,8 +1,6 @@
 import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 import {
-  LEGACY_MAIN_SESSION_KEY,
-  PRIMARY_AGENT_SESSION_KEY,
   getSessionType,
   isTopLevelAgentSessionKey,
   resolveParentSessionKey,
@@ -88,6 +86,17 @@ function buildTreeNodes(
   }
 
   const typeOrder = { main: 0, subagent: 1, cron: 2, 'cron-run': 3 };
+  const getSessionSortTime = (session: Session): number => {
+    const candidates = [session.updatedAt, session.lastActivity];
+    for (const value of candidates) {
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (typeof value === 'string') {
+        const parsed = new Date(value).getTime();
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return 0;
+  };
 
   function buildNodes(parentKey: string | null, depth: number): TreeNode[] {
     const children = childrenOf.get(parentKey);
@@ -97,28 +106,19 @@ function buildTreeNodes(
       const keyA = getSessionKey(a);
       const keyB = getSessionKey(b);
 
+      const timeA = getSessionSortTime(a);
+      const timeB = getSessionSortTime(b);
+      if (timeA !== timeB) return timeB - timeA;
+
       if (parentKey === null) {
-        if (keyA === PRIMARY_AGENT_SESSION_KEY) return -1;
-        if (keyB === PRIMARY_AGENT_SESSION_KEY) return 1;
-        if (keyA === LEGACY_MAIN_SESSION_KEY) return -1;
-        if (keyB === LEGACY_MAIN_SESSION_KEY) return 1;
+        const isAgentRootA = isTopLevelAgentSessionKey(keyA);
+        const isAgentRootB = isTopLevelAgentSessionKey(keyB);
+        if (isAgentRootA !== isAgentRootB) return isAgentRootA ? -1 : 1;
       }
 
       const ta = typeOrder[getSessionType(keyA)] ?? 9;
       const tb = typeOrder[getSessionType(keyB)] ?? 9;
       if (ta !== tb) return ta - tb;
-
-      if (parentKey === null && isTopLevelAgentSessionKey(keyA) && isTopLevelAgentSessionKey(keyB)) {
-        const displayA = (a.displayName || a.label || keyA).toLowerCase();
-        const displayB = (b.displayName || b.label || keyB).toLowerCase();
-        return displayA.localeCompare(displayB);
-      }
-
-      if (ta === 3) {
-        const timeA = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
-        const timeB = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
-        return timeB - timeA;
-      }
 
       const labelA = (a.displayName || a.label || keyA).toLowerCase();
       const labelB = (b.displayName || b.label || keyB).toLowerCase();

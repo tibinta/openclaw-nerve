@@ -99,6 +99,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
         agent?.thinking || config?.thinking || h?.thinking || ''
       ).trim().toLowerCase();
       const hasThinking = rawThinking && rawThinking !== 'undefined' && rawThinking !== 'null';
+      let resolvedThinking = hasThinking ? rawThinking : '--';
 
       // Fallback to sessions.list for model and/or thinking (single RPC call for both)
       if (clean === '--' || !hasThinking) {
@@ -110,13 +111,13 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
             || list.find(s => isTopLevelAgentSessionKey(s.sessionKey || s.key || ''));
           if (clean === '--' && primarySession?.model) clean = normalizeModel(primarySession.model);
           if (!hasThinking && primarySession?.thinking) {
-            setThinking(primarySession.thinking.toLowerCase());
+            resolvedThinking = primarySession.thinking.toLowerCase();
           }
         } catch { /* fallback to '--' */ }
       }
 
       setModel(clean);
-      if (hasThinking) setThinking(rawThinking);
+      setThinking(resolvedThinking);
     } catch (err) {
       console.debug('[GatewayContext] Failed to poll status:', err);
     }
