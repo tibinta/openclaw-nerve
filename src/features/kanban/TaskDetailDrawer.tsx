@@ -61,6 +61,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [proofPanelOpen, setProofPanelOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
 
   /* Populate fields when task changes */
@@ -72,6 +73,15 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
       setEditPriority(getTaskPriority(task.priority));
       setEditLabels(task.labels.join(', '));
       setEditAssignee(task.assignee || '');
+      setEditProofUrl((task.evidence_links ?? [])[0] ?? '');
+      setProofLinks(task.evidence_links ?? []);
+      setProofPanelOpen(task.status === 'review');
+      setGateState({
+        reindex_verified: task.proof_gate?.reindex_verified === true,
+        read_back_verified: task.proof_gate?.read_back_verified === true,
+        live_link_or_canvas_checked: task.proof_gate?.live_link_or_canvas_checked === true,
+        proof_log_updated: task.proof_gate?.proof_log_updated === true,
+      });
       setEditVersion(task.version);
       setError(null);
       setDirty(false);
@@ -159,6 +169,14 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
   const [workflowLoading, setWorkflowLoading] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
+  const [editProofUrl, setEditProofUrl] = useState('');
+  const [proofLinks, setProofLinks] = useState<string[]>([]);
+  const [gateState, setGateState] = useState({
+    reindex_verified: false,
+    read_back_verified: false,
+    live_link_or_canvas_checked: false,
+    proof_log_updated: false,
+  });
 
   const handleExecute = useCallback(async () => {
     if (!task || !onExecute || workflowLoading) return;
@@ -172,6 +190,75 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
       setWorkflowLoading(null);
     }
   }, [task, onExecute, workflowLoading]);
+
+  const handleAddProof = useCallback(async () => {
+    if (!task || workflowLoading) return;
+    const trimmed = editProofUrl.trim();
+    if (!trimmed) return;
+    const nextEvidence = Array.from(new Set([...(task.evidence_links ?? []), trimmed]));
+    setWorkflowLoading('proof');
+    setError(null);
+    try {
+      const updated = await onUpdate(task.id, { version: editVersion, evidence_links: nextEvidence });
+      setEditVersion(updated.version);
+      setEditProofUrl('');
+      setProofLinks(updated.evidence_links ?? nextEvidence);
+      setDirty(false);
+      return updated;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Add proof failed');
+      throw err;
+    } finally {
+      setWorkflowLoading(null);
+    }
+  }, [task, workflowLoading, editProofUrl, onUpdate, editVersion]);
+
+  const isDelegatedTask = task?.assignee?.startsWith('agent:') ?? false;
+  const delegationProof = task?.delegation_proof;
+  const proofGateReady = proofLinks.length > 0
+    && gateState.reindex_verified
+    && gateState.read_back_verified
+    && gateState.live_link_or_canvas_checked
+    && gateState.proof_log_updated;
+  const delegationProofReady = Boolean(
+    delegationProof?.packetId?.trim()
+    && delegationProof.worker?.verdict === 'pass'
+    && delegationProof.checker?.verdict === 'pass'
+    && delegationProof.worker.agentId !== delegationProof.checker.agentId,
+  );
+  const readyToClose = proofGateReady && (!isDelegatedTask || delegationProofReady);
+
+  const canApprove = task?.status === 'review' && readyToClose;
+
+
+  useEffect(() => {
+    if (!task || task.status !== 'review') return;
+    setProofPanelOpen(true);
+    setProofLinks(task.evidence_links ?? []);
+    setGateState({
+      reindex_verified: task.proof_gate?.reindex_verified === true,
+      read_back_verified: task.proof_gate?.read_back_verified === true,
+      live_link_or_canvas_checked: task.proof_gate?.live_link_or_canvas_checked === true,
+      proof_log_updated: task.proof_gate?.proof_log_updated === true,
+    });
+  }, [task?.id, task?.updatedAt, task?.version, task?.evidence_links, task?.proof_gate]);
+
+  const handleProofGateUpdate = useCallback((key: keyof typeof gateState, checked: boolean) => {
+    if (!task) return;
+    const nextGate = {
+      ...gateState,
+      [key]: checked,
+    };
+    setGateState(nextGate);
+    void onUpdate(task.id, { version: editVersion, proof_gate: nextGate })
+      .then((updated) => {
+        setEditVersion(updated.version);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Proof gate update failed');
+      });
+    markDirty();
+  }, [task, gateState, onUpdate, editVersion, markDirty]);
 
   const handleApprove = useCallback(async () => {
     if (!task || !onApprove || workflowLoading) return;
@@ -205,6 +292,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
       setWorkflowLoading(null);
     }
   }, [task, onReject, workflowLoading, showRejectInput, rejectNote]);
+
 
   const handleAbort = useCallback(async () => {
     if (!task || !onAbort || workflowLoading) return;
@@ -473,7 +561,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                 </div>
               )}
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
               {/* Workflow actions */}
               {(task.status === 'backlog' || task.status === 'todo') && onExecute && (
                 <Button size="xs" onClick={handleExecute} disabled={workflowLoading !== null}>
@@ -489,8 +577,128 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
               )}
               {task.status === 'review' && (
                 <>
+                  {(isDelegatedTask || delegationProof) && (
+                    <div className="space-y-3 rounded-2xl border border-border/60 bg-background/45 p-3 text-[0.733rem]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-foreground">Delegation proof</span>
+                        <span className={readyToClose ? 'text-green' : 'text-muted-foreground'}>
+                          {readyToClose ? 'Ready to close' : 'Missing proof'}
+                        </span>
+                      </div>
+                      {delegationProof ? (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-2 rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                            <span className="text-muted-foreground">Packet</span>
+                            <span className="break-all text-foreground">{delegationProof.packetId}</span>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                              <div className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Worker</div>
+                              {delegationProof.worker ? (
+                                <div className="mt-1 space-y-1">
+                                  <div className="font-medium text-foreground">{delegationProof.worker.agentId}</div>
+                                  <div className="text-muted-foreground break-all">{delegationProof.worker.sessionKey}</div>
+                                  <div className="text-foreground">Verdict: {delegationProof.worker.verdict}</div>
+                                  <div className="text-muted-foreground">{delegationProof.worker.summary}</div>
+                                </div>
+                              ) : (
+                                <div className="mt-1 text-muted-foreground">Missing worker proof.</div>
+                              )}
+                            </div>
+                            <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                              <div className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Checker</div>
+                              {delegationProof.checker ? (
+                                <div className="mt-1 space-y-1">
+                                  <div className="font-medium text-foreground">{delegationProof.checker.agentId}</div>
+                                  <div className="text-muted-foreground break-all">{delegationProof.checker.sessionKey}</div>
+                                  <div className="text-foreground">Verdict: {delegationProof.checker.verdict}</div>
+                                  <div className="text-muted-foreground">{delegationProof.checker.summary}</div>
+                                </div>
+                              ) : (
+                                <div className="mt-1 text-muted-foreground">Missing checker proof.</div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-border/55 bg-background/45 px-3 py-2">
+                            <div className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Blocker</div>
+                            <div className="mt-1 text-foreground">
+                              {delegationProof.blocker?.trim() ? delegationProof.blocker : 'No blocker recorded'}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-muted-foreground">
+                          {isDelegatedTask ? 'Waiting for typed worker and checker proof.' : 'No typed delegation proof recorded.'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between rounded-2xl border border-border/60 bg-background/45 px-3 py-2 text-left text-[0.733rem] font-medium text-foreground"
+                    onClick={() => setProofPanelOpen(v => !v)}
+                    aria-expanded={proofPanelOpen}
+                    aria-controls="proof-gate-panel"
+                  >
+                    <span>Proof gate</span>
+                    <span className="text-muted-foreground">{proofPanelOpen ? 'Hide' : 'Show'}</span>
+                  </button>
+                  {proofPanelOpen && (
+                    <div id="proof-gate-panel" className="space-y-3 rounded-2xl border border-border/60 bg-background/45 p-3 text-[0.733rem]">
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="shrink-0 text-muted-foreground">Proof URL</span>
+                          <Input
+                            value={editProofUrl}
+                            onChange={e => { setEditProofUrl(e.target.value); markDirty(); }}
+                            placeholder="https://... or evidence link"
+                            className="cockpit-input h-9 flex-1 min-w-0 text-xs"
+                            aria-label="Proof URL"
+                          />
+                        </label>
+                        <Button size="xs" variant="outline" onClick={handleAddProof} disabled={workflowLoading !== null || !editProofUrl.trim()}>
+                          Add proof
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {[
+                          ['reindex_verified', 'Reindex verified'],
+                          ['read_back_verified', 'Read-back verified'],
+                          ['live_link_or_canvas_checked', 'Live link/canvas checked'],
+                          ['proof_log_updated', 'Proof log updated'],
+                        ].map(([key, label]) => {
+                          const checked = gateState[key as keyof typeof gateState];
+                          return (
+                            <label key={key} className="flex items-center gap-2 rounded-xl border border-border/50 px-3 py-2">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={e => handleProofGateUpdate(key as keyof typeof gateState, e.target.checked)}
+                                aria-label={label}
+                              />
+                              <span>{label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {proofLinks.length ? (
+                        <div className="space-y-2 rounded-2xl border border-border/60 bg-background/45 p-3 text-[0.733rem]">
+                          <div className="font-medium text-foreground">Proof attached</div>
+                          <ul className="space-y-1">
+                            {proofLinks.map((link, index) => (
+                              <li key={index} className="break-all text-muted-foreground">{link}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <span className="text-[0.733rem] text-muted-foreground">
+                          Proof is missing. Add proof in the Proof gate before approving.
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {onApprove && (
-                    <Button size="xs" variant="outline" onClick={handleApprove} disabled={workflowLoading !== null} className="border-green/30 bg-green/8 text-green hover:bg-green/12">
+                    <Button size="xs" variant="outline" onClick={handleApprove} disabled={workflowLoading === 'approve' || !canApprove} className="border-green/30 bg-green/8 text-green hover:bg-green/12">
                       {workflowLoading === 'approve' ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
                       Approve
                     </Button>
@@ -503,7 +711,6 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                   )}
                 </>
               )}
-
               <div className="flex-1" />
 
               {confirmDelete ? (

@@ -19,6 +19,20 @@ export type TaskPriority = 'critical' | 'high' | 'normal' | 'low';
  */
 export const COLUMNS: TaskStatus[] = ['backlog', 'todo', 'in-progress', 'review', 'done'];
 
+/** Split-lane workflow groups used by the redesigned tasks view. */
+export const WORKFLOW_QUEUE_STATUSES = ['backlog', 'todo'] as const;
+export const WORKFLOW_ACTIVE_STATUSES = ['in-progress', 'review'] as const;
+export const WORKFLOW_VISIBLE_STATUSES = [
+  ...WORKFLOW_QUEUE_STATUSES,
+  ...WORKFLOW_ACTIVE_STATUSES,
+] as const;
+
+export const WORKFLOW_LANES = [
+  { key: 'queue', title: 'Queue', statuses: WORKFLOW_QUEUE_STATUSES },
+  { key: 'active', title: 'Active', statuses: WORKFLOW_ACTIVE_STATUSES },
+  { key: 'archive', title: 'Archive', statuses: ['done'] as const },
+] as const;
+
 /** Human-readable labels for built-in columns. Custom columns use their `title` from config. */
 export const COLUMN_LABELS: Record<string, string> = {
   backlog: 'Backlog',
@@ -29,6 +43,23 @@ export const COLUMN_LABELS: Record<string, string> = {
   cancelled: 'Cancelled',
 };
 export type TaskActor = 'operator' | `agent:${string}`;
+export type DelegationVerdict = 'pass' | 'blocked' | 'fail';
+
+export interface DelegationProofActor {
+  agentId: string;
+  sessionKey: string;
+  verdict: DelegationVerdict;
+  at: number;
+  summary: string;
+  evidence_links?: string[];
+}
+
+export interface DelegationProof {
+  packetId: string;
+  worker?: DelegationProofActor;
+  checker?: DelegationProofActor;
+  blocker?: string;
+}
 
 export interface TaskFeedback {
   at: number;
@@ -69,4 +100,12 @@ export interface KanbanTask {
   estimateMin?: number;
   actualMin?: number;
   feedback: TaskFeedback[];
+  evidence_links?: string[];
+  proof_gate?: {
+    reindex_verified: boolean;
+    read_back_verified: boolean;
+    live_link_or_canvas_checked: boolean;
+    proof_log_updated: boolean;
+  };
+  delegation_proof?: DelegationProof;
 }

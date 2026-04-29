@@ -9,5 +9,8 @@ export type {
   TaskActor,
   TaskFeedback,
   TaskRunLink,
+  DelegationVerdict,
+  DelegationProofActor,
+  DelegationProof,
 } from './types';
 export { COLUMNS, COLUMN_LABELS } from './types';

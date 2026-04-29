@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { KanbanTask, TaskStatus, TaskPriority } from '../types';
+import type { KanbanTask, DelegationProof, TaskStatus, TaskPriority } from '../types';
 import { COLUMNS } from '../types';
 
 /* ── API response shape ── */
@@ -9,6 +9,11 @@ interface TasksResponse {
   limit: number;
   offset: number;
   hasMore: boolean;
+}
+
+interface ArchiveResponse {
+  items: KanbanTask[];
+  total: number;
 }
 
 /* ── Filter state ── */
@@ -34,6 +39,14 @@ export interface CreateTaskPayload {
   priority?: TaskPriority;
   labels?: string[];
   assignee?: string;
+  evidence_links?: string[];
+  proof_gate?: {
+    reindex_verified: boolean;
+    read_back_verified: boolean;
+    live_link_or_canvas_checked: boolean;
+    proof_log_updated: boolean;
+  };
+  delegation_proof?: DelegationProof;
 }
 
 export interface UpdateTaskPayload {
@@ -43,6 +56,14 @@ export interface UpdateTaskPayload {
   priority?: TaskPriority;
   labels?: string[];
   assignee?: string | null;
+  evidence_links?: string[];
+  proof_gate?: {
+    reindex_verified: boolean;
+    read_back_verified: boolean;
+    live_link_or_canvas_checked: boolean;
+    proof_log_updated: boolean;
+  };
+  delegation_proof?: DelegationProof;
   version: number;
 }
 
@@ -82,6 +103,7 @@ export function useKanban() {
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<KanbanFilters>(EMPTY_FILTERS);
   const [boardConfig, setBoardConfig] = useState<BoardConfig | null>(null);
+  const [archivedTasks, setArchivedTasks] = useState<KanbanTask[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   /* ── Fetch board config (columns are user-configurable) ── */
@@ -127,11 +149,19 @@ export function useKanban() {
     }
   }, [filters]);
 
+  const fetchArchive = useCallback(async () => {
+    const res = await fetch('/api/kanban/archive');
+    if (!res.ok) return;
+    const data: ArchiveResponse = await res.json();
+    setArchivedTasks(data.items);
+  }, []);
+
   /* Initial fetch + refetch on filter change */
   useEffect(() => {
     fetchTasks(filters);
+    void fetchArchive();
     return () => abortRef.current?.abort();
-  }, [filters, fetchTasks]);
+  }, [filters, fetchArchive, fetchTasks]);
 
   /* Auto-refresh every 5s so board stays current (silent — no loading flash) */
   useEffect(() => {
@@ -281,6 +311,28 @@ export function useKanban() {
     return task;
   }, [fetchTasks]);
 
+  const archiveDoneTasks = useCallback(async (): Promise<KanbanTask[]> => {
+    const res = await fetch('/api/kanban/archive', { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.details || body.error || `HTTP ${res.status}`);
+    }
+    const data: { archived: KanbanTask[] } = await res.json();
+    await Promise.all([fetchTasks(undefined, { silent: true }), fetchArchive()]);
+    return data.archived;
+  }, [fetchArchive, fetchTasks]);
+
+  const restoreArchivedTask = useCallback(async (id: string): Promise<KanbanTask> => {
+    const res = await fetch(`/api/kanban/archive/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.details || body.error || `HTTP ${res.status}`);
+    }
+    const task: KanbanTask = await res.json();
+    await Promise.all([fetchTasks(undefined, { silent: true }), fetchArchive()]);
+    return task;
+  }, [fetchArchive, fetchTasks]);
+
   /* ── Helpers ── */
   const tasksByStatusMap = useMemo(() => {
     const map = new Map<TaskStatus, KanbanTask[]>();
@@ -321,6 +373,10 @@ export function useKanban() {
     statusCounts,
     boardColumns,
     boardConfig,
+    archivedTasks,
+    fetchArchive,
+    archiveDoneTasks,
+    restoreArchivedTask,
     executeTask,
     approveTask,
     rejectTask,

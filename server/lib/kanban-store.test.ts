@@ -45,6 +45,32 @@ afterEach(async () => {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 async function createSampleTask(overrides: Partial<Parameters<KanbanStore['createTask']>[0]> = {}): Promise<KanbanTask> {
+  const delegatedDefaults = overrides.status === 'done'
+    && typeof overrides.assignee === 'string'
+    && overrides.assignee.startsWith('agent:')
+    && overrides.delegation_proof == null
+    ? {
+        delegation_proof: {
+          packetId: 'packet://test-delegation',
+          worker: {
+            agentId: overrides.assignee,
+            sessionKey: 'worker-session',
+            verdict: 'pass' as const,
+            at: Date.now(),
+            summary: 'Worker completed the packet',
+          },
+          checker: {
+            agentId: 'agent:checker',
+            sessionKey: 'checker-session',
+            verdict: 'pass' as const,
+            at: Date.now(),
+            summary: 'Checker verified the packet',
+          },
+          blocker: 'none',
+        },
+      }
+    : {};
+
   const proofDefaults = overrides.status === 'done' && overrides.evidence_links == null && overrides.proof_gate == null
     ? {
         evidence_links: ['evidence://test-proof'],
@@ -60,6 +86,7 @@ async function createSampleTask(overrides: Partial<Parameters<KanbanStore['creat
     title: 'Test task',
     createdBy: 'operator',
     ...proofDefaults,
+    ...delegatedDefaults,
     ...overrides,
   });
 }
@@ -153,8 +180,9 @@ describe('createTask', () => {
     expect(persisted.assignee).toBe('agent:reviewer');
   });
 
-  it('rejects invalid root assignee on create', async () => {
-    await expect(createSampleTask({ assignee: 'agent:main' })).rejects.toThrow(InvalidKanbanAssigneeError);
+  it('accepts main root assignee on create', async () => {
+    const task = await createSampleTask({ assignee: 'agent:main' });
+    expect(task.assignee).toBe('agent:main');
   });
 
   it('persists to disk', async () => {
@@ -364,6 +392,111 @@ describe('updateTask', () => {
   it('rejects update to done without proof gate', async () => {
     const task = await createSampleTask({ status: 'review' });
     await expect(store.updateTask(task.id, task.version, { status: 'done' })).rejects.toThrow(ProofGateRequiredError);
+  });
+
+  it('persists delegation proof on update', async () => {
+    const task = await createSampleTask({
+      status: 'review',
+      assignee: 'agent:codex',
+      evidence_links: ['evidence://delegation-proof'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
+    const delegationProof = {
+      packetId: 'packet://delegation-proof',
+      worker: {
+        agentId: 'agent:codex',
+        sessionKey: 'worker-session',
+        verdict: 'pass' as const,
+        at: Date.now(),
+        summary: 'Worker finished the packet',
+      },
+      checker: {
+        agentId: 'agent:checker',
+        sessionKey: 'checker-session',
+        verdict: 'pass' as const,
+        at: Date.now(),
+        summary: 'Checker verified the packet',
+      },
+      blocker: 'none',
+    };
+
+    const updated = await store.updateTask(task.id, task.version, { delegation_proof: delegationProof });
+    expect(updated.delegation_proof).toEqual(delegationProof);
+
+    const persisted = await store.getTask(task.id);
+    expect(persisted.delegation_proof).toEqual(delegationProof);
+  });
+
+  it('rejects delegated update to done without delegation proof', async () => {
+    const task = await createSampleTask({
+      status: 'review',
+      assignee: 'agent:codex',
+      evidence_links: ['evidence://delegated-proof'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
+    try {
+      await store.updateTask(task.id, task.version, { status: 'done' });
+      expect.fail('Expected ProofGateRequiredError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProofGateRequiredError);
+      const proofErr = err as ProofGateRequiredError;
+      expect(proofErr.missing).toContain('delegation_proof');
+      expect(proofErr.missing).toContain('delegation_proof.packetId');
+      expect(proofErr.missing).toContain('delegation_proof.worker');
+      expect(proofErr.missing).toContain('delegation_proof.checker');
+    }
+  });
+
+  it('allows delegated update to done with typed delegation proof', async () => {
+    const task = await createSampleTask({
+      status: 'review',
+      assignee: 'agent:codex',
+      evidence_links: ['evidence://delegated-proof'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
+    const updated = await store.updateTask(task.id, task.version, {
+      status: 'done',
+      delegation_proof: {
+        packetId: 'packet://delegated-proof',
+        worker: {
+          agentId: 'agent:codex',
+          sessionKey: 'worker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Worker finished the packet',
+        },
+        checker: {
+          agentId: 'agent:checker',
+          sessionKey: 'checker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Checker verified the packet',
+        },
+        blocker: 'none',
+      },
+    });
+
+    expect(updated.status).toBe('done');
+    expect(updated.delegation_proof?.packetId).toBe('packet://delegated-proof');
+    expect(updated.version).toBe(task.version + 1);
   });
 
   it('throws TaskNotFoundError for missing task', async () => {
@@ -1664,5 +1797,68 @@ describe('default path and legacy migration', () => {
     const result = await defaultStore.listTasks();
     expect(result.total).toBe(1);
     expect(result.items[0].title).toBe('Rich legacy task');
+  });
+});
+
+describe('archiveDoneTasks / restoreArchivedTask', () => {
+  it('moves done tasks into the archive and restores them into todo', async () => {
+    const todo = await createSampleTask({ title: 'Active task' });
+    const done = await createSampleTask({
+      title: 'Completed task',
+      status: 'done',
+      evidence_links: ['evidence://archive-proof'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
+    const archived = await store.archiveDoneTasks('operator');
+    expect(archived.map((task) => task.id)).toEqual([done.id]);
+
+    const active = await store.listTasks();
+    expect(active.items.map((task) => task.id)).toEqual([todo.id]);
+
+    const archive = await store.listArchivedTasks();
+    expect(archive.map((task) => task.id)).toEqual([done.id]);
+
+    const restored = await store.restoreArchivedTask(done.id, 'operator');
+    expect(restored.id).toBe(done.id);
+    expect(restored.status).toBe('todo');
+
+    const activeAfterRestore = await store.listTasks();
+    expect(activeAfterRestore.items.some((task) => task.id === done.id)).toBe(true);
+
+    const archiveAfterRestore = await store.listArchivedTasks();
+    expect(archiveAfterRestore).toEqual([]);
+  });
+});
+
+describe('split-lanes reconciliation', () => {
+  it('auto-promotes the best todo task when no in-progress task exists', async () => {
+    await createSampleTask({ title: 'Low priority', priority: 'low', status: 'todo' });
+    const best = await createSampleTask({ title: 'Critical priority', priority: 'critical', status: 'todo' });
+
+    const result = await store.listTasks();
+    const promoted = result.items.find((task) => task.status === 'in-progress');
+
+    expect(promoted?.id).toBe(best.id);
+    expect(promoted?.priority).toBe('critical');
+
+    const persisted = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as { tasks: Array<{ id: string; status: string }> };
+    expect(persisted.tasks.find((task) => task.id === best.id)?.status).toBe('in-progress');
+  });
+
+  it('keeps multiple in-progress tasks when they are already present', async () => {
+    const first = await createSampleTask({ title: 'First active', status: 'in-progress', priority: 'normal' });
+    const second = await createSampleTask({ title: 'Second active', status: 'in-progress', priority: 'high' });
+
+    const result = await store.listTasks();
+    const inProgress = result.items.filter((task) => task.status === 'in-progress');
+
+    expect(inProgress).toHaveLength(2);
+    expect(inProgress.map((task) => task.id)).toEqual([first.id, second.id]);
   });
 });

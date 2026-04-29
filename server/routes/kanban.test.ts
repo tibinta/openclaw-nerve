@@ -29,7 +29,7 @@ beforeEach(async () => {
     resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
       if (!assignee || assignee === 'operator') return null;
       const match = assignee.match(/^agent:([^:]+)/);
-      if (!match || match[1] === 'main') return null;
+      if (!match) return null;
       return `agent:${match[1]}:main`;
     }),
     launchKanbanFallbackSubagentViaRpc: vi.fn(async ({ label, parentSessionKey }: { label: string; parentSessionKey: string }) => ({
@@ -126,6 +126,32 @@ function jsonPut(body: unknown): RequestInit {
 }
 
 async function createTask(app: Hono, overrides: Record<string, unknown> = {}): Promise<KanbanTask> {
+  const delegatedDefaults = overrides.status === 'done'
+    && typeof overrides.assignee === 'string'
+    && overrides.assignee.startsWith('agent:')
+    && overrides.delegation_proof == null
+    ? {
+        delegation_proof: {
+          packetId: 'packet://test-delegation',
+          worker: {
+            agentId: String(overrides.assignee),
+            sessionKey: 'worker-session',
+            verdict: 'pass' as const,
+            at: Date.now(),
+            summary: 'Worker completed the packet',
+          },
+          checker: {
+            agentId: 'agent:checker',
+            sessionKey: 'checker-session',
+            verdict: 'pass' as const,
+            at: Date.now(),
+            summary: 'Checker verified the packet',
+          },
+          blocker: 'none',
+        },
+      }
+    : {};
+
   const proofDefaults = overrides.status === 'done' && overrides.evidence_links == null && overrides.proof_gate == null
     ? {
         evidence_links: ['evidence://test-proof'],
@@ -141,6 +167,7 @@ async function createTask(app: Hono, overrides: Record<string, unknown> = {}): P
     title: 'Test task',
     createdBy: 'operator',
     ...proofDefaults,
+    ...delegatedDefaults,
     ...overrides,
   }));
   return res.json() as Promise<KanbanTask>;
@@ -378,17 +405,16 @@ describe('POST /api/kanban/tasks', () => {
     expect(task.assignee).toBe('agent:designer');
   });
 
-  it('returns 400 for invalid root assignee', async () => {
+  it('accepts the main root assignee', async () => {
     const app = await buildApp();
     const res = await app.request('/api/kanban/tasks', json({
       title: 'Bad assignee',
       createdBy: 'operator',
       assignee: 'agent:main',
     }));
-    expect(res.status).toBe(400);
-    const body = await res.json() as { error: string; details: string };
-    expect(body.error).toBe('validation_error');
-    expect(body.details).toBe('Invalid Kanban assignee: agent:main');
+    expect(res.status).toBe(201);
+    const body = await res.json() as KanbanTask;
+    expect(body.assignee).toBe('agent:main');
   });
 
   it('returns 400 for invalid status', async () => {
@@ -401,17 +427,17 @@ describe('POST /api/kanban/tasks', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns 400 when creating done task without proof gate', async () => {
+  it('returns 409 when creating done task without proof gate', async () => {
     const app = await buildApp();
     const res = await app.request('/api/kanban/tasks', json({
       title: 'Done task',
       createdBy: 'operator',
       status: 'done',
     }));
-    expect(res.status).toBe(400);
-    const body = await res.json() as { error: string; details: string };
-    expect(body.error).toBe('validation_error');
-    expect(body.details).toContain('evidence_links required when status is done');
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string; missing: string[] };
+    expect(body.error).toBe('proof_gate_required');
+    expect(body.missing).toContain('evidence_links');
   });
 
   it('accepts a configured custom status', async () => {
@@ -468,7 +494,7 @@ describe('PATCH /api/kanban/tasks/:id', () => {
     expect(updated.version).toBe(2);
   });
 
-  it('returns 400 when patching to done without proof gate', async () => {
+  it('returns 409 when patching to done without proof gate', async () => {
     const app = await buildApp();
     const task = await createTask(app);
 
@@ -476,10 +502,10 @@ describe('PATCH /api/kanban/tasks/:id', () => {
       version: 1,
       status: 'done',
     }));
-    expect(res.status).toBe(400);
-    const body = await res.json() as { error: string; details: string };
-    expect(body.error).toBe('validation_error');
-    expect(body.details).toContain('evidence_links required when status is done');
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string; missing: string[] };
+    expect(body.error).toBe('proof_gate_required');
+    expect(body.missing).toContain('evidence_links');
   });
 
   it('returns 409 on version conflict', async () => {
@@ -570,6 +596,46 @@ describe('PATCH /api/kanban/tasks/:id', () => {
     expect(res.status).toBe(200);
     const updated = await res.json() as KanbanTask;
     expect(updated.assignee).toBe('agent:designer');
+  });
+
+  it('accepts delegation proof in patch updates', async () => {
+    const app = await buildApp();
+    const task = await createTask(app, {
+      status: 'review',
+      assignee: 'agent:codex',
+      evidence_links: ['evidence://delegation-proof'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
+    const res = await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: task.version,
+      delegation_proof: {
+        packetId: 'packet://delegation-proof',
+        worker: {
+          agentId: 'agent:codex',
+          sessionKey: 'worker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Worker finished the packet',
+        },
+        checker: {
+          agentId: 'agent:checker',
+          sessionKey: 'checker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Checker verified the packet',
+        },
+        blocker: 'none',
+      },
+    }));
+    expect(res.status).toBe(200);
+    const updated = await res.json() as KanbanTask;
+    expect(updated.delegation_proof?.packetId).toBe('packet://delegation-proof');
   });
 });
 
@@ -808,7 +874,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
@@ -852,7 +918,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
@@ -896,7 +962,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
@@ -933,18 +999,34 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     }));
   });
 
-  it('treats legacy agent:main assignees as unassigned on the normal path', async () => {
-    const invokeGatewayToolMock = vi.fn(async () => ({ sessionKey: 'agent:main:subagent:new-child' }));
-    const gatewayRpcMock: GatewayRpcMock = vi.fn(async () => ({ sessions: [] }));
-    const app = await buildApp({ invokeGatewayToolMock, gatewayRpcMock, executionMode: 'primary' });
+  it('treats legacy agent:main assignees as the main root session on the normal path', async () => {
+    const launchMock = vi.fn(async ({ label, parentSessionKey }: { label: string; parentSessionKey: string }) => ({
+      sessionKey: buildMockRootSessionKey(label),
+      parentSessionKey,
+      knownSessionKeysBefore: [parentSessionKey],
+    }));
+    const gatewayRpcMock: GatewayRpcMock = vi.fn(async () => ({ sessions: [{ sessionKey: 'agent:main:main' }] }));
+    vi.doMock('../lib/kanban-subagent-fallback.js', () => ({
+      buildKanbanFallbackRunKey: buildMockRootSessionKey,
+      resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
+        if (!assignee || assignee === 'operator') return null;
+        const match = assignee.match(/^agent:([^:]+)/);
+        if (!match) return null;
+        return `agent:${match[1]}:main`;
+      }),
+      launchKanbanFallbackSubagentViaRpc: launchMock,
+    }));
+    const app = await buildApp({ gatewayRpcMock, executionMode: 'primary' });
     const task = await createTask(app, { status: 'todo', assignee: 'agent:codex' });
     await overwriteStoredTaskAssignee(task.id, 'agent:main');
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
     expect(res.status).toBe(200);
 
-    expect(invokeGatewayToolMock).toHaveBeenCalledWith('sessions_spawn', expect.any(Object));
-    expect(gatewayRpcMock).not.toHaveBeenCalledWith('chat.send', expect.anything());
+    expect(gatewayRpcMock).toHaveBeenCalledWith('sessions.list', expect.any(Object));
+    expect(launchMock).toHaveBeenCalledWith(expect.objectContaining({
+      parentSessionKey: 'agent:main:main',
+    }));
   });
 
   it('waits for pending spawn bookkeeping during cleanup', async () => {
@@ -997,15 +1079,21 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     expect(body.details).toContain('requires assigning the task to a live worker agent root');
   });
 
-  it('rejects legacy agent:main assignees on the fallback path', async () => {
-    const app = await buildApp({ executionMode: 'fallback' });
+  it('executes legacy agent:main assignees on the fallback path', async () => {
+    const app = await buildApp({
+      executionMode: 'fallback',
+      gatewayRpcMock: vi.fn(async (method: string) => {
+        if (method === 'sessions.list') {
+          return { sessions: [{ sessionKey: 'agent:main:main' }] };
+        }
+        return {};
+      }),
+    });
     const task = await createTask(app, { status: 'todo', assignee: 'agent:codex' });
     await overwriteStoredTaskAssignee(task.id, 'agent:main');
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
-    expect(res.status).toBe(409);
-    const body = await res.json() as { error: string; details: string };
-    expect(body.error).toBe('invalid_execution_target');
+    expect(res.status).toBe(200);
   });
 
   it('executes a todo task', async () => {
@@ -1378,7 +1466,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
@@ -1458,7 +1546,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
@@ -1504,7 +1592,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
@@ -1533,8 +1621,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     expect(invokeGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it('treats legacy stored agent:main as unassigned on the normal path', async () => {
-    const invokeGatewayToolMock = vi.fn(async () => ({ sessionKey: 'agent:main:subagent:spawned-child' }));
+  it('treats legacy stored agent:main as the main root session on the normal path', async () => {
     const launchMock = vi.fn(async ({ label, parentSessionKey }: { label: string; parentSessionKey: string }) => ({
       sessionKey: buildMockRootSessionKey(label),
       parentSessionKey,
@@ -1546,25 +1633,32 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
     }));
 
-    const app = await buildApp({ executionMode: 'primary', invokeGatewayToolMock });
+    const app = await buildApp({
+      executionMode: 'primary',
+      gatewayRpcMock: vi.fn(async (method: string) => {
+        if (method === 'sessions.list') {
+          return { sessions: [{ sessionKey: 'agent:main:main' }] };
+        }
+        return {};
+      }),
+    });
     const task = await createTask(app, { status: 'todo', assignee: 'agent:designer' });
     await overwriteStoredTaskAssignee(task.id, 'agent:main');
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
     expect(res.status).toBe(200);
-    expect(invokeGatewayToolMock).toHaveBeenCalledWith('sessions_spawn', expect.objectContaining({
-      mode: 'run',
+    expect(launchMock).toHaveBeenCalledWith(expect.objectContaining({
+      parentSessionKey: 'agent:main:main',
     }));
-    expect(launchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects legacy stored agent:main on the fallback path', async () => {
+  it('executes legacy stored agent:main on the fallback path', async () => {
     const launchMock = vi.fn(async ({ label, parentSessionKey }: { label: string; parentSessionKey: string }) => ({
       sessionKey: buildMockRootSessionKey(label),
       parentSessionKey,
@@ -1576,23 +1670,29 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
       resolveKanbanFallbackParentSessionKey: vi.fn((assignee?: string) => {
         if (!assignee || assignee === 'operator') return null;
         const match = assignee.match(/^agent:([^:]+)/);
-        if (!match || match[1] === 'main') return null;
+        if (!match) return null;
         return `agent:${match[1]}:main`;
       }),
       launchKanbanFallbackSubagentViaRpc: launchMock,
     }));
 
-    const app = await buildApp({ executionMode: 'fallback' });
+    const app = await buildApp({
+      executionMode: 'fallback',
+      gatewayRpcMock: vi.fn(async (method: string) => {
+        if (method === 'sessions.list') {
+          return { sessions: [{ sessionKey: 'agent:main:main' }] };
+        }
+        return {};
+      }),
+    });
     const task = await createTask(app, { status: 'todo', assignee: 'agent:designer' });
     await overwriteStoredTaskAssignee(task.id, 'agent:main');
 
     const res = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
-    expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({
-      error: 'invalid_execution_target',
-      details: 'Kanban automation on macOS requires assigning the task to a live worker agent root (not @main).',
-    });
-    expect(launchMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(launchMock).toHaveBeenCalledWith(expect.objectContaining({
+      parentSessionKey: 'agent:main:main',
+    }));
   });
 
   it.each([
@@ -1621,7 +1721,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
       error: 'invalid_execution_target',
-      details: 'Kanban automation on macOS requires assigning the task to a live worker agent root (not @main).',
+      details: 'Kanban automation on macOS requires assigning the task to a live worker agent root.',
     });
     expect(launchMock).not.toHaveBeenCalled();
   });
@@ -1757,6 +1857,28 @@ describe('POST /api/kanban/tasks/:id/approve', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as KanbanTask;
     expect(body.status).toBe('done');
+  });
+
+  it('approves a Josephine proof task directly from done-ready review proof', async () => {
+    const app = await buildApp();
+    const task = await createTask(app, {
+      title: 'Introduce Josephine to Fred Ma',
+      description: 'Proof-ready Josephine task',
+      status: 'review',
+      evidence_links: ['evidence://josephine-proof'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
+    const res = await app.request(`/api/kanban/tasks/${task.id}/approve`, json({ note: 'approved by Alex' }));
+    expect(res.status).toBe(200);
+    const body = await res.json() as KanbanTask;
+    expect(body.status).toBe('done');
+    expect(body.feedback?.[0]?.note).toBe('approved by Alex');
   });
 
   it('approves with a note', async () => {
@@ -2104,6 +2226,58 @@ describe('POST /api/kanban/proposals', () => {
     const body = await res.json() as { error: string; details: string };
     expect(body.error).toBe('validation_error');
     expect(body.details).toContain('evidence_links required when status is done');
+  });
+
+  it('accepts delegation_proof in update proposal payloads', async () => {
+    const app = await buildApp();
+    const task = await createTask(app, {
+      status: 'review',
+      assignee: 'agent:codex',
+      evidence_links: ['evidence://proposal-delegation'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+
+    const res = await app.request('/api/kanban/proposals', json({
+      type: 'update',
+      payload: {
+        id: task.id,
+        status: 'done',
+        evidence_links: ['evidence://proposal-delegation'],
+        proof_gate: {
+          reindex_verified: true,
+          read_back_verified: true,
+          live_link_or_canvas_checked: true,
+          proof_log_updated: true,
+        },
+        delegation_proof: {
+          packetId: 'packet://proposal-delegation',
+          worker: {
+            agentId: 'agent:codex',
+            sessionKey: 'worker-session',
+            verdict: 'pass',
+            at: Date.now(),
+            summary: 'Worker finished the packet',
+          },
+          checker: {
+            agentId: 'agent:checker',
+            sessionKey: 'checker-session',
+            verdict: 'pass',
+            at: Date.now(),
+            summary: 'Checker verified the packet',
+          },
+          blocker: 'none',
+        },
+      },
+      proposedBy: 'agent:codex',
+    }));
+    expect(res.status).toBe(201);
+    const body = await res.json() as { type: string; status: string };
+    expect(body.type).toBe('update');
   });
 
   it('returns 400 for create payload without title', async () => {
@@ -2621,6 +2795,7 @@ describe('POST /api/kanban/tasks/:id/complete — run key integrity', () => {
     const execRes = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
     expect(execRes.status).toBe(200);
 
+    // Give the fallback poller a bit more time on slower test runners.
     await new Promise((resolve) => setTimeout(resolve, 3_200));
 
     const tasksRes = await app.request('/api/kanban/tasks');
@@ -2640,7 +2815,7 @@ describe('POST /api/kanban/tasks/:id/complete — run key integrity', () => {
     expect(String((parentReportCall?.[1] as Record<string, unknown>).message ?? '')).toContain('Exact child task');
     expect(String((parentReportCall?.[1] as Record<string, unknown>).message ?? '')).toContain(childSessionKey);
     expect(String((parentReportCall?.[1] as Record<string, unknown>).message ?? '')).toContain('Exact child done');
-  });
+  }, 10_000);
 
   it('polls the spawned child session via gateway RPC and completes when session reports done status', async () => {
     let runKey = '';
@@ -2773,14 +2948,14 @@ describe('POST /api/kanban/tasks/:id/complete — run key integrity', () => {
       includeTools: true,
     });
 
-    const tasksRes = await app.request('/api/kanban/tasks');
-    const tasks = await tasksRes.json() as { items: KanbanTask[] };
-    const failed = tasks.items.find((item) => item.id === task.id);
-    expect(failed?.status).toBe('todo');
-    expect(failed?.run?.status).toBe('error');
-    expect(failed?.run?.sessionKey).toBe(runKey);
-    expect(failed?.run?.childSessionKey).toBe(childSessionKey);
-    expect(failed?.run?.error).toBe('Worker crashed');
+    const taskRes = await app.request(`/api/kanban/tasks/${task.id}`);
+    expect(taskRes.status).toBe(200);
+    const failed = await taskRes.json() as KanbanTask;
+    expect(failed.status).toBe('todo');
+    expect(failed.run?.status).toBe('error');
+    expect(failed.run?.sessionKey).toBe(runKey);
+    expect(failed.run?.childSessionKey).toBe(childSessionKey);
+    expect(failed.run?.error).toBe('Worker crashed');
 
     const parentReportCall = (gatewayRpcMock as ReturnType<typeof vi.fn>).mock.calls.find(
       ([method, params]) => method === 'sessions.send' && params?.key === 'agent:reviewer:main'

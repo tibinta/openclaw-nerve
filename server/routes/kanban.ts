@@ -7,6 +7,9 @@
  * PATCH  /api/kanban/tasks/:id      — Update a task (CAS versioned)
  * DELETE /api/kanban/tasks/:id      — Delete a task
  * POST   /api/kanban/tasks/:id/reorder — Reorder / move a task
+ * GET    /api/kanban/archive       — List archived done tasks
+ * POST   /api/kanban/archive       — Move done tasks into archive
+ * POST   /api/kanban/archive/:id/restore — Restore a task from archive
  * GET    /api/kanban/config         — Get board config
  * PUT    /api/kanban/config         — Update board config
  * @module
@@ -612,6 +615,28 @@ const proofGateFieldsSchema = z.object({
   proof_gate: proofGateSchema.optional(),
 });
 
+const delegationVerdictSchema = z.enum(['pass', 'blocked', 'fail']);
+
+const delegationProofActorSchema = z.object({
+  agentId: z.string().min(1).max(200),
+  sessionKey: z.string().min(1).max(500),
+  verdict: delegationVerdictSchema,
+  at: z.number(),
+  summary: z.string().min(1).max(5000),
+  evidence_links: z.array(z.string().min(1).max(2000)).max(200).optional(),
+});
+
+const delegationProofSchema = z.object({
+  packetId: z.string().min(1).max(500),
+  worker: delegationProofActorSchema.optional(),
+  checker: delegationProofActorSchema.optional(),
+  blocker: z.string().max(5000).optional(),
+});
+
+const delegationProofFieldsSchema = z.object({
+  delegation_proof: delegationProofSchema.optional(),
+});
+
 function validateProofGateIfDone<T extends { status?: string; evidence_links?: string[]; proof_gate?: z.infer<typeof proofGateSchema> }>(
   data: T,
   ctx: z.RefinementCtx,
@@ -651,7 +676,7 @@ const createTaskSchema = z.object({
   thinking: thinkingSchema.optional(),
   dueAt: z.number().optional(),
   estimateMin: z.number().min(0).optional(),
-}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema);
 
 const updateTaskSchema = z.object({
   version: z.number().int().min(1),
@@ -670,7 +695,7 @@ const updateTaskSchema = z.object({
   resultAt: z.number().optional().nullable(),
   run: runLinkSchema.optional().nullable(),
   feedback: z.array(feedbackSchema).optional(),
-}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema);
 
 const reorderSchema = z.object({
   version: z.number().int().min(1),
@@ -714,7 +739,7 @@ const proposalCreatePayloadSchema = z.object({
   thinking: thinkingSchema.optional(),
   dueAt: z.number().optional(),
   estimateMin: z.number().min(0).optional(),
-}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).superRefine(validateProofGateIfDone);
 
 const proposalUpdatePayloadSchema = z.object({
   id: z.string().min(1),
@@ -725,7 +750,7 @@ const proposalUpdatePayloadSchema = z.object({
   assignee: taskActorSchema.optional(),
   labels: z.array(z.string().max(100)).max(50).optional(),
   result: z.string().max(50_000).optional(),
-}).merge(proofGateFieldsSchema).superRefine(validateProofGateIfDone);
+}).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).superRefine(validateProofGateIfDone);
 
 const createProposalSchema = z.object({
   type: z.enum(['create', 'update']),
@@ -793,6 +818,33 @@ app.get('/api/kanban/tasks', rateLimitGeneral, async (c) => {
   return c.json(result);
 });
 
+// GET /api/kanban/archive
+app.get('/api/kanban/archive', rateLimitGeneral, async (c) => {
+  const store = getKanbanStore();
+  const tasks = await store.listArchivedTasks();
+  return c.json({ items: tasks, total: tasks.length });
+});
+
+// POST /api/kanban/archive
+app.post('/api/kanban/archive', rateLimitGeneral, async (c) => {
+  const store = getKanbanStore();
+  const archived = await store.archiveDoneTasks('operator');
+  return c.json({ archived });
+});
+
+// POST /api/kanban/archive/:id/restore
+app.post('/api/kanban/archive/:id/restore', rateLimitGeneral, async (c) => {
+  const store = getKanbanStore();
+  const id = c.req.param('id');
+  try {
+    const restored = await store.restoreArchivedTask(id, 'operator');
+    return c.json(restored);
+  } catch (err) {
+    if (err instanceof TaskNotFoundError) return c.json({ error: 'not_found' }, 404);
+    throw err;
+  }
+});
+
 // GET /api/kanban/tasks/:id
 app.get('/api/kanban/tasks/:id', rateLimitGeneral, async (c) => {
   const store = getKanbanStore();
@@ -834,6 +886,7 @@ app.post('/api/kanban/tasks', rateLimitGeneral, async (c) => {
   } catch (err) {
     const invalidStatusResponse = handleInvalidTaskStatusError(c, err);
     if (invalidStatusResponse) return invalidStatusResponse;
+    if (err instanceof ProofGateRequiredError) return handleWorkflowError(c, err);
     throw err;
   }
 });
@@ -873,6 +926,7 @@ app.patch('/api/kanban/tasks/:id', rateLimitGeneral, async (c) => {
   } catch (err) {
     const invalidStatusResponse = handleInvalidTaskStatusError(c, err);
     if (invalidStatusResponse) return invalidStatusResponse;
+    if (err instanceof ProofGateRequiredError) return handleWorkflowError(c, err);
     if (err instanceof VersionConflictError) {
       return c.json({
         error: 'version_conflict',
@@ -935,6 +989,7 @@ app.post('/api/kanban/tasks/:id/reorder', rateLimitGeneral, async (c) => {
   } catch (err) {
     const invalidStatusResponse = handleInvalidTaskStatusError(c, err);
     if (invalidStatusResponse) return invalidStatusResponse;
+    if (err instanceof ProofGateRequiredError) return handleWorkflowError(c, err);
     if (err instanceof VersionConflictError) {
       return c.json({
         error: 'version_conflict',
@@ -1063,6 +1118,7 @@ app.post('/api/kanban/proposals', rateLimitGeneral, async (c) => {
   } catch (err) {
     const invalidStatusResponse = handleInvalidTaskStatusError(c, err);
     if (invalidStatusResponse) return invalidStatusResponse;
+    if (err instanceof ProofGateRequiredError) return handleWorkflowError(c, err);
     if (err instanceof TaskNotFoundError) {
       return c.json({ error: 'not_found', details: err.message }, 404);
     }
@@ -1081,6 +1137,7 @@ app.post('/api/kanban/proposals/:id/approve', rateLimitGeneral, async (c) => {
   } catch (err) {
     const invalidStatusResponse = handleInvalidTaskStatusError(c, err);
     if (invalidStatusResponse) return invalidStatusResponse;
+    if (err instanceof ProofGateRequiredError) return handleWorkflowError(c, err);
     if (err instanceof ProposalNotFoundError) {
       return c.json({ error: 'not_found', details: err.message }, 404);
     }
@@ -1268,7 +1325,7 @@ Deliver your result as a clear summary of what was done.`;
       }
 
       if (useFallback) {
-        throw new KanbanExecutionPreflightError('Kanban automation on macOS requires assigning the task to a live worker agent root (not @main).');
+        throw new KanbanExecutionPreflightError('Kanban automation on macOS requires assigning the task to a live worker agent root.');
       }
 
       const task = await store.executeTask(id, parsed.data, 'operator');

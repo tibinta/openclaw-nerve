@@ -80,6 +80,7 @@ export type BuiltInStatus = typeof BUILT_IN_STATUSES[number];
 export type TaskStatus = string;
 export type TaskPriority = 'critical' | 'high' | 'normal' | 'low';
 export type TaskActor = 'operator' | `agent:${string}`;
+export type DelegationVerdict = 'pass' | 'blocked' | 'fail';
 
 export interface TaskFeedback {
   at: number;
@@ -96,6 +97,22 @@ export interface TaskRunLink {
   endedAt?: number;
   status: 'running' | 'done' | 'error' | 'aborted';
   error?: string;
+}
+
+export interface DelegationProofActor {
+  agentId: string;
+  sessionKey: string;
+  verdict: DelegationVerdict;
+  at: number;
+  summary: string;
+  evidence_links?: string[];
+}
+
+export interface DelegationProof {
+  packetId: string;
+  worker?: DelegationProofActor;
+  checker?: DelegationProofActor;
+  blocker?: string;
 }
 
 export interface KanbanTask {
@@ -123,6 +140,7 @@ export interface KanbanTask {
   feedback: TaskFeedback[];
   evidence_links?: string[];
   proof_gate?: ProofGate;
+  delegation_proof?: DelegationProof;
 }
 
 export interface ProofGate {
@@ -190,6 +208,14 @@ export interface StoreData {
   tasks: KanbanTask[];
   proposals: KanbanProposal[];
   config: KanbanBoardConfig;
+  meta: {
+    schemaVersion: number;
+    updatedAt: number;
+  };
+}
+
+export interface ArchiveData {
+  tasks: KanbanTask[];
   meta: {
     schemaVersion: number;
     updatedAt: number;
@@ -329,16 +355,73 @@ function hasProofGate(task: Pick<KanbanTask, 'evidence_links' | 'proof_gate'>): 
     && proofGate?.proof_log_updated === true;
 }
 
-function requireProofGate(task: Pick<KanbanTask, 'id' | 'status' | 'evidence_links' | 'proof_gate'>): void {
-  if (task.status !== 'done') return;
-  if (hasProofGate(task)) return;
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
 
+function isDelegatedTask(task: Pick<KanbanTask, 'assignee'>): boolean {
+  return typeof task.assignee === 'string' && task.assignee.startsWith('agent:');
+}
+
+function collectDelegationProofMissing(task: Pick<KanbanTask, 'assignee' | 'delegation_proof'>): string[] {
+  if (!isDelegatedTask(task)) return [];
+
+  const proof = task.delegation_proof;
+  if (!proof) {
+    return [
+      'delegation_proof',
+      'delegation_proof.packetId',
+      'delegation_proof.worker',
+      'delegation_proof.checker',
+    ];
+  }
+
+  const missing: string[] = [];
+
+  if (!isNonEmptyString(proof.packetId)) missing.push('delegation_proof.packetId');
+
+  if (!proof.worker) {
+    missing.push('delegation_proof.worker');
+  } else {
+    if (!isNonEmptyString(proof.worker.agentId)) missing.push('delegation_proof.worker.agentId');
+    if (!isNonEmptyString(proof.worker.sessionKey)) missing.push('delegation_proof.worker.sessionKey');
+    if (!isNonEmptyString(proof.worker.summary)) missing.push('delegation_proof.worker.summary');
+    if (proof.worker.verdict !== 'pass') missing.push('delegation_proof.worker.verdict');
+    if (typeof proof.worker.at !== 'number') missing.push('delegation_proof.worker.at');
+  }
+
+  if (!proof.checker) {
+    missing.push('delegation_proof.checker');
+  } else {
+    if (!isNonEmptyString(proof.checker.agentId)) missing.push('delegation_proof.checker.agentId');
+    if (!isNonEmptyString(proof.checker.sessionKey)) missing.push('delegation_proof.checker.sessionKey');
+    if (!isNonEmptyString(proof.checker.summary)) missing.push('delegation_proof.checker.summary');
+    if (proof.checker.verdict !== 'pass') missing.push('delegation_proof.checker.verdict');
+    if (typeof proof.checker.at !== 'number') missing.push('delegation_proof.checker.at');
+  }
+
+  if (proof.worker?.agentId && proof.checker?.agentId && proof.worker.agentId === proof.checker.agentId) {
+    missing.push('delegation_proof.checker.agentId');
+  }
+
+  return missing;
+}
+
+function requireProofGate(task: Pick<KanbanTask, 'id' | 'status' | 'assignee' | 'evidence_links' | 'proof_gate' | 'delegation_proof'>): void {
+  if (task.status !== 'done') return;
   const missing = [] as string[];
-  if (!Array.isArray(task.evidence_links) || task.evidence_links.length === 0) missing.push('evidence_links');
-  if (task.proof_gate?.reindex_verified !== true) missing.push('proof_gate.reindex_verified');
-  if (task.proof_gate?.read_back_verified !== true) missing.push('proof_gate.read_back_verified');
-  if (task.proof_gate?.live_link_or_canvas_checked !== true) missing.push('proof_gate.live_link_or_canvas_checked');
-  if (task.proof_gate?.proof_log_updated !== true) missing.push('proof_gate.proof_log_updated');
+
+  if (!hasProofGate(task)) {
+    if (!Array.isArray(task.evidence_links) || task.evidence_links.length === 0) missing.push('evidence_links');
+    if (task.proof_gate?.reindex_verified !== true) missing.push('proof_gate.reindex_verified');
+    if (task.proof_gate?.read_back_verified !== true) missing.push('proof_gate.read_back_verified');
+    if (task.proof_gate?.live_link_or_canvas_checked !== true) missing.push('proof_gate.live_link_or_canvas_checked');
+    if (task.proof_gate?.proof_log_updated !== true) missing.push('proof_gate.proof_log_updated');
+  }
+
+  missing.push(...collectDelegationProofMissing(task));
+
+  if (missing.length === 0) return;
 
   throw new ProofGateRequiredError(missing);
 }
@@ -386,6 +469,72 @@ function emptyStore(): StoreData {
   };
 }
 
+function getPriorityRank(priority: TaskPriority): number {
+  switch (priority) {
+    case 'critical': return 0;
+    case 'high': return 1;
+    case 'normal': return 2;
+    case 'low': return 3;
+  }
+}
+
+function pickBestTodoTask(tasks: KanbanTask[]): KanbanTask | null {
+  let best: KanbanTask | null = null;
+  for (const task of tasks) {
+    if (task.status !== 'todo') continue;
+    if (!best) {
+      best = task;
+      continue;
+    }
+    const scoreDiff = getPriorityRank(task.priority) - getPriorityRank(best.priority)
+      || task.columnOrder - best.columnOrder
+      || task.createdAt - best.createdAt;
+    if (scoreDiff < 0) best = task;
+  }
+  return best;
+}
+
+function reconcileSplitLanes(data: StoreData): boolean {
+  const inProgressTasks = data.tasks
+    .filter((task) => task.status === 'in-progress')
+    .sort((a, b) => a.columnOrder - b.columnOrder || a.updatedAt - b.updatedAt);
+
+  let changed = false;
+
+  const hasBacklog = data.tasks.some((task) => task.status === 'backlog');
+
+  if (inProgressTasks.length === 0 && !hasBacklog) {
+    const bestTodo = pickBestTodoTask(data.tasks);
+    if (bestTodo) {
+      bestTodo.status = 'in-progress';
+      bestTodo.columnOrder = 0;
+      bestTodo.updatedAt = Date.now();
+      bestTodo.version += 1;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    const bucket = new Map<string, KanbanTask[]>();
+    for (const task of data.tasks) {
+      const list = bucket.get(task.status) ?? [];
+      list.push(task);
+      bucket.set(task.status, list);
+    }
+
+    for (const list of bucket.values()) {
+      list.sort((a, b) => a.columnOrder - b.columnOrder || a.updatedAt - b.updatedAt);
+      list.forEach((task, index) => {
+        task.columnOrder = index;
+      });
+    }
+
+    data.meta.updatedAt = Date.now();
+  }
+
+  return changed;
+}
+
 // ── Audit log ────────────────────────────────────────────────────────
 
 export type AuditAction = 'create' | 'update' | 'delete' | 'reorder' | 'config_update'
@@ -404,6 +553,7 @@ interface AuditEntry {
 
 export class KanbanStore {
   private readonly filePath: string;
+  private readonly archivePath: string;
   private readonly auditPath: string;
   private readonly withLock: ReturnType<typeof createMutex>;
   private readonly legacyCandidatePaths: string[];
@@ -414,6 +564,7 @@ export class KanbanStore {
     const dataRoot = process.env.NERVE_DATA_DIR || path.join(os.homedir() || process.cwd(), '.nerve');
     const dataDir = path.join(dataRoot, 'kanban');
     this.filePath = filePath || path.join(dataDir, 'tasks.json');
+    this.archivePath = path.join(path.dirname(this.filePath), 'done-archive.json');
     this.auditPath = path.join(path.dirname(this.filePath), 'audit.log');
     this.legacyCandidatePaths = filePath
       ? []
@@ -447,6 +598,30 @@ export class KanbanStore {
     const tmp = this.filePath + '.tmp';
     await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2));
     await fs.promises.rename(tmp, this.filePath);
+  }
+
+  private async readArchiveRaw(): Promise<ArchiveData> {
+    try {
+      const raw = await fs.promises.readFile(this.archivePath, 'utf-8');
+      const data = JSON.parse(raw) as ArchiveData;
+      if (!Array.isArray(data.tasks)) data.tasks = [];
+      if (!data.meta) data.meta = { schemaVersion: 1, updatedAt: Date.now() };
+      return data;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { tasks: [], meta: { schemaVersion: 1, updatedAt: Date.now() } };
+      }
+      throw err;
+    }
+  }
+
+  private async writeArchiveRaw(data: ArchiveData): Promise<void> {
+    data.meta.updatedAt = Date.now();
+    const dir = path.dirname(this.archivePath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const tmp = this.archivePath + '.tmp';
+    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2));
+    await fs.promises.rename(tmp, this.archivePath);
   }
 
   private migrate(data: StoreData): StoreData {
@@ -590,6 +765,10 @@ export class KanbanStore {
   async listTasks(filters: TaskFilters = {}): Promise<TaskListResult> {
     return this.withStore(async () => {
       const data = await this.readRaw();
+      const isBoardView = !filters.status?.length && !filters.priority?.length && !filters.assignee && !filters.label && !filters.q;
+      if (isBoardView && reconcileSplitLanes(data)) {
+        await this.writeRaw(data);
+      }
       let tasks = data.tasks;
 
       // Apply filters
@@ -638,6 +817,62 @@ export class KanbanStore {
     });
   }
 
+  async listArchivedTasks(): Promise<KanbanTask[]> {
+    return this.withStore(async () => {
+      const archive = await this.readArchiveRaw();
+      return archive.tasks.sort((a, b) => b.updatedAt - a.updatedAt);
+    });
+  }
+
+  async archiveDoneTasks(actor?: string): Promise<KanbanTask[]> {
+    return this.withStore(async () => {
+      const data = await this.readRaw();
+      const doneTasks = data.tasks.filter((task) => task.status === 'done');
+      if (doneTasks.length === 0) return [];
+
+      const remaining = data.tasks.filter((task) => task.status !== 'done');
+      const archive = await this.readArchiveRaw();
+      archive.tasks = [...doneTasks, ...archive.tasks.filter((task) => !doneTasks.some((done) => done.id === task.id))];
+      await this.writeArchiveRaw(archive);
+      data.tasks = remaining;
+      await this.writeRaw(data);
+      await this.audit({ ts: Date.now(), action: 'update', actor, detail: `archived ${doneTasks.length} done task(s)` });
+      return doneTasks;
+    });
+  }
+
+  async restoreArchivedTask(id: string, actor?: string): Promise<KanbanTask> {
+    return this.withStore(async () => {
+      const archive = await this.readArchiveRaw();
+      const idx = archive.tasks.findIndex((task) => task.id === id);
+      if (idx === -1) throw new TaskNotFoundError(id);
+      const [task] = archive.tasks.splice(idx, 1);
+
+      const data = await this.readRaw();
+      if (data.tasks.some((existing) => existing.id === id)) {
+        throw new InvalidTransitionError(task.status, task.status, `Task ${id} already exists in active board`);
+      }
+
+      const now = Date.now();
+      const restored: KanbanTask = {
+        ...task,
+        status: 'todo',
+        run: undefined,
+        result: undefined,
+        resultAt: undefined,
+        updatedAt: now,
+        version: task.version + 1,
+        columnOrder: data.tasks.filter((t) => t.status === 'todo').length,
+      };
+
+      data.tasks.push(restored);
+      await this.writeRaw(data);
+      await this.writeArchiveRaw(archive);
+      await this.audit({ ts: now, action: 'update', taskId: id, actor, detail: 'restored from archive' });
+      return restored;
+    });
+  }
+
   // ── Tasks: Get ───────────────────────────────────────────────────
 
   async getTask(id: string): Promise<KanbanTask> {
@@ -666,6 +901,7 @@ export class KanbanStore {
     estimateMin?: number;
     evidence_links?: string[];
     proof_gate?: ProofGate;
+    delegation_proof?: DelegationProof;
   }): Promise<KanbanTask> {
     return this.withStore(async () => {
       const data = await this.readRaw();
@@ -705,6 +941,7 @@ export class KanbanStore {
         estimateMin: input.estimateMin,
         evidence_links: input.evidence_links,
         proof_gate: input.proof_gate,
+        delegation_proof: input.delegation_proof,
         feedback: [],
       };
 
@@ -742,6 +979,7 @@ export class KanbanStore {
         | 'feedback'
         | 'evidence_links'
         | 'proof_gate'
+        | 'delegation_proof'
       >
     >,
     actor?: string,
@@ -1457,6 +1695,7 @@ export class KanbanStore {
       estimateMin: payload.estimateMin as number | undefined,
       evidence_links: payload.evidence_links as string[] | undefined,
       proof_gate: payload.proof_gate as ProofGate | undefined,
+      delegation_proof: payload.delegation_proof as DelegationProof | undefined,
       feedback: [],
     };
 
@@ -1481,7 +1720,7 @@ export class KanbanStore {
     // The proposal workflow (confirm/auto) serves as the gating mechanism instead.
 
     // Build patch from payload — allowlist safe fields only
-    const ALLOWED_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'assignee', 'labels', 'result', 'evidence_links', 'proof_gate'] as const;
+    const ALLOWED_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'assignee', 'labels', 'result', 'evidence_links', 'proof_gate', 'delegation_proof'] as const;
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED_UPDATE_FIELDS) {
       if (key in payload) patch[key] = payload[key];
