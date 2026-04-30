@@ -17,6 +17,38 @@ export function timeAgo(ts: string | number | Date): string {
   return Math.floor(diff / 86400) + 'd';
 }
 
+function parseDateLike(value: string | number | Date): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === 'number') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (/^-?\d+$/.test(trimmed)) {
+    const parsed = new Date(Number(trimmed));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Format a timestamp for UI display while tolerating legacy string values.
+ * If parsing fails, return the original value so the UI never shows "Invalid Date".
+ */
+export function formatDateTime(value: string | number | Date | null | undefined, fallback = '—'): string {
+  if (value == null || value === '') return fallback;
+  const parsed = parseDateLike(value);
+  if (parsed) return parsed.toLocaleString();
+  return typeof value === 'string' ? value : fallback;
+}
+
 /** Format a token count with SI suffixes (K, M, B). */
 export function fmtTokens(n: number): string {
   if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';

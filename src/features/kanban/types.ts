@@ -91,7 +91,8 @@ export interface SwarmPacket {
 }
 
 export interface TaskFeedback {
-  at: number;
+  // Legacy board history may preserve human-readable timestamps from older imports.
+  at: number | string;
   by: TaskActor;
   note: string;
 }

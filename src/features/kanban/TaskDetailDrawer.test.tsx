@@ -218,6 +218,22 @@ describe('TaskDetailDrawer', () => {
     expect(updates.length).toBeGreaterThanOrEqual(5);
   });
 
+  it('renders legacy string feedback timestamps without Invalid Date', () => {
+    renderDrawer(makeTask({
+      feedback: [
+        {
+          at: '2026-04-29 21:03 Europe/London',
+          by: 'operator',
+          note: 'Legacy timestamp note',
+        },
+      ],
+    }));
+
+    expect(screen.getByText('Legacy timestamp note')).toBeInTheDocument();
+    expect(screen.getByText('2026-04-29 21:03 Europe/London')).toBeInTheDocument();
+    expect(screen.queryByText('Invalid Date')).not.toBeInTheDocument();
+  });
+
   it('lets the user add missing worker and checker proof from the UI', async () => {
     const user = userEvent.setup();
     const task = makeTask({

@@ -86,7 +86,8 @@ export type SwarmCluster = 'growth' | 'ops' | 'finance' | 'product' | 'qa' | 'do
 export type SwarmPacketStatus = 'queued' | 'dispatched' | 'running' | 'review' | 'passed' | 'blocked' | 'failed';
 
 export interface TaskFeedback {
-  at: number;
+  // Older feedback imports can carry string timestamps; renderers must tolerate both.
+  at: number | string;
   by: TaskActor;
   note: string;
 }

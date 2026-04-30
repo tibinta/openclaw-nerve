@@ -6,6 +6,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSessionContext } from '@/contexts/SessionContext';
+import { formatDateTime } from '@/lib/formatting';
 import { COLUMN_LABELS, type DelegationProof, type DelegationProofActor, type KanbanTask, type TaskStatus, type TaskPriority } from './types';
 import type { UpdateTaskPayload, VersionConflictError } from './hooks/useKanban';
 import { AssigneeCombobox } from './components/AssigneeCombobox';
@@ -560,11 +561,11 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                 <div className="space-y-1 text-[0.733rem] text-muted-foreground">
                   <div className="flex items-center gap-1.5">
                     <Clock size={10} />
-                    Created: {new Date(task.createdAt).toLocaleString()}
+                    Created: {formatDateTime(task.createdAt)}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Clock size={10} />
-                    Updated: {new Date(task.updatedAt).toLocaleString()}
+                    Updated: {formatDateTime(task.updatedAt)}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <User size={10} />
@@ -660,10 +661,10 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                       <code className="cockpit-kbd select-all cursor-pointer">{task.run.sessionKey}</code>
                     </div>
                     {task.run.startedAt && (
-                      <div>Started: {new Date(task.run.startedAt).toLocaleString()}</div>
+                      <div>Started: {formatDateTime(task.run.startedAt)}</div>
                     )}
                     {task.run.endedAt && (
-                      <div>Ended: {new Date(task.run.endedAt).toLocaleString()}</div>
+                      <div>Ended: {formatDateTime(task.run.endedAt)}</div>
                     )}
                     {task.run.error && (
                       <div className="break-words text-destructive">Error: {task.run.error}</div>
@@ -692,7 +693,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                       <div key={i} className="rounded-2xl border border-border/60 bg-background/45 p-3 text-xs">
                         <div className="mb-1 flex items-center justify-between text-[0.667rem] text-muted-foreground">
                           <span>{fb.by === 'operator' ? 'Operator' : fb.by}</span>
-                          <span>{new Date(fb.at).toLocaleString()}</span>
+                          <span>{formatDateTime(fb.at)}</span>
                         </div>
                         <p className="text-foreground">{fb.note}</p>
                       </div>

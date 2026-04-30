@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { esc, timeAgo, fmtTokens, fmtCost, fmtK, decodeHtmlEntities } from './formatting';
+import { esc, timeAgo, formatDateTime, fmtTokens, fmtCost, fmtK, decodeHtmlEntities } from './formatting';
 
 describe('esc (HTML entity escaping)', () => {
   it('should escape ampersands', () => {
@@ -77,6 +77,22 @@ describe('timeAgo', () => {
   it('should accept ISO date strings', () => {
     const ts = new Date(Date.now() - 7200_000).toISOString(); // 2 hours ago
     expect(timeAgo(ts)).toBe('2h');
+  });
+});
+
+describe('formatDateTime', () => {
+  it('should format epoch timestamps without returning Invalid Date', () => {
+    expect(formatDateTime(Date.now())).not.toBe('Invalid Date');
+  });
+
+  it('should pass through legacy timestamp strings when parsing fails', () => {
+    const legacy = '2026-04-29 21:03 Europe/London';
+    expect(formatDateTime(legacy)).toBe(legacy);
+  });
+
+  it('should return a dash for missing values', () => {
+    expect(formatDateTime(null)).toBe('—');
+    expect(formatDateTime(undefined)).toBe('—');
   });
 });
 
