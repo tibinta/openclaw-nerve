@@ -34,6 +34,13 @@ export interface GatewayFileWithContent extends GatewayFileEntry {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const RECONNECT_DELAY_MS = 3_000;
+const METHOD_CACHE_TTLS_MS: Record<string, number> = {
+  'sessions.list': 5_000,
+  'agents.files.list': 5_000,
+  'agents.files.get': 3_000,
+  'session_status': 1_500,
+  'status': 1_500,
+};
 
 /** Derive the WebSocket URL from the HTTP gateway URL. */
 function getGatewayWsUrl(): string {
@@ -64,6 +71,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connectPromise: Promise<void> | null = null;
 let connectResolve: (() => void) | null = null;
 let connectReject: ((err: Error) => void) | null = null;
+const inFlightCalls = new Map<string, Promise<unknown>>();
+const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
 
 function normalizeOrigin(value: string | undefined | null): string | null {
   if (!value) return null;
@@ -139,6 +148,42 @@ function wsSend(data: string): boolean {
     return true;
   }
   return false;
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableSerialize(item)}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function getCacheKey(method: string, params: Record<string, unknown>): string {
+  return `${method}:${stableSerialize(params)}`;
+}
+
+function getMethodTtlMs(method: string): number {
+  return METHOD_CACHE_TTLS_MS[method] ?? 0;
+}
+
+function getCachedResponse(cacheKey: string): unknown | null {
+  const entry = responseCache.get(cacheKey);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    responseCache.delete(cacheKey);
+    return null;
+  }
+  return entry.value;
+}
+
+export function resetGatewayRpcCacheForTesting(): void {
+  inFlightCalls.clear();
+  responseCache.clear();
 }
 
 /** Clean up all pending calls with an error. */
@@ -276,6 +321,15 @@ export async function gatewayRpcCall(
   params: Record<string, unknown>,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<unknown> {
+  const ttlMs = getMethodTtlMs(method);
+  const cacheKey = ttlMs > 0 ? getCacheKey(method, params) : null;
+  if (cacheKey) {
+    const cached = getCachedResponse(cacheKey);
+    if (cached !== null) return cached;
+    const inFlight = inFlightCalls.get(cacheKey);
+    if (inFlight) return inFlight;
+  }
+
   // Ensure connection exists
   ensureConnection();
 
@@ -284,11 +338,18 @@ export async function gatewayRpcCall(
     await connectPromise;
   }
 
-  return new Promise((resolve, reject) => {
+  const callPromise = new Promise<unknown>((resolve, reject) => {
     const reqId = randomUUID();
 
     const timer = setTimeout(() => {
       pending.delete(reqId);
+      if (cacheKey) {
+        const cached = getCachedResponse(cacheKey);
+        if (cached !== null) {
+          resolve(cached);
+          return;
+        }
+      }
       reject(new Error(`Gateway RPC timeout after ${timeoutMs}ms calling ${method}`));
     }, timeoutMs);
 
@@ -300,6 +361,24 @@ export async function gatewayRpcCall(
       clearTimeout(timer);
       reject(new Error('Gateway connection not ready'));
     }
+  });
+
+  if (cacheKey) {
+    inFlightCalls.set(cacheKey, callPromise);
+  }
+
+  return callPromise.finally(() => {
+    if (cacheKey) {
+      inFlightCalls.delete(cacheKey);
+    }
+  }).then((value) => {
+    if (cacheKey) {
+      responseCache.set(cacheKey, {
+        expiresAt: Date.now() + ttlMs,
+        value,
+      });
+    }
+    return value;
   });
 }
 

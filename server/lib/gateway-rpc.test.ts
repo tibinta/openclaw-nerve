@@ -35,6 +35,7 @@ import {
   gatewayFilesList,
   gatewayFilesGet,
   gatewayFilesSet,
+  resetGatewayRpcCacheForTesting,
 } from './gateway-rpc.js';
 
 let wss: WebSocketServer;
@@ -114,6 +115,7 @@ describe('gateway-rpc (persistent WebSocket)', () => {
   });
 
   afterEach(() => {
+    resetGatewayRpcCacheForTesting();
     vi.clearAllMocks();
   });
 
@@ -217,6 +219,44 @@ describe('gateway-rpc (persistent WebSocket)', () => {
       expect(r1).toEqual({ echo: 'a' });
       expect(r2).toEqual({ echo: 'b' });
       expect(r3).toEqual({ echo: 'c' });
+    });
+
+    it('deduplicates identical in-flight sessions.list calls', async () => {
+      let callCount = 0;
+      rpcHandler = () => {
+        callCount += 1;
+        return { sessions: [{ sessionKey: 'agent:main:main' }] };
+      };
+
+      const [r1, r2] = await Promise.all([
+        gatewayRpcCall('sessions.list', { activeMinutes: 60, limit: 5 }),
+        gatewayRpcCall('sessions.list', { activeMinutes: 60, limit: 5 }),
+      ]);
+
+      expect(callCount).toBe(1);
+      expect(r1).toEqual({ sessions: [{ sessionKey: 'agent:main:main' }] });
+      expect(r2).toEqual({ sessions: [{ sessionKey: 'agent:main:main' }] });
+    });
+
+    it('returns a fresh cached sessions.list response without hammering the gateway', async () => {
+      let callCount = 0;
+      rpcHandler = () => {
+        callCount += 1;
+        return { sessions: [{ sessionKey: 'agent:designer:main' }] };
+      };
+
+      const first = await gatewayRpcCall('sessions.list', { activeMinutes: 60, limit: 5 });
+      expect(first).toEqual({ sessions: [{ sessionKey: 'agent:designer:main' }] });
+      expect(callCount).toBe(1);
+
+      rpcHandler = () => {
+        callCount += 1;
+        return { sessions: [{ sessionKey: 'agent:ignored:main' }] };
+      };
+
+      const second = await gatewayRpcCall('sessions.list', { activeMinutes: 60, limit: 5 });
+      expect(second).toEqual({ sessions: [{ sessionKey: 'agent:designer:main' }] });
+      expect(callCount).toBe(1);
     });
 
     it('rejects when the gateway rejects the initial connect handshake', async () => {
