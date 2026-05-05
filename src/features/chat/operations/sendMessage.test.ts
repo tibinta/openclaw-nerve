@@ -44,7 +44,7 @@ function makeUploadPayload(overrides: Partial<OutgoingUploadPayload> = {}): Outg
         reference: {
           kind: 'local_path',
           path: '/workspace/capture.mov',
-          uri: 'file:///workspace/capture.mov',
+          uri: '/api/files/raw?path=capture.mov',
         },
         policy: {
           forwardToSubagents: false,
@@ -269,6 +269,8 @@ describe('sendChatMessage', () => {
 
     const sentMessage = rpc.mock.calls[0][1].message;
     expect(sentMessage).toContain('[system: User sent a voice message');
+    expect(sentMessage).toContain('If you include a [tts:...] marker, Nerve will speak it automatically');
+    expect(sentMessage).toContain('Nerve will speak it automatically');
   });
 
   it('handles null/empty rpc response gracefully', async () => {

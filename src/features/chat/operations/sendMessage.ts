@@ -9,7 +9,7 @@ import { renderMarkdown, renderToolResults } from '@/utils/helpers';
 
 // ─── Voice → TTS prompt hint ───────────────────────────────────────────────────
 const VOICE_PREFIX = '[voice] ';
-const TTS_HINT = '\n\n[system: User sent a voice message. Always include your full text reply AND a [tts:...] marker so it plays back as audio. Never send only TTS markers — the response must be readable in chat too. TTS marker format: [tts: your spoken text here] — place it at the end of your reply. Example reply:\n\nHere is my text response.\n\n[tts: Here is my text response.]]';
+const TTS_HINT = '\n\n[system: User sent a voice message. Reply directly in plain text. If you include a [tts:...] marker, Nerve will speak it automatically. Do not ask the user to trigger speech or confirm TTS just to make audio happen. Always include readable chat text and, when audio is needed, exactly one [tts:...] marker at the end of your reply. Example reply:\n\nHere is my text response.\n\n[tts: Here is my text response.]]';
 const UPLOAD_MANIFEST_OPEN = '<nerve-upload-manifest>';
 const UPLOAD_MANIFEST_CLOSE = '</nerve-upload-manifest>';
 
@@ -110,10 +110,11 @@ export async function sendChatMessage(params: {
   sessionKey: string;
   text: string;
   images?: ImageAttachment[];
+  attachments?: Array<Pick<ImageAttachment, 'mimeType' | 'content'>>;
   uploadPayload?: OutgoingUploadPayload;
   idempotencyKey: string;
 }): Promise<ChatSendAck> {
-  const { rpc, sessionKey, text, images, uploadPayload, idempotencyKey } = params;
+  const { rpc, sessionKey, text, images, attachments, uploadPayload, idempotencyKey } = params;
 
   const messageWithManifest = appendUploadManifest(text, uploadPayload);
 
@@ -124,8 +125,9 @@ export async function sendChatMessage(params: {
     idempotencyKey,
   };
 
-  if (images?.length) {
-    rpcParams.attachments = images.map(i => ({
+  const outboundAttachments = attachments?.length ? attachments : images;
+  if (outboundAttachments?.length) {
+    rpcParams.attachments = outboundAttachments.map((i) => ({
       mimeType: i.mimeType,
       content: i.content,
     }));
