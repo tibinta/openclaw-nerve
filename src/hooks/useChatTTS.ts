@@ -38,6 +38,20 @@ export function buildVoiceFallbackText(raw: string): string | null {
   return text;
 }
 
+/** Reduce a reply to a short spoken summary for ADHD/dyslexia-friendly playback. */
+export function buildConciseSpeechText(raw: string): string | null {
+  const cleaned = buildVoiceFallbackText(raw);
+  if (!cleaned) return null;
+
+  const sentenceMatch = cleaned.match(/^(.{1,180}?[.!?])(?:\s|$)/);
+  if (sentenceMatch?.[1]) return sentenceMatch[1].trim();
+
+  if (cleaned.length <= 140) return cleaned;
+
+  const clipped = cleaned.slice(0, 180).replace(/\s+\S*$/, '').trim();
+  return clipped ? `${clipped}…` : cleaned;
+}
+
 // ─── Hook ───────────────────────────────────────────────────────────────────────
 
 interface UseChatTTSDeps {
@@ -69,13 +83,14 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
 
     if (finalData?.ttsText && !playedSoundsRef.current.has(finalData.ttsText)) {
       playedSoundsRef.current.add(finalData.ttsText);
-      speak.current(finalData.ttsText);
+      const concise = buildConciseSpeechText(finalData.ttsText) ?? finalData.ttsText;
+      speak.current(concise);
       voiceReplyPendingRef.current = false;
     } else if (!finalData?.ttsText && voiceReplyPendingRef.current) {
       // Voice fallback: agent forgot [tts:...] marker — auto-speak a cleaned response,
       // and fall back to the raw text if sanitizing strips it too aggressively.
       const fallback = finalData?.text
-        ? buildVoiceFallbackText(finalData.text) ?? finalData.text.trim()
+        ? buildConciseSpeechText(finalData.text) ?? finalData.text.trim()
         : '';
       if (fallback) speak.current(fallback);
       voiceReplyPendingRef.current = false;

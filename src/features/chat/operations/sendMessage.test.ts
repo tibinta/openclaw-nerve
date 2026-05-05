@@ -271,6 +271,7 @@ describe('sendChatMessage', () => {
     expect(sentMessage).toContain('[system: User sent a voice message');
     expect(sentMessage).toContain('If you include a [tts:...] marker, Nerve will speak it automatically');
     expect(sentMessage).toContain('Nerve will speak it automatically');
+    expect(sentMessage).toContain('short, clear, and summary-like');
   });
 
   it('handles null/empty rpc response gracefully', async () => {

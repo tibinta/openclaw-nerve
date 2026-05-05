@@ -47,4 +47,24 @@ describe('useChatTTS', () => {
 
     expect(speak).toHaveBeenCalledWith('bold reply');
   });
+
+  it('shortens long tts text into a concise spoken summary', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    act(() => {
+      result.current.trackVoiceMessage('[voice] summarize this');
+      result.current.handleFinalTTS({
+        message: { role: 'assistant', content: 'Long reply' } as never,
+        text: 'Long reply',
+        ttsText: 'First sentence explains the answer. Second sentence adds detail that should stay in chat.',
+        charts: [],
+      }, false);
+    });
+
+    expect(speak).toHaveBeenCalledWith('First sentence explains the answer.');
+  });
 });
