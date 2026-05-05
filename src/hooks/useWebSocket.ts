@@ -190,6 +190,8 @@ export function useWebSocket(): UseWebSocketReturn {
               setConnectError('');
               setConnectionState('connected');
               connectResolveRef.current?.();
+              connectResolveRef.current = null;
+              connectRejectRef.current = null;
             } else {
               const errMsg = 'Auth failed: ' + (response.error?.message || 'unknown');
               setConnectError(errMsg);
@@ -198,6 +200,8 @@ export function useWebSocket(): UseWebSocketReturn {
               // socket keeps retrying instead of getting stuck until a manual reload.
               ws.close();
               connectRejectRef.current?.(new Error(errMsg));
+              connectResolveRef.current = null;
+              connectRejectRef.current = null;
             }
             return;
           }
@@ -228,10 +232,20 @@ export function useWebSocket(): UseWebSocketReturn {
       };
 
       ws.onclose = () => {
-        rejectPending(new Error('WebSocket disconnected'));
-
         // Stale connection: a newer doConnect has already superseded this one
         if (gen !== connectionGenRef.current) return;
+
+        // A close before the connect response should fail the connect promise
+        // immediately instead of leaving the caller stuck in "connecting".
+        if (!hasConnectedRef.current && !intentionalDisconnectRef.current) {
+          connectRejectRef.current?.(new Error('Gateway connection closed before connect completed'));
+        }
+        connectResolveRef.current = null;
+        connectRejectRef.current = null;
+        connectReqIdRef.current = null;
+
+        rejectPending(new Error('WebSocket disconnected'));
+        wsRef.current = null;
 
         // Don't reconnect if intentionally disconnected, no credentials, or never connected
         if (intentionalDisconnectRef.current || !credentialsRef.current || !hasConnectedRef.current) {
@@ -288,6 +302,9 @@ export function useWebSocket(): UseWebSocketReturn {
     reconnectAttemptRef.current = 0;
     setReconnectAttempt(0);
     credentialsRef.current = null;
+    connectResolveRef.current = null;
+    connectRejectRef.current = null;
+    connectReqIdRef.current = null;
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
