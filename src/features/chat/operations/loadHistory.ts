@@ -15,6 +15,19 @@ import { extractEditBlocks, extractWriteBlocks } from '@/features/chat/edit-bloc
 import { extractImages } from '@/features/chat/extractImages';
 import type { MessageImage } from '@/features/chat/types';
 
+interface TranscriptMediaContentBlock {
+  type?: string;
+  data?: string;
+  mimeType?: string;
+  name?: string;
+  source?: { data?: string; media_type?: string };
+}
+
+interface MediaAttachmentContext {
+  sessionKey?: string;
+  messageTimestamp?: number;
+}
+
 /** Convert an image content block (from gateway) into a MessageImage for rendering. */
 function imageBlockToMessageImage(block: ContentBlock): MessageImage | null {
   // Format 1: { type: "image", data: "base64...", mimeType: "image/jpeg" }
@@ -36,6 +49,65 @@ function extractImageBlocks(content: ContentBlock[]): MessageImage[] {
     .filter(b => b.type === 'image')
     .map(imageBlockToMessageImage)
     .filter((img): img is MessageImage => img !== null);
+}
+
+function base64ByteLength(base64: string): number {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+function mediaBlockToUploadAttachment(
+  block: TranscriptMediaContentBlock,
+  index: number,
+  context: MediaAttachmentContext = {},
+): UploadAttachmentDescriptor | null {
+  if (!['audio', 'video', 'file', 'image'].includes(block.type || '')) return null;
+
+  const base64 = block.data || block.source?.data;
+  const mimeType = block.mimeType || block.source?.media_type || 'application/octet-stream';
+  const kind = block.type || 'media';
+  const base64Bytes = base64 ? base64ByteLength(base64) : 0;
+  const hasInlineBytes = typeof base64 === 'string' && base64.length > 0;
+  const mediaUri = context.sessionKey && typeof context.messageTimestamp === 'number'
+    ? `/api/sessions/media?sessionKey=${encodeURIComponent(context.sessionKey)}&timestamp=${context.messageTimestamp}&imageIndex=${index}`
+    : null;
+  // Keep the transcript media clickable even when we only have a filename hint.
+  const referenceUri = mediaUri || (block.name ? `/api/files/raw?path=${encodeURIComponent(block.name)}` : `/api/sessions/media?imageIndex=${index}`);
+
+  return {
+    id: `media-${index}`,
+    origin: 'upload',
+    mode: hasInlineBytes ? 'inline' : 'file_reference',
+    name: block.name || kind,
+    mimeType,
+    sizeBytes: base64Bytes,
+    ...(hasInlineBytes ? {
+      inline: {
+        encoding: 'base64',
+        base64,
+        base64Bytes,
+        compressed: false,
+      },
+    } : {
+      reference: {
+        kind: 'local_path',
+        path: block.name || kind,
+        uri: referenceUri,
+      },
+    }),
+    policy: {
+      forwardToSubagents: false,
+    },
+  };
+}
+
+function extractRenderableMedia(content: ContentBlock[], context: MediaAttachmentContext = {}): UploadAttachmentDescriptor[] {
+  return content
+    .map((block, index) => {
+      if (block.type === 'image') return null;
+      return mediaBlockToUploadAttachment(block as TranscriptMediaContentBlock, index, context);
+    })
+    .filter((attachment): attachment is UploadAttachmentDescriptor => attachment !== null)
 }
 
 // ─── RPC type alias ────────────────────────────────────────────────────────────
@@ -84,6 +156,9 @@ export function detectSystemNotification(text: string): { match: boolean; label:
 /** Determine whether a history message should be shown in the chat UI. */
 export function filterMessage(m: ChatMessage): boolean {
   const text = extractText(m);
+  const trimmedText = text.trim();
+
+  if (trimmedText === 'NO_REPLY') return false;
 
   // System notifications are now rendered as collapsible strips, not hidden.
   // They pass through the filter and get tagged during message processing.
@@ -91,7 +166,6 @@ export function filterMessage(m: ChatMessage): boolean {
   // Hide redundant tool results for Edit/Write operations
   // (diff view already shows the changes — only hide exact success patterns)
   if (m.role === 'tool' || m.role === 'toolResult') {
-    const trimmedText = text.trim();
     if (/^Successfully replaced text in .+\.$/.test(trimmedText)) return false;
     if (/^Successfully wrote \d+ bytes to .+\.$/.test(trimmedText)) return false;
   }
@@ -181,9 +255,10 @@ function splitSystemEvents(text: string): Array<{ role: 'event' | 'user'; text: 
   return segments;
 }
 
-export function splitToolCallMessage(m: ChatMessage): ChatMsg[] {
+export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentContext = {}): ChatMsg[] {
   const ts = m.timestamp || m.createdAt || m.ts || null;
   const timestamp = ts ? new Date(ts as string | number) : new Date();
+  const messageTimestamp = timestamp.getTime();
 
   // Only interleave for assistant messages with array content containing tool_use
   if (m.role === 'assistant' && Array.isArray(m.content)) {
@@ -198,6 +273,10 @@ export function splitToolCallMessage(m: ChatMessage): ChatMsg[] {
       const result: ChatMsg[] = [];
       let textBuffer = '';
       const contentImages = extractImageBlocks(m.content as ContentBlock[]);
+      const contentAttachments = extractRenderableMedia(m.content as ContentBlock[], {
+        ...context,
+        messageTimestamp,
+      });
 
       const flushText = () => {
         if (!textBuffer.trim()) { textBuffer = ''; return; }
@@ -268,6 +347,21 @@ export function splitToolCallMessage(m: ChatMessage): ChatMsg[] {
         }
       }
 
+      if (contentAttachments.length > 0) {
+        const lastAssistant = [...result].reverse().find(r => r.role === 'assistant' || r.role === m.role as ChatMsgRole);
+        if (lastAssistant) {
+          lastAssistant.uploadAttachments = [...(lastAssistant.uploadAttachments || []), ...contentAttachments];
+        } else {
+          result.push({
+            role: m.role as ChatMsgRole,
+            html: '',
+            rawText: '',
+            timestamp,
+            uploadAttachments: contentAttachments,
+          });
+        }
+      }
+
       return result;
     }
   }
@@ -289,9 +383,7 @@ export function splitToolCallMessage(m: ChatMessage): ChatMsg[] {
     if (!rawText.trim()) return [];
   }
 
-  const { cleanedText: uploadManifestStripped, uploadAttachments } = m.role === 'user'
-    ? extractUploadAttachments(rawText)
-    : { cleanedText: rawText, uploadAttachments: undefined };
+  const { cleanedText: uploadManifestStripped, uploadAttachments } = extractUploadAttachments(rawText);
 
   rawText = uploadManifestStripped;
 
@@ -325,9 +417,17 @@ export function splitToolCallMessage(m: ChatMessage): ChatMsg[] {
 
   // Extract image content blocks (base64 images from gateway)
   const contentImages = Array.isArray(m.content) ? extractImageBlocks(m.content as ContentBlock[]) : [];
+  const contentAttachments = isAssistant && Array.isArray(m.content)
+    ? extractRenderableMedia(m.content as ContentBlock[], {
+      ...context,
+      messageTimestamp,
+    })
+    : [];
 
   // Tag system notifications (subagent/cron completions) for collapsible strip rendering
   const sysNotif = m.role === 'user' ? detectSystemNotification(rawText) : { match: false, label: '' };
+
+  const mediaAttachments = [...(uploadAttachments ?? []), ...contentAttachments];
 
   return [{
     role: m.role as ChatMsgRole,
@@ -338,7 +438,7 @@ export function splitToolCallMessage(m: ChatMessage): ChatMsg[] {
     ...(charts.length > 0 ? { charts } : {}),
     ...(extractedImages.length > 0 ? { extractedImages } : {}),
     ...(contentImages.length > 0 ? { images: contentImages } : {}),
-    ...(uploadAttachments ? { uploadAttachments } : {}),
+    ...(mediaAttachments.length > 0 ? { uploadAttachments: mediaAttachments } : {}),
     ...(isVoice ? { isVoice: true } : {}),
     ...(sysNotif.match ? { isSystemNotification: true, systemLabel: sysNotif.label } : {}),
   }];
@@ -468,10 +568,10 @@ export function tagIntermediateMessages(msgs: ChatMsg[]): ChatMsg[] {
  *
  * filter → split → group → tag
  */
-export function processChatMessages(messages: ChatMessage[]): ChatMsg[] {
+export function processChatMessages(messages: ChatMessage[], context: MediaAttachmentContext = {}): ChatMsg[] {
   const chatMsgs: ChatMsg[] = messages
     .filter(filterMessage)
-    .flatMap(splitToolCallMessage);
+    .flatMap((msg) => splitToolCallMessage(msg, context));
 
   const grouped = groupToolMessages(chatMsgs);
   const tagged = tagIntermediateMessages(grouped);
@@ -500,5 +600,5 @@ export async function loadChatHistory(params: {
   const res = await rpc('chat.history', { sessionKey, limit }) as ChatHistoryResponse;
   const msgs = res?.messages || [];
 
-  return processChatMessages(msgs);
+  return processChatMessages(msgs, { sessionKey });
 }

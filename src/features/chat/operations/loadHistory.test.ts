@@ -111,7 +111,7 @@ describe('splitToolCallMessage', () => {
   it('extracts upload manifest attachments from user transcript messages', () => {
     const msg: ChatMessage = {
       role: 'user',
-      content: 'Please use these files.\n\n<nerve-upload-manifest>{"version":1,"attachments":[{"id":"att-upload","origin":"upload","mode":"inline","name":"small.png","mimeType":"image/png","sizeBytes":120000,"inline":{"encoding":"base64","base64":"","base64Bytes":98000,"compressed":true},"preparation":{"sourceMode":"inline","finalMode":"inline","outcome":"optimized_inline","reason":"Inline image stayed within context-safe budget.","originalMimeType":"image/png","originalSizeBytes":120000},"policy":{"forwardToSubagents":false}},{"id":"att-path","origin":"server_path","mode":"file_reference","name":"capture.mov","mimeType":"video/quicktime","sizeBytes":8000000,"reference":{"kind":"local_path","path":"/workspace/capture.mov","uri":"file:///workspace/capture.mov"},"preparation":{"sourceMode":"file_reference","finalMode":"file_reference","outcome":"file_reference_ready","reason":"Sent as a validated workspace path.","originalMimeType":"video/quicktime","originalSizeBytes":8000000},"policy":{"forwardToSubagents":true}}]}</nerve-upload-manifest>',
+      content: 'Please use these files.\n\n<nerve-upload-manifest>{"version":1,"attachments":[{"id":"att-upload","origin":"upload","mode":"inline","name":"small.png","mimeType":"image/png","sizeBytes":120000,"inline":{"encoding":"base64","base64":"","base64Bytes":98000,"compressed":true},"preparation":{"sourceMode":"inline","finalMode":"inline","outcome":"optimized_inline","reason":"Inline image stayed within context-safe budget.","originalMimeType":"image/png","originalSizeBytes":120000},"policy":{"forwardToSubagents":false}},{"id":"att-path","origin":"server_path","mode":"file_reference","name":"capture.mov","mimeType":"video/quicktime","sizeBytes":8000000,"reference":{"kind":"local_path","path":"/workspace/capture.mov","uri":"/api/files/raw?path=capture.mov"},"preparation":{"sourceMode":"file_reference","finalMode":"file_reference","outcome":"file_reference_ready","reason":"Sent as a validated workspace path.","originalMimeType":"video/quicktime","originalSizeBytes":8000000},"policy":{"forwardToSubagents":true}}]}</nerve-upload-manifest>',
     };
     const result = splitToolCallMessage(msg);
     expect(result).toHaveLength(1);
@@ -120,6 +120,55 @@ describe('splitToolCallMessage', () => {
     expect(result[0].uploadAttachments?.[0].origin).toBe('upload');
     expect(result[0].uploadAttachments?.[1].origin).toBe('server_path');
     expect(result[0].uploadAttachments?.[1].reference?.path).toBe('/workspace/capture.mov');
+  });
+
+  it('extracts upload manifest attachments from assistant transcript messages', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: 'Here is the file.\n\n<nerve-upload-manifest>{"version":1,"attachments":[{"id":"att-audio","origin":"upload","mode":"inline","name":"note.mp3","mimeType":"audio/mpeg","sizeBytes":4096,"inline":{"encoding":"base64","base64":"SUQz","base64Bytes":4,"compressed":false},"preparation":{"sourceMode":"inline","finalMode":"inline","outcome":"inline_ready","reason":"Inline audio stayed within context-safe budget.","originalMimeType":"audio/mpeg","originalSizeBytes":4096},"policy":{"forwardToSubagents":true}},{"id":"att-file","origin":"server_path","mode":"file_reference","name":"report.pdf","mimeType":"application/pdf","sizeBytes":2048,"reference":{"kind":"local_path","path":"/workspace/report.pdf","uri":"/api/files/raw?path=report.pdf"},"preparation":{"sourceMode":"file_reference","finalMode":"file_reference","outcome":"file_reference_ready","reason":"Sent as a validated workspace path.","originalMimeType":"application/pdf","originalSizeBytes":2048},"policy":{"forwardToSubagents":true}}]}</nerve-upload-manifest>',
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Here is the file.');
+    expect(result[0].uploadAttachments).toHaveLength(2);
+    expect(result[0].uploadAttachments?.[0].mimeType).toBe('audio/mpeg');
+    expect(result[0].uploadAttachments?.[1].reference?.uri).toBe('/api/files/raw?path=report.pdf');
+  });
+
+  it('hydrates assistant transcript audio, video, and file blocks into upload attachments while preserving image blocks', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Here you go.' },
+        { type: 'image', mimeType: 'image/png', data: Buffer.from('image-bytes').toString('base64') },
+        { type: 'audio', mimeType: 'audio/mpeg', data: Buffer.from('audio-bytes').toString('base64') },
+        { type: 'file', mimeType: 'application/pdf', data: Buffer.from('file-bytes').toString('base64') },
+        { type: 'video', source: { media_type: 'video/mp4', data: Buffer.from('video-bytes').toString('base64') } },
+      ],
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].images).toHaveLength(1);
+    expect(result[0].uploadAttachments).toHaveLength(3);
+    expect(result[0].uploadAttachments?.[0].mimeType).toBe('audio/mpeg');
+    expect(result[0].uploadAttachments?.[1].mimeType).toBe('application/pdf');
+    expect(result[0].uploadAttachments?.[2].mimeType).toBe('video/mp4');
+  });
+
+  it('creates reference attachments when transcript media lacks inline bytes', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'audio', mimeType: 'audio/mpeg', name: 'note.mp3' },
+        { type: 'file', mimeType: 'application/pdf', name: 'report.pdf' },
+      ],
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].uploadAttachments).toHaveLength(2);
+    expect(result[0].uploadAttachments?.every(att => att.mode === 'file_reference')).toBe(true);
+    expect(result[0].uploadAttachments?.[0].reference?.uri).toContain('/api/files/raw?path=note.mp3');
+    expect(result[0].uploadAttachments?.[1].reference?.uri).toContain('/api/files/raw?path=report.pdf');
   });
 
   it('returns empty array for voice-only messages with no text', () => {
@@ -233,6 +282,36 @@ describe('tagIntermediateMessages', () => {
 });
 
 describe('processChatMessages', () => {
+
+  it('drops assistant NO_REPLY sentinel messages', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: 'NO_REPLY' },
+      { role: 'user', content: 'hello' },
+    ];
+    const result = processChatMessages(msgs);
+    expect(result.some((m) => m.rawText.trim() === 'NO_REPLY')).toBe(false);
+    expect(result.some((m) => m.rawText.includes('hello'))).toBe(true);
+  });
+
+  it('drops user NO_REPLY sentinel messages', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'NO_REPLY' },
+      { role: 'assistant', content: 'hello' },
+    ];
+    const result = processChatMessages(msgs);
+    expect(result.some((m) => m.rawText.trim() === 'NO_REPLY')).toBe(false);
+    expect(result.some((m) => m.rawText.includes('hello'))).toBe(true);
+  });
+
+  it('keeps lowercase no_reply because the sentinel must match exactly', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: 'no_reply' },
+    ];
+    const result = processChatMessages(msgs);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText.trim()).toBe('no_reply');
+  });
+
   it('runs the full pipeline: filter → split → group → tag', () => {
     const msgs: ChatMessage[] = [
       { role: 'user', content: 'Hello' },
@@ -241,6 +320,28 @@ describe('processChatMessages', () => {
     const result = processChatMessages(msgs);
     expect(result.length).toBeGreaterThanOrEqual(2);
     expect(result.every(m => m.msgId)).toBe(true);
+  });
+
+  it('builds transcript media references from the live session context', () => {
+    const timestamp = new Date('2026-05-05T18:30:00.000Z');
+    const msgs: ChatMessage[] = [
+      {
+        role: 'assistant',
+        timestamp,
+        content: [
+          { type: 'audio', mimeType: 'audio/mpeg', name: 'note.mp3' },
+          { type: 'file', mimeType: 'text/plain', name: 'notes.txt' },
+        ],
+      },
+    ];
+
+    const result = processChatMessages(msgs, { sessionKey: 'session-123' });
+    expect(result).toHaveLength(1);
+    expect(result[0].uploadAttachments).toHaveLength(2);
+    expect(result[0].uploadAttachments?.[0].reference?.uri).toContain('sessionKey=session-123');
+    expect(result[0].uploadAttachments?.[0].reference?.uri).toContain(`timestamp=${timestamp.getTime()}`);
+    expect(result[0].uploadAttachments?.[0].reference?.uri).toContain('imageIndex=0');
+    expect(result[0].uploadAttachments?.[1].reference?.uri).toContain('imageIndex=1');
   });
 
   it('tags background task notifications as system notifications', () => {
