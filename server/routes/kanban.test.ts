@@ -174,20 +174,36 @@ async function createTask(app: Hono, overrides: Record<string, unknown> = {}): P
 }
 
 async function overwriteStoredTaskAssignee(taskId: string, assignee?: string | null): Promise<void> {
-  const storePath = path.join(tmpDir, 'tasks.json');
-  const raw = JSON.parse(await fs.promises.readFile(storePath, 'utf8')) as {
-    tasks: Array<Record<string, unknown>>;
-  };
-  const task = raw.tasks.find((item) => item.id === taskId);
-  if (!task) throw new Error(`Task not found in raw fixture: ${taskId}`);
+  const treeRoot = path.join(tmpDir, 'tasks');
 
-  if (assignee == null) {
-    delete task.assignee;
-  } else {
-    task.assignee = assignee;
+  async function findTaskFile(dir: string): Promise<string | null> {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const nested = await findTaskFile(entryPath);
+        if (nested) return nested;
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.json') || entry.name === '.manifest.json') continue;
+      const raw = JSON.parse(await fs.promises.readFile(entryPath, 'utf8')) as Record<string, unknown>;
+      if (raw.id === taskId) return entryPath;
+    }
+    return null;
   }
 
-  await fs.promises.writeFile(storePath, `${JSON.stringify(raw, null, 2)}\n`);
+  const taskFile = await findTaskFile(treeRoot);
+  if (!taskFile) throw new Error(`Task not found in raw fixture: ${taskId}`);
+
+  const raw = JSON.parse(await fs.promises.readFile(taskFile, 'utf8')) as Record<string, unknown>;
+
+  if (assignee == null) {
+    delete raw.assignee;
+  } else {
+    raw.assignee = assignee;
+  }
+
+  await fs.promises.writeFile(taskFile, `${JSON.stringify(raw, null, 2)}\n`);
 }
 
 // ── GET /api/kanban/tasks ────────────────────────────────────────────

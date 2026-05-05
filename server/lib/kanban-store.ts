@@ -1,12 +1,18 @@
 /**
  * Kanban task store — JSON file persistence with mutex-protected I/O.
  *
- * Runtime data lives under `${NERVE_DATA_DIR:-~/.nerve}/kanban/tasks.json`.
+ * Compatibility data still lives under `${NERVE_DATA_DIR:-~/.nerve}/kanban/tasks.json`,
+ * but the preferred read path is the split tree under
+ * `${NERVE_DATA_DIR:-~/.nerve}/kanban/tasks/`. Each status gets its own folder,
+ * and each task or subtask gets its own JSON file inside the appropriate root
+ * task folder. The legacy single-file export remains a compatibility mirror.
+ *
  * Legacy installs may still have data under `server-dist/data/kanban/` or
  * `server/data/kanban/`, so the store performs a one-time migration into the
  * canonical runtime directory on first init. Every mutating operation acquires
- * the store mutex, reads the file, applies the change, and writes back
- * atomically. CAS version checks prevent stale overwrites.
+ * the store mutex, reads the current state, applies the change, and writes
+ * back through atomic file writes plus a split-tree rebuild. CAS version
+ * checks prevent stale overwrites.
  * @module
  */
 
@@ -245,6 +251,13 @@ export interface StoreData {
     schemaVersion: number;
     updatedAt: number;
   };
+}
+
+interface TreeManifest {
+  schemaVersion: number;
+  updatedAt: number;
+  taskCount: number;
+  archiveCount: number;
 }
 
 export interface ArchiveData {
@@ -595,6 +608,10 @@ export class KanbanStore {
   private readonly filePath: string;
   private readonly archivePath: string;
   private readonly auditPath: string;
+  private readonly splitTreeDir: string;
+  private readonly splitTreeManifestPath: string;
+  private readonly archiveTreeDir: string;
+  private readonly archiveTreeManifestPath: string;
   private readonly withLock: ReturnType<typeof createMutex>;
   private readonly legacyCandidatePaths: string[];
 
@@ -606,6 +623,10 @@ export class KanbanStore {
     this.filePath = filePath || path.join(dataDir, 'tasks.json');
     this.archivePath = path.join(path.dirname(this.filePath), 'done-archive.json');
     this.auditPath = path.join(path.dirname(this.filePath), 'audit.log');
+    this.splitTreeDir = path.join(path.dirname(this.filePath), 'tasks');
+    this.splitTreeManifestPath = path.join(this.splitTreeDir, '.manifest.json');
+    this.archiveTreeDir = path.join(this.splitTreeDir, 'archived');
+    this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.manifest.json');
     this.legacyCandidatePaths = filePath
       ? []
       : [
@@ -618,50 +639,261 @@ export class KanbanStore {
   // ── Low-level I/O ────────────────────────────────────────────────
 
   private async readRaw(): Promise<StoreData> {
-    try {
-      const raw = await fs.promises.readFile(this.filePath, 'utf-8');
-      const data = JSON.parse(raw) as StoreData;
-      return this.migrate(data);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return emptyStore();
+    const compatibilityRaw = await fs.promises.readFile(this.filePath, 'utf-8').catch(() => null);
+    let compatibilityData = emptyStore();
+    if (compatibilityRaw) {
+      try {
+        compatibilityData = this.migrate(JSON.parse(compatibilityRaw) as StoreData);
+      } catch (err) {
+        console.warn('[kanban-store] compatibility store parse failed, falling back to split tree:', err);
       }
-      throw err;
     }
+
+    const treeData = await this.readSplitTreeRaw().catch((err) => {
+      console.warn('[kanban-store] split tree read failed, using compatibility store:', err);
+      return null;
+    });
+
+    if (!treeData) return compatibilityData;
+    return this.migrate({
+      ...compatibilityData,
+      tasks: treeData.tasks,
+    });
   }
 
   private async writeRaw(data: StoreData): Promise<void> {
-    data.meta.updatedAt = Date.now();
-    const dir = path.dirname(this.filePath);
-    await fs.promises.mkdir(dir, { recursive: true });
-    // Atomic write: write to temp file then rename
-    const tmp = this.filePath + '.tmp';
-    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2));
-    await fs.promises.rename(tmp, this.filePath);
+    const normalized = this.migrate({
+      ...data,
+      tasks: [...data.tasks],
+      proposals: [...data.proposals],
+    });
+
+    await this.writeJsonAtomic(this.filePath, normalized);
+    await this.writeSplitTreeRaw(normalized);
   }
 
   private async readArchiveRaw(): Promise<ArchiveData> {
-    try {
-      const raw = await fs.promises.readFile(this.archivePath, 'utf-8');
-      const data = JSON.parse(raw) as ArchiveData;
-      if (!Array.isArray(data.tasks)) data.tasks = [];
-      if (!data.meta) data.meta = { schemaVersion: 1, updatedAt: Date.now() };
-      return data;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { tasks: [], meta: { schemaVersion: 1, updatedAt: Date.now() } };
+    const compatibilityRaw = await fs.promises.readFile(this.archivePath, 'utf-8').catch(() => null);
+    let compatibilityData: ArchiveData = { tasks: [], meta: { schemaVersion: 1, updatedAt: Date.now() } };
+    if (compatibilityRaw) {
+      try {
+        compatibilityData = JSON.parse(compatibilityRaw) as ArchiveData;
+      } catch (err) {
+        console.warn('[kanban-store] archive compatibility parse failed, falling back to archive tree:', err);
       }
+    }
+
+    if (!Array.isArray(compatibilityData.tasks)) compatibilityData.tasks = [];
+    if (!compatibilityData.meta) compatibilityData.meta = { schemaVersion: 1, updatedAt: Date.now() };
+
+    const treeData = await this.readArchiveTreeRaw().catch((err) => {
+      console.warn('[kanban-store] archive tree read failed, using compatibility archive:', err);
+      return null;
+    });
+
+    if (!treeData) return compatibilityData;
+    return {
+      tasks: treeData.tasks,
+      meta: {
+        schemaVersion: treeData.meta.schemaVersion,
+        updatedAt: treeData.meta.updatedAt,
+      },
+    };
+  }
+
+  private async writeArchiveRaw(data: ArchiveData): Promise<void> {
+    const normalized: ArchiveData = {
+      tasks: [...(data.tasks ?? [])],
+      meta: {
+        schemaVersion: data.meta?.schemaVersion ?? 1,
+        updatedAt: Date.now(),
+      },
+    };
+
+    await this.writeJsonAtomic(this.archivePath, normalized);
+    await this.writeArchiveTreeRaw(normalized);
+  }
+
+  private sanitizeFsSegment(value: string): string {
+    const cleaned = value
+      .replace(/[\\/<>:"|?*\u0000-\u001f]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\.+$/g, '');
+    return cleaned || 'task';
+  }
+
+  private async writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+    const dir = path.dirname(filePath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    await fs.promises.writeFile(tmp, JSON.stringify(value, null, 2));
+    await fs.promises.rename(tmp, filePath);
+  }
+
+  private async readJsonFile<T>(filePath: string): Promise<T | null> {
+    try {
+      const raw = await fs.promises.readFile(filePath, 'utf-8');
+      return JSON.parse(raw) as T;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
   }
 
-  private async writeArchiveRaw(data: ArchiveData): Promise<void> {
-    data.meta.updatedAt = Date.now();
-    const dir = path.dirname(this.archivePath);
-    await fs.promises.mkdir(dir, { recursive: true });
-    const tmp = this.archivePath + '.tmp';
-    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2));
-    await fs.promises.rename(tmp, this.archivePath);
+  private resolveRootTaskId(task: KanbanTask, tasksById: Map<string, KanbanTask>): string {
+    let current: KanbanTask | undefined = task;
+    const seen = new Set<string>();
+
+    while (current?.parentTaskId) {
+      if (seen.has(current.id)) break;
+      seen.add(current.id);
+      const parent = tasksById.get(current.parentTaskId);
+      if (!parent) break;
+      current = parent;
+    }
+
+    return current?.id ?? task.id;
+  }
+
+  private async collectJsonFiles(dir: string): Promise<string[]> {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const files: string[] = [];
+
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await this.collectJsonFiles(entryPath));
+      } else if (entry.isFile() && entry.name.endsWith('.json') && entry.name !== '.manifest.json') {
+        files.push(entryPath);
+      }
+    }
+
+    return files;
+  }
+
+  private async readSplitTreeRaw(): Promise<StoreData | null> {
+    const manifest = await this.readJsonFile<TreeManifest>(this.splitTreeManifestPath);
+    if (!manifest) return null;
+
+    const stats = await fs.promises.stat(this.splitTreeDir).catch(() => null);
+    if (!stats?.isDirectory()) return null;
+
+    const entries = await fs.promises.readdir(this.splitTreeDir, { withFileTypes: true }).catch(() => []);
+    const tasks: KanbanTask[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === 'archived' || entry.name.startsWith('.')) continue;
+      const statusDir = path.join(this.splitTreeDir, entry.name);
+      const jsonFiles = await this.collectJsonFiles(statusDir);
+      for (const file of jsonFiles) {
+        try {
+          const task = JSON.parse(await fs.promises.readFile(file, 'utf-8')) as KanbanTask;
+          tasks.push(task);
+        } catch (err) {
+          console.warn(`[kanban-store] failed to read task file ${file}:`, err);
+          return null;
+        }
+      }
+    }
+
+    if (tasks.length !== manifest.taskCount) {
+      console.warn(`[kanban-store] split tree count mismatch: expected ${manifest.taskCount}, got ${tasks.length}`);
+      return null;
+    }
+
+    return {
+      tasks,
+      proposals: [],
+      config: structuredClone(DEFAULT_CONFIG),
+      meta: {
+        schemaVersion: manifest.schemaVersion,
+        updatedAt: manifest.updatedAt,
+      },
+    };
+  }
+
+  private async writeTreeGroup(
+    baseDir: string,
+    tasks: KanbanTask[],
+  ): Promise<void> {
+    if (tasks.length === 0) return;
+
+    const tasksById = new Map(tasks.map((task) => [task.id, task] as const));
+    const groups = new Map<string, KanbanTask[]>();
+    for (const task of tasks) {
+      const rootId = this.resolveRootTaskId(task, tasksById);
+      const group = groups.get(rootId) ?? [];
+      group.push(task);
+      groups.set(rootId, group);
+    }
+
+    for (const [rootId, group] of groups) {
+      const rootTask = tasksById.get(rootId) ?? group[0];
+      const rootDir = path.join(baseDir, this.sanitizeFsSegment(rootTask.status), this.sanitizeFsSegment(rootTask.id));
+      await fs.promises.mkdir(rootDir, { recursive: true });
+      await this.writeJsonAtomic(path.join(rootDir, 'task.json'), rootTask);
+      for (const task of group) {
+        if (task.id === rootTask.id) continue;
+        await this.writeJsonAtomic(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.json`), task);
+      }
+    }
+  }
+
+  private async writeSplitTreeRaw(data: StoreData): Promise<void> {
+    await fs.promises.rm(this.splitTreeDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.mkdir(this.splitTreeDir, { recursive: true });
+    await this.writeTreeGroup(this.splitTreeDir, data.tasks);
+    await this.writeJsonAtomic(this.splitTreeManifestPath, {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      updatedAt: Date.now(),
+      taskCount: data.tasks.length,
+      archiveCount: 0,
+    } satisfies TreeManifest);
+  }
+
+  private async readArchiveTreeRaw(): Promise<ArchiveData | null> {
+    const manifest = await this.readJsonFile<TreeManifest>(this.archiveTreeManifestPath);
+    if (!manifest) return null;
+
+    const stats = await fs.promises.stat(this.archiveTreeDir).catch(() => null);
+    if (!stats?.isDirectory()) return null;
+
+    const jsonFiles = await this.collectJsonFiles(this.archiveTreeDir);
+    const tasks: KanbanTask[] = [];
+    for (const file of jsonFiles) {
+      try {
+        tasks.push(JSON.parse(await fs.promises.readFile(file, 'utf-8')) as KanbanTask);
+      } catch (err) {
+        console.warn(`[kanban-store] failed to read archived task file ${file}:`, err);
+        return null;
+      }
+    }
+
+    if (tasks.length !== manifest.taskCount) {
+      console.warn(`[kanban-store] archive tree count mismatch: expected ${manifest.taskCount}, got ${tasks.length}`);
+      return null;
+    }
+
+    return {
+      tasks,
+      meta: {
+        schemaVersion: manifest.schemaVersion,
+        updatedAt: manifest.updatedAt,
+      },
+    };
+  }
+
+  private async writeArchiveTreeRaw(data: ArchiveData): Promise<void> {
+    await fs.promises.rm(this.archiveTreeDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.mkdir(this.archiveTreeDir, { recursive: true });
+    await this.writeTreeGroup(this.archiveTreeDir, data.tasks);
+    await this.writeJsonAtomic(this.archiveTreeManifestPath, {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      updatedAt: Date.now(),
+      taskCount: data.tasks.length,
+      archiveCount: data.tasks.length,
+    } satisfies TreeManifest);
   }
 
   private migrate(data: StoreData): StoreData {
@@ -781,6 +1013,17 @@ export class KanbanStore {
   /** Initialise the store file if it doesn't exist. */
   async init(): Promise<void> {
     await this.withLock(async () => {
+      try {
+        await fs.promises.access(this.filePath);
+      } catch {
+        const splitTreeExists = await fs.promises.access(this.splitTreeManifestPath).then(() => true).catch(() => false);
+        if (splitTreeExists) {
+          const data = await this.readRaw();
+          await this.writeJsonAtomic(this.filePath, data);
+          return;
+        }
+      }
+
       try {
         await fs.promises.access(this.filePath);
         return;

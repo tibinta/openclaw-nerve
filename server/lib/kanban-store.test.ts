@@ -101,6 +101,7 @@ describe('init', () => {
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     expect(raw.meta.schemaVersion).toBe(1);
     expect(raw.tasks).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, 'tasks', '.manifest.json'))).toBe(true);
   });
 
   it('does not overwrite existing store on re-init', async () => {
@@ -186,11 +187,32 @@ describe('createTask', () => {
   });
 
   it('persists to disk', async () => {
-    await createSampleTask({ title: 'Persisted' });
+    const task = await createSampleTask({ title: 'Persisted' });
     // Read directly from file
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     expect(raw.tasks.length).toBe(1);
     expect(raw.tasks[0].title).toBe('Persisted');
+
+    const taskDir = path.join(tmpDir, 'tasks', task.status, task.id);
+    expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, `${task.id}.json`))).toBe(false);
+  });
+
+  it('writes subtasks into the parent task folder and can read from the split tree', async () => {
+    const parent = await createSampleTask({ title: 'Parent task', status: 'todo' });
+    const child = await createSampleTask({ title: 'Child task', status: 'todo', parentTaskId: parent.id });
+
+    const taskDir = path.join(tmpDir, 'tasks', parent.status, parent.id);
+    expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, `${child.id}.json`))).toBe(true);
+
+    await fs.promises.unlink(filePath);
+
+    const treeStore = new KanbanStore(filePath);
+    await treeStore.init();
+    const result = await treeStore.listTasks();
+    expect(result.items.some((task) => task.id === parent.id)).toBe(true);
+    expect(result.items.some((task) => task.id === child.id)).toBe(true);
   });
 });
 
@@ -614,11 +636,12 @@ describe('updateTask', () => {
     expect(persisted.assignee).toBe('agent:reviewer');
   });
 
-  it('does not rewrite a legacy assignee during unrelated updates', async () => {
+  it('does not rewrite a legacy assignee during unrelated updates in the split tree', async () => {
     const task = await createSampleTask({ assignee: 'agent:codex' });
-    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    raw.tasks[0].assignee = 'agent:reviewer:main';
-    fs.writeFileSync(filePath, JSON.stringify(raw, null, 2));
+    const taskFile = path.join(tmpDir, 'tasks', task.status, task.id, 'task.json');
+    const raw = JSON.parse(fs.readFileSync(taskFile, 'utf-8'));
+    raw.assignee = 'agent:reviewer:main';
+    fs.writeFileSync(taskFile, JSON.stringify(raw, null, 2));
 
     const updated = await store.updateTask(task.id, task.version, { title: 'Retitled' });
 
