@@ -142,11 +142,11 @@ On first start after upgrading to 1.5.0, Nerve automatically migrates legacy Kan
 - `server/data/kanban`
 
 into the canonical runtime location:
-- `${NERVE_DATA_DIR:-~/.nerve}/kanban`
+- `${NERVE_DATA_DIR:-~/.nerve}/.kanban`
 
 What to do:
 - Let the first post-upgrade start complete before judging the migration
-- Update backup scripts to follow `${NERVE_DATA_DIR:-~/.nerve}/kanban`
+- Update backup scripts to follow `${NERVE_DATA_DIR:-~/.nerve}/.kanban`
 - Do not keep writing to the old `server-dist` or `server` data paths after upgrade
 
 ## Troubleshooting

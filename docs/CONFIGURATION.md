@@ -178,7 +178,7 @@ Xiaomi MiMo is available as an explicit provider option when `MIMO_API_KEY` is s
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `STT_PROVIDER` | `local` | STT provider: `local` (whisper.cpp, no API key needed) or `openai` (requires `OPENAI_API_KEY`) |
-| `WHISPER_MODEL` | `base` | Local whisper model: `tiny` (75 MB), `base` (142 MB), or `small` (466 MB) — multilingual variants. English-only variants (`tiny.en`, `base.en`, `small.en`) are also available. |
+| `WHISPER_MODEL` | `small.en` | Local whisper model: `tiny` (75 MB), `base` (142 MB), or `small` (466 MB) — multilingual variants. English-only variants (`tiny.en`, `base.en`, `small.en`) are also available. |
 | `WHISPER_MODEL_DIR` | `~/.nerve/models` | Directory for downloaded whisper model files |
 | `NERVE_LANGUAGE` | `en` | Preferred voice language (ISO 639-1). Legacy `LANGUAGE` is still accepted but deprecated |
 | `EDGE_VOICE_GENDER` | `female` | Edge TTS voice gender: `female` or `male` |
@@ -186,7 +186,7 @@ Xiaomi MiMo is available as an explicit provider option when `MIMO_API_KEY` is s
 ```bash
 # Use local speech-to-text (no API key needed)
 STT_PROVIDER=local
-WHISPER_MODEL=base
+WHISPER_MODEL=small.en
 NERVE_LANGUAGE=en
 ```
 
@@ -335,7 +335,7 @@ The updater stores state in `~/.nerve/updater/`. These are not configurable via 
 
 ## Kanban
 
-Kanban board configuration is stored in the runtime data file (`${NERVE_DATA_DIR:-~/.nerve}/kanban/tasks.json`), not in `.env`. Manage it via the REST API:
+Kanban board configuration is stored under the hidden runtime store (`${NERVE_DATA_DIR:-~/.nerve}/.kanban`), not in `.env`. Manage it via the REST API:
 
 ```bash
 # Read current config
@@ -444,7 +444,7 @@ MIMO_API_KEY=sk-mimo-...
 
 # Speech / Language
 STT_PROVIDER=local
-WHISPER_MODEL=base
+WHISPER_MODEL=small.en
 NERVE_LANGUAGE=en
 EDGE_VOICE_GENDER=female
 

@@ -1,11 +1,12 @@
 /**
  * Kanban task store — JSON file persistence with mutex-protected I/O.
  *
- * Compatibility data still lives under `${NERVE_DATA_DIR:-~/.nerve}/kanban/tasks.json`,
- * but the preferred read path is the split tree under
- * `${NERVE_DATA_DIR:-~/.nerve}/kanban/tasks/`. Each status gets its own folder,
- * and each task or subtask gets its own JSON file inside the appropriate root
- * task folder. The legacy single-file export remains a compatibility mirror.
+ * The default live store now lives under a hidden root
+ * `${NERVE_DATA_DIR:-~/.nerve}/.kanban/`. The preferred read path is the split
+ * tree under `${NERVE_DATA_DIR:-~/.nerve}/.kanban/tasks/`. Each status gets
+ * its own folder, and each task or subtask gets its own JSON file inside the
+ * appropriate root task folder. The legacy visible `${NERVE_DATA_DIR:-~/.nerve}/kanban`
+ * tree remains a migration source only.
  *
  * Legacy installs may still have data under `server-dist/data/kanban/` or
  * `server/data/kanban/`, so the store performs a one-time migration into the
@@ -729,6 +730,13 @@ export class KanbanStore {
   private readonly splitTreeManifestPath: string;
   private readonly archiveTreeDir: string;
   private readonly archiveTreeManifestPath: string;
+  private readonly legacyRootDir?: string;
+  private readonly legacyFilePath?: string;
+  private readonly legacyArchivePath?: string;
+  private readonly legacyAuditPath?: string;
+  private readonly legacySplitTreeDir?: string;
+  private readonly legacySplitTreeManifestPath?: string;
+  private readonly hiddenDefaultMode: boolean;
   private readonly withLock: ReturnType<typeof createMutex>;
   private readonly legacyCandidatePaths: string[];
 
@@ -737,45 +745,104 @@ export class KanbanStore {
     const projectRoot = process.env.NERVE_PROJECT_ROOT || path.resolve(__dirname, '..', '..');
     const dataRoot = process.env.NERVE_DATA_DIR || path.join(os.homedir() || process.cwd(), '.nerve');
     const dataDir = path.join(dataRoot, 'kanban');
-    this.filePath = filePath || path.join(dataDir, 'tasks.json');
-    this.archivePath = path.join(path.dirname(this.filePath), 'done-archive.json');
-    this.auditPath = path.join(path.dirname(this.filePath), 'audit.log');
-    this.splitTreeDir = path.join(path.dirname(this.filePath), 'tasks');
-    this.splitTreeManifestPath = path.join(this.splitTreeDir, '.manifest.json');
-    this.archiveTreeDir = path.join(this.splitTreeDir, 'archived');
-    this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.manifest.json');
-    this.legacyCandidatePaths = filePath
-      ? []
-      : [
-          path.join(projectRoot, 'server-dist', 'data', 'kanban', 'tasks.json'),
-          path.join(projectRoot, 'server', 'data', 'kanban', 'tasks.json'),
-        ];
+    this.hiddenDefaultMode = filePath === undefined;
+    if (this.hiddenDefaultMode) {
+      const hiddenRootDir = path.join(dataRoot, '.kanban');
+      this.legacyRootDir = dataDir;
+      this.legacyFilePath = path.join(dataDir, 'tasks.json');
+      this.legacyArchivePath = path.join(dataDir, 'done-archive.json');
+      this.legacyAuditPath = path.join(dataDir, 'audit.log');
+      this.legacySplitTreeDir = path.join(dataDir, 'tasks');
+      this.legacySplitTreeManifestPath = path.join(this.legacySplitTreeDir, '.manifest.json');
+      this.filePath = path.join(hiddenRootDir, 'tasks.json');
+      this.archivePath = path.join(hiddenRootDir, 'done-archive.json');
+      this.auditPath = path.join(hiddenRootDir, 'audit.log');
+      this.splitTreeDir = path.join(hiddenRootDir, 'tasks');
+      this.splitTreeManifestPath = path.join(this.splitTreeDir, '.manifest.json');
+      this.archiveTreeDir = path.join(this.splitTreeDir, 'archived');
+      this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.manifest.json');
+      this.legacyCandidatePaths = [
+        path.join(projectRoot, 'server-dist', 'data', 'kanban', 'tasks.json'),
+        path.join(projectRoot, 'server', 'data', 'kanban', 'tasks.json'),
+      ];
+    } else {
+      this.filePath = filePath;
+      this.archivePath = path.join(path.dirname(this.filePath), 'done-archive.json');
+      this.auditPath = path.join(path.dirname(this.filePath), 'audit.log');
+      this.splitTreeDir = path.join(path.dirname(this.filePath), 'tasks');
+      this.splitTreeManifestPath = path.join(this.splitTreeDir, '.manifest.json');
+      this.archiveTreeDir = path.join(this.splitTreeDir, 'archived');
+      this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.manifest.json');
+      this.legacyCandidatePaths = [];
+    }
     this.withLock = createMutex();
   }
 
   // ── Low-level I/O ────────────────────────────────────────────────
 
   private async readRaw(): Promise<StoreData> {
-    const compatibilityRaw = await fs.promises.readFile(this.filePath, 'utf-8').catch(() => null);
-    let compatibilityData = emptyStore();
-    if (compatibilityRaw) {
+    if (!this.hiddenDefaultMode) {
+      const compatibilityRaw = await fs.promises.readFile(this.filePath, 'utf-8').catch(() => null);
+      let compatibilityData = emptyStore();
+      if (compatibilityRaw) {
+        try {
+          compatibilityData = this.migrate(JSON.parse(compatibilityRaw) as StoreData);
+        } catch (err) {
+          console.warn('[kanban-store] compatibility store parse failed, falling back to split tree:', err);
+        }
+      }
+
+      const treeData = await this.readSplitTreeRaw(this.splitTreeDir).catch((err) => {
+        console.warn('[kanban-store] split tree read failed, using compatibility store:', err);
+        return null;
+      });
+
+      if (!treeData) return compatibilityData;
+      return this.migrate({
+        ...compatibilityData,
+        tasks: treeData.tasks,
+      });
+    }
+
+    const treeData = await this.readSplitTreeRaw(this.splitTreeDir).catch((err) => {
+      console.warn('[kanban-store] hidden split tree read failed, trying hidden compatibility file:', err);
+      return null;
+    });
+    if (treeData) {
+      return this.migrate(treeData);
+    }
+
+    const hiddenRaw = await fs.promises.readFile(this.filePath, 'utf-8').catch(() => null);
+    if (hiddenRaw) {
       try {
-        compatibilityData = this.migrate(JSON.parse(compatibilityRaw) as StoreData);
+        return this.migrate(JSON.parse(hiddenRaw) as StoreData);
       } catch (err) {
-        console.warn('[kanban-store] compatibility store parse failed, falling back to split tree:', err);
+        console.warn('[kanban-store] hidden compatibility store parse failed, falling back to legacy data:', err);
       }
     }
 
-    const treeData = await this.readSplitTreeRaw().catch((err) => {
-      console.warn('[kanban-store] split tree read failed, using compatibility store:', err);
-      return null;
-    });
+    const legacyTreeData = this.legacySplitTreeDir
+      ? await this.readSplitTreeRaw(this.legacySplitTreeDir).catch((err) => {
+          console.warn('[kanban-store] legacy split tree read failed, trying legacy compatibility file:', err);
+          return null;
+        })
+      : null;
+    if (legacyTreeData) {
+      return this.migrate(legacyTreeData);
+    }
 
-    if (!treeData) return compatibilityData;
-    return this.migrate({
-      ...compatibilityData,
-      tasks: treeData.tasks,
-    });
+    const legacyRaw = this.legacyFilePath
+      ? await fs.promises.readFile(this.legacyFilePath, 'utf-8').catch(() => null)
+      : null;
+    if (legacyRaw) {
+      try {
+        return this.migrate(JSON.parse(legacyRaw) as StoreData);
+      } catch (err) {
+        console.warn('[kanban-store] legacy compatibility store parse failed, returning empty store:', err);
+      }
+    }
+
+    return emptyStore();
   }
 
   private async writeRaw(data: StoreData): Promise<void> {
@@ -785,37 +852,90 @@ export class KanbanStore {
       proposals: [...data.proposals],
     });
 
+    if (this.hiddenDefaultMode) {
+      await this.writeSplitTreeRaw(normalized, this.splitTreeDir);
+      await this.writeJsonAtomic(this.filePath, normalized);
+      await this.cleanupLegacyVisibleStore();
+      return;
+    }
+
     await this.writeJsonAtomic(this.filePath, normalized);
-    await this.writeSplitTreeRaw(normalized);
+    await this.writeSplitTreeRaw(normalized, this.splitTreeDir);
   }
 
   private async readArchiveRaw(): Promise<ArchiveData> {
-    const compatibilityRaw = await fs.promises.readFile(this.archivePath, 'utf-8').catch(() => null);
-    let compatibilityData: ArchiveData = { tasks: [], meta: { schemaVersion: 1, updatedAt: Date.now() } };
-    if (compatibilityRaw) {
+    const emptyArchive: ArchiveData = { tasks: [], meta: { schemaVersion: 1, updatedAt: Date.now() } };
+
+    if (!this.hiddenDefaultMode) {
+      const compatibilityRaw = await fs.promises.readFile(this.archivePath, 'utf-8').catch(() => null);
+      let compatibilityData: ArchiveData = { tasks: [], meta: { schemaVersion: 1, updatedAt: Date.now() } };
+      if (compatibilityRaw) {
+        try {
+          compatibilityData = JSON.parse(compatibilityRaw) as ArchiveData;
+        } catch (err) {
+          console.warn('[kanban-store] archive compatibility parse failed, falling back to archive tree:', err);
+        }
+      }
+
+      if (!Array.isArray(compatibilityData.tasks)) compatibilityData.tasks = [];
+      if (!compatibilityData.meta) compatibilityData.meta = { schemaVersion: 1, updatedAt: Date.now() };
+
+      const treeData = await this.readArchiveTreeRaw().catch((err) => {
+        console.warn('[kanban-store] archive tree read failed, using compatibility archive:', err);
+        return null;
+      });
+
+      if (!treeData) return compatibilityData;
+      return {
+        tasks: treeData.tasks,
+        meta: {
+          schemaVersion: treeData.meta.schemaVersion,
+          updatedAt: treeData.meta.updatedAt,
+        },
+      };
+    }
+
+    const treeData = await this.readArchiveTreeRaw().catch((err) => {
+      console.warn('[kanban-store] hidden archive tree read failed, trying hidden compatibility file:', err);
+      return null;
+    });
+    if (treeData) {
+      return {
+        tasks: treeData.tasks,
+        meta: {
+          schemaVersion: treeData.meta.schemaVersion,
+          updatedAt: treeData.meta.updatedAt,
+        },
+      };
+    }
+
+    const hiddenRaw = await fs.promises.readFile(this.archivePath, 'utf-8').catch(() => null);
+    if (hiddenRaw) {
       try {
-        compatibilityData = JSON.parse(compatibilityRaw) as ArchiveData;
+        const parsed = JSON.parse(hiddenRaw) as ArchiveData;
+        if (!Array.isArray(parsed.tasks)) parsed.tasks = [];
+        if (!parsed.meta) parsed.meta = { schemaVersion: 1, updatedAt: Date.now() };
+        return parsed;
       } catch (err) {
-        console.warn('[kanban-store] archive compatibility parse failed, falling back to archive tree:', err);
+        console.warn('[kanban-store] hidden archive compatibility parse failed, falling back to legacy archive:', err);
       }
     }
 
-    if (!Array.isArray(compatibilityData.tasks)) compatibilityData.tasks = [];
-    if (!compatibilityData.meta) compatibilityData.meta = { schemaVersion: 1, updatedAt: Date.now() };
+    const legacyRaw = this.legacyArchivePath
+      ? await fs.promises.readFile(this.legacyArchivePath, 'utf-8').catch(() => null)
+      : null;
+    if (legacyRaw) {
+      try {
+        const parsed = JSON.parse(legacyRaw) as ArchiveData;
+        if (!Array.isArray(parsed.tasks)) parsed.tasks = [];
+        if (!parsed.meta) parsed.meta = { schemaVersion: 1, updatedAt: Date.now() };
+        return parsed;
+      } catch (err) {
+        console.warn('[kanban-store] legacy archive compatibility parse failed, returning empty archive:', err);
+      }
+    }
 
-    const treeData = await this.readArchiveTreeRaw().catch((err) => {
-      console.warn('[kanban-store] archive tree read failed, using compatibility archive:', err);
-      return null;
-    });
-
-    if (!treeData) return compatibilityData;
-    return {
-      tasks: treeData.tasks,
-      meta: {
-        schemaVersion: treeData.meta.schemaVersion,
-        updatedAt: treeData.meta.updatedAt,
-      },
-    };
+    return emptyArchive;
   }
 
   private async writeArchiveRaw(data: ArchiveData): Promise<void> {
@@ -827,8 +947,12 @@ export class KanbanStore {
       },
     };
 
-    await this.writeJsonAtomic(this.archivePath, normalized);
     await this.writeArchiveTreeRaw(normalized);
+    await this.writeJsonAtomic(this.archivePath, normalized);
+
+    if (this.hiddenDefaultMode && this.legacyRootDir) {
+      await fs.promises.rm(this.legacyArchivePath ?? path.join(this.legacyRootDir, 'done-archive.json'), { force: true }).catch(() => {});
+    }
   }
 
   private sanitizeFsSegment(value: string): string {
@@ -889,19 +1013,20 @@ export class KanbanStore {
     return files;
   }
 
-  private async readSplitTreeRaw(): Promise<StoreData | null> {
-    const manifest = await this.readJsonFile<TreeManifest>(this.splitTreeManifestPath);
+  private async readSplitTreeRaw(baseDir: string): Promise<StoreData | null> {
+    const manifestPath = path.join(baseDir, '.manifest.json');
+    const manifest = await this.readJsonFile<TreeManifest>(manifestPath);
     if (!manifest) return null;
 
-    const stats = await fs.promises.stat(this.splitTreeDir).catch(() => null);
+    const stats = await fs.promises.stat(baseDir).catch(() => null);
     if (!stats?.isDirectory()) return null;
 
-    const entries = await fs.promises.readdir(this.splitTreeDir, { withFileTypes: true }).catch(() => []);
+    const entries = await fs.promises.readdir(baseDir, { withFileTypes: true }).catch(() => []);
     const tasks: KanbanTask[] = [];
 
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name === 'archived' || entry.name.startsWith('.')) continue;
-      const statusDir = path.join(this.splitTreeDir, entry.name);
+      const statusDir = path.join(baseDir, entry.name);
       const jsonFiles = await this.collectJsonFiles(statusDir);
       for (const file of jsonFiles) {
         try {
@@ -957,16 +1082,37 @@ export class KanbanStore {
     }
   }
 
-  private async writeSplitTreeRaw(data: StoreData): Promise<void> {
-    await fs.promises.rm(this.splitTreeDir, { recursive: true, force: true }).catch(() => {});
-    await fs.promises.mkdir(this.splitTreeDir, { recursive: true });
-    await this.writeTreeGroup(this.splitTreeDir, data.tasks);
-    await this.writeJsonAtomic(this.splitTreeManifestPath, {
+  private async writeSplitTreeRaw(data: StoreData, baseDir = this.splitTreeDir): Promise<void> {
+    const manifestPath = path.join(baseDir, '.manifest.json');
+    await fs.promises.rm(baseDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.mkdir(baseDir, { recursive: true });
+    await this.writeTreeGroup(baseDir, data.tasks);
+    await this.writeJsonAtomic(manifestPath, {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       updatedAt: Date.now(),
       taskCount: data.tasks.length,
       archiveCount: 0,
     } satisfies TreeManifest);
+  }
+
+  private async cleanupLegacyVisibleStore(): Promise<void> {
+    if (!this.hiddenDefaultMode || !this.legacyRootDir) return;
+
+    const removals = [
+      this.legacyFilePath,
+      this.legacyArchivePath,
+      this.legacyAuditPath,
+    ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+    for (const filePath of removals) {
+      await fs.promises.rm(filePath, { force: true }).catch(() => {});
+    }
+
+    if (this.legacySplitTreeDir) {
+      await fs.promises.rm(this.legacySplitTreeDir, { recursive: true, force: true }).catch(() => {});
+    }
+
+    await fs.promises.rmdir(this.legacyRootDir).catch(() => {});
   }
 
   private async readArchiveTreeRaw(): Promise<ArchiveData | null> {
@@ -1130,15 +1276,31 @@ export class KanbanStore {
   /** Initialise the store file if it doesn't exist. */
   async init(): Promise<void> {
     await this.withLock(async () => {
-      try {
-        await fs.promises.access(this.filePath);
-      } catch {
-        const splitTreeExists = await fs.promises.access(this.splitTreeManifestPath).then(() => true).catch(() => false);
-        if (splitTreeExists) {
-          const data = await this.readRaw();
-          await this.writeJsonAtomic(this.filePath, data);
+      if (this.hiddenDefaultMode) {
+        const hiddenTreeExists = await fs.promises.access(this.splitTreeManifestPath).then(() => true).catch(() => false);
+        if (hiddenTreeExists) {
+          await this.cleanupLegacyVisibleStore();
           return;
         }
+
+        const visibleLegacyExists = await Promise.all([
+          this.legacyFilePath ? fs.promises.access(this.legacyFilePath).then(() => true).catch(() => false) : Promise.resolve(false),
+          this.legacySplitTreeManifestPath
+            ? fs.promises.access(this.legacySplitTreeManifestPath).then(() => true).catch(() => false)
+            : Promise.resolve(false),
+        ]).then((flags) => flags.some(Boolean));
+        if (visibleLegacyExists) {
+          const data = await this.readRaw();
+          await this.writeRaw(data);
+          return;
+        }
+
+        const migrated = await this.migrateLegacyStoreIfNeeded();
+        if (migrated) return;
+
+        const data = await this.readRaw();
+        await this.writeRaw(data);
+        return;
       }
 
       try {
@@ -1146,6 +1308,13 @@ export class KanbanStore {
         return;
       } catch {
         // canonical store missing, continue
+      }
+
+      const splitTreeExists = await fs.promises.access(this.splitTreeManifestPath).then(() => true).catch(() => false);
+      if (splitTreeExists) {
+        const data = await this.readRaw();
+        await this.writeJsonAtomic(this.filePath, data);
+        return;
       }
 
       const migrated = await this.migrateLegacyStoreIfNeeded();

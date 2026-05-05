@@ -518,11 +518,13 @@ The kanban board provides task management with agent execution, drag-and-drop re
 ### Store Design
 
 ```
-${NERVE_DATA_DIR:-~/.nerve}/kanban/tasks.json   -- single JSON file (tasks + proposals + config)
-${NERVE_DATA_DIR:-~/.nerve}/kanban/audit.log    -- append-only audit log (JSONL)
+${NERVE_DATA_DIR:-~/.nerve}/.kanban/tasks/       -- canonical split tree (tasks + subtasks)
+${NERVE_DATA_DIR:-~/.nerve}/.kanban/tasks.json   -- hidden compatibility snapshot for recovery
+${NERVE_DATA_DIR:-~/.nerve}/.kanban/audit.log    -- append-only audit log (JSONL)
+${NERVE_DATA_DIR:-~/.nerve}/kanban/              -- legacy visible migration source only
 ```
 
-All data lives in one JSON file (`StoreData`). Every mutation acquires an async mutex, reads the file, applies the change, and writes back atomically via temp-file rename. This guarantees consistency under concurrent requests without a database. On first startup, the store migrates legacy data from `server-dist/data/kanban/` or `server/data/kanban/` into the canonical runtime directory if needed.
+The split tree is the source of truth. A hidden compatibility snapshot is written for recovery, but the board state is read from the tree first. Every mutation acquires an async mutex, reads the canonical state, applies the change, and writes back atomically. This guarantees consistency under concurrent requests without a database. On first startup, the store migrates legacy data from `server-dist/data/kanban/`, `server/data/kanban/`, or the old visible `${NERVE_DATA_DIR:-~/.nerve}/kanban/` layout into the hidden runtime directory if needed.
 
 | File | Purpose |
 |------|---------|
