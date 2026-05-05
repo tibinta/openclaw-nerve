@@ -401,6 +401,19 @@ function hasProofGate(task: Pick<KanbanTask, 'evidence_links' | 'proof_gate'>): 
     && proofGate?.proof_log_updated === true;
 }
 
+function requiresReviewAfterSuccess(
+  task: Pick<KanbanTask, 'assignee' | 'evidence_links' | 'proof_gate' | 'delegation_proof' | 'swarmSummary' | 'swarmPacket'>,
+): boolean {
+  // Keep proof-heavy work on the review lane, but allow plain operator tasks
+  // with no proof baggage to close immediately when the run succeeds.
+  return isDelegatedTask(task)
+    || (Array.isArray(task.evidence_links) && task.evidence_links.length > 0)
+    || task.proof_gate !== undefined
+    || task.delegation_proof !== undefined
+    || task.swarmSummary !== undefined
+    || task.swarmPacket !== undefined;
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -586,6 +599,38 @@ function reconcileSplitLanes(data: StoreData): boolean {
   }
 
   return changed;
+}
+
+function reconcileSimpleReviews(data: StoreData): boolean {
+  const reviewTasks = data.tasks
+    .filter((task) => task.status === 'review' && task.run?.status === 'done' && !requiresReviewAfterSuccess(task))
+    .sort((a, b) => a.columnOrder - b.columnOrder || a.updatedAt - b.updatedAt);
+
+  if (reviewTasks.length === 0) return false;
+
+  const now = Date.now();
+  for (const task of reviewTasks) {
+    task.status = 'done';
+    task.updatedAt = now;
+    task.version += 1;
+  }
+
+  const bucket = new Map<string, KanbanTask[]>();
+  for (const task of data.tasks) {
+    const list = bucket.get(task.status) ?? [];
+    list.push(task);
+    bucket.set(task.status, list);
+  }
+
+  for (const list of bucket.values()) {
+    list.sort((a, b) => a.columnOrder - b.columnOrder || a.updatedAt - b.updatedAt);
+    list.forEach((task, index) => {
+      task.columnOrder = index;
+    });
+  }
+
+  data.meta.updatedAt = now;
+  return true;
 }
 
 // ── Audit log ────────────────────────────────────────────────────────
@@ -1049,7 +1094,7 @@ export class KanbanStore {
     return this.withStore(async () => {
       const data = await this.readRaw();
       const isBoardView = !filters.status?.length && !filters.priority?.length && !filters.assignee && !filters.label && !filters.q;
-      if (isBoardView && reconcileSplitLanes(data)) {
+      if (isBoardView && (reconcileSplitLanes(data) || reconcileSimpleReviews(data))) {
         await this.writeRaw(data);
       }
       let tasks = data.tasks;
@@ -1753,7 +1798,7 @@ export class KanbanStore {
       } else {
         // Success path: mark run as done, move to review
         task.run.status = 'done';
-        task.status = 'review';
+        task.status = requiresReviewAfterSuccess(task) ? 'review' : 'done';
         if (result) {
           task.result = result;
           task.resultAt = now;

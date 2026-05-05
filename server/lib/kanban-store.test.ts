@@ -349,6 +349,19 @@ describe('listTasks', () => {
     const result = await store.listTasks();
     expect(result.items.map((t) => t.title)).toEqual(['Blocked task', 'Todo task']);
   });
+
+  it('auto-closes a simple review task on board read', async () => {
+    const task = await createSampleTask({ status: 'todo' });
+    const executed = await store.executeTask(task.id);
+    const completed = await store.completeRun(executed.id, executed.run!.sessionKey, 'Simple result');
+
+    expect(completed.status).toBe('done');
+
+    const result = await store.listTasks();
+    const found = result.items.find((item) => item.id === task.id);
+    expect(found?.status).toBe('done');
+    expect(found?.result).toBe('Simple result');
+  });
 });
 
 // ── Get ──────────────────────────────────────────────────────────────
@@ -1246,12 +1259,12 @@ describe('abortTask', () => {
 // ── Complete run ─────────────────────────────────────────────────────
 
 describe('completeRun', () => {
-  it('completes successfully: moves to review with result', async () => {
+  it('completes successfully: closes simple tasks with result', async () => {
     const task = await createSampleTask({ status: 'todo' });
     const executed = await store.executeTask(task.id);
 
     const completed = await store.completeRun(executed.id, executed.run!.sessionKey, 'Task output here');
-    expect(completed.status).toBe('review');
+    expect(completed.status).toBe('done');
     expect(completed.run!.status).toBe('done');
     expect(completed.run!.endedAt).toBeGreaterThan(0);
     expect(completed.result).toBe('Task output here');
@@ -1284,7 +1297,7 @@ describe('completeRun', () => {
     });
 
     const completed = await store.completeRun(linked!.id, 'agent:main:subagent:stable-child', 'Task output here');
-    expect(completed.status).toBe('review');
+    expect(completed.status).toBe('done');
     expect(completed.run!.status).toBe('done');
     expect(completed.run!.childSessionKey).toBe('agent:main:subagent:stable-child');
     expect(completed.run!.runId).toBe('stable-run-123');
@@ -1299,7 +1312,7 @@ describe('completeRun', () => {
     });
 
     const completed = await store.completeRun(linked!.id, 'stable-run-123', 'Task output here');
-    expect(completed.status).toBe('review');
+    expect(completed.status).toBe('done');
     expect(completed.run!.status).toBe('done');
     expect(completed.run!.childSessionKey).toBe('agent:main:subagent:stable-child');
     expect(completed.run!.runId).toBe('stable-run-123');
@@ -1343,7 +1356,7 @@ describe('completeRun', () => {
     const executed = await store.executeTask(task.id);
 
     const completed = await store.completeRun(executed.id, executed.run!.sessionKey);
-    expect(completed.status).toBe('review');
+    expect(completed.status).toBe('done');
     expect(completed.run!.status).toBe('done');
     expect(completed.result).toBeUndefined();
   });
@@ -1414,7 +1427,28 @@ describe('reconcileStaleRuns', () => {
 
 describe('full workflow', () => {
   it('execute → completeRun → approve', async () => {
-    const task = await createSampleTask({ status: 'todo' });
+    const task = await createSampleTask({
+      status: 'todo',
+      assignee: 'agent:reviewer',
+      delegation_proof: {
+        packetId: 'packet://proof-flow',
+        worker: {
+          agentId: 'agent:reviewer',
+          sessionKey: 'worker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Worker finished the packet',
+        },
+        checker: {
+          agentId: 'agent:checker',
+          sessionKey: 'checker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Checker verified the packet',
+        },
+        blocker: 'none',
+      },
+    });
 
     // Execute
     const executed = await store.executeTask(task.id);
@@ -1441,7 +1475,28 @@ describe('full workflow', () => {
   });
 
   it('execute → completeRun → reject → re-execute', async () => {
-    const task = await createSampleTask({ status: 'todo' });
+    const task = await createSampleTask({
+      status: 'todo',
+      assignee: 'agent:reviewer',
+      delegation_proof: {
+        packetId: 'packet://proof-flow',
+        worker: {
+          agentId: 'agent:reviewer',
+          sessionKey: 'worker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Worker finished the packet',
+        },
+        checker: {
+          agentId: 'agent:checker',
+          sessionKey: 'checker-session',
+          verdict: 'pass',
+          at: Date.now(),
+          summary: 'Checker verified the packet',
+        },
+        blocker: 'none',
+      },
+    });
 
     const executed = await store.executeTask(task.id);
     const completed = await store.completeRun(executed.id, executed.run!.sessionKey, 'Half done');
