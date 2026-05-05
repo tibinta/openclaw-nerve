@@ -115,8 +115,15 @@ describe('subagent-spawn helper', () => {
   });
 
   it('resolves the canonical child key returned by sessions.create', async () => {
-    const rpcMock = vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockImplementation(async (method) => {
-      if (method === 'sessions.create') return { key: 'agent:reviewer:subagent:canonical' };
+    const rpcMock = vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockImplementation(async (method, params) => {
+      if (method === 'sessions.create') {
+        expect(params).toEqual(expect.objectContaining({
+          context: 'isolated',
+          workerLane: 'fast-worker',
+          parentSessionKey: 'agent:reviewer:main',
+        }));
+        return { key: 'agent:reviewer:subagent:canonical' };
+      }
       if (method === 'sessions.send') return { runId: 'run-123' };
       if (method === 'sessions.list') return { sessions: [] };
       return {};
@@ -125,6 +132,8 @@ describe('subagent-spawn helper', () => {
     const result = await spawnSubagent({
       parentSessionKey: 'agent:reviewer:main',
       task: 'Reply with exactly: OK',
+      workerLane: 'fast-worker',
+      checkerLane: 'ledger',
     });
 
     expect(result).toEqual({
@@ -132,11 +141,23 @@ describe('subagent-spawn helper', () => {
       runId: 'run-123',
       mode: 'direct',
     });
-    expect(rpcMock).toHaveBeenNthCalledWith(1, 'sessions.create', expect.any(Object));
     expect(rpcMock).toHaveBeenNthCalledWith(2, 'sessions.send', expect.objectContaining({
       key: 'agent:reviewer:subagent:canonical',
       message: 'Reply with exactly: OK',
     }));
+  });
+
+  it('rejects identical worker and checker lanes before spawning', async () => {
+    const rpcMock = vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockResolvedValue({});
+
+    await expect(spawnSubagent({
+      parentSessionKey: 'agent:reviewer:main',
+      task: 'Reply with exactly: OK',
+      workerLane: 'ledger',
+      checkerLane: 'ledger',
+    })).rejects.toThrow('workerLane and checkerLane must be different: ledger');
+
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it('does not delete the child when sessions.send fails after create', async () => {
@@ -251,6 +272,38 @@ describe('subagent-spawn helper', () => {
     expect(parentReport).toBeTruthy();
     expect(String(parentReport?.params.message ?? '')).toContain('Outcome: failed');
     expect(String(parentReport?.params.message ?? '')).toContain('worker crashed');
+  });
+
+  it('stops retrying when the same gateway poll failure repeats', async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let listAttempts = 0;
+
+    vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockImplementation(async (method, params) => {
+      calls.push({ method, params });
+      if (method === 'sessions.create') return { key: 'agent:reviewer:subagent:child-err' };
+      if (method === 'sessions.send' && params.key === 'agent:reviewer:subagent:child-err') return { runId: 'run-err' };
+      if (method === 'sessions.list') {
+        listAttempts += 1;
+        throw new Error('gateway unavailable');
+      }
+      if (method === 'sessions.send' && params.key === 'agent:reviewer:main') return { ok: true };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    await spawnSubagent({
+      parentSessionKey: 'agent:reviewer:main',
+      task: 'Do something',
+      cleanup: 'keep',
+    });
+
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(listAttempts).toBe(2);
+
+    const parentReport = calls.find((call) => call.method === 'sessions.send' && call.params.key === 'agent:reviewer:main');
+    expect(parentReport).toBeTruthy();
+    expect(String(parentReport?.params.message ?? '')).toContain('Outcome: failed');
+    expect(String(parentReport?.params.message ?? '')).toContain('gateway unavailable');
   });
 
   it('deletes the child only after the parent report when cleanup=delete', async () => {

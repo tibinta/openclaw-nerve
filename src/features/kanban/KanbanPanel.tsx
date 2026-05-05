@@ -29,6 +29,7 @@ function resolveTaskOwnerSessionKey(assignee?: string | null): string | null {
 export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPanelProps = {}) {
   const {
     tasks,
+    rootTasks,
     loading,
     error,
     filters,
@@ -59,8 +60,10 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
   const { currentSession } = useSessionContext();
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [createParentTask, setCreateParentTask] = useState<KanbanTask | null>(null);
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const consumedRef = useRef<string | null>(null);
+  const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task] as const)), [tasks]);
 
   const currentSessionRootKey = useMemo(
     () => getRootAgentSessionKey(currentSession) ?? null,
@@ -109,8 +112,8 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
   }), [archivedTasks.length, tasksByStatus]);
 
   const hasVisibleBoardContent = useMemo(
-    () => workflowCounts.queue > 0 || workflowCounts.active > 0 || workflowCounts.archive > 0,
-    [workflowCounts],
+    () => rootTasks.length > 0,
+    [rootTasks.length],
   );
 
   // Auto-open drawer for initialTaskId
@@ -135,6 +138,31 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
     setSelectedTask(null);
   }, []);
 
+  const selectedFolderTask = useMemo(() => {
+    if (!selectedTask) return null;
+    if (!selectedTask.parentTaskId) return selectedTask;
+    return taskById.get(selectedTask.parentTaskId) ?? selectedTask;
+  }, [selectedTask, taskById]);
+
+  const selectedFolderSubtasks = useMemo(() => {
+    if (!selectedFolderTask) return [];
+    return tasks
+      .filter((task) => task.parentTaskId === selectedFolderTask.id)
+      .sort((a, b) => a.columnOrder - b.columnOrder);
+  }, [selectedFolderTask, tasks]);
+
+  const handleCreateDialogOpenChange = useCallback((open: boolean) => {
+    setCreateOpen(open);
+    if (!open) {
+      setCreateParentTask(null);
+    }
+  }, []);
+
+  const openCreateDialog = useCallback((parentTask: KanbanTask | null = null) => {
+    setCreateParentTask(parentTask);
+    setCreateOpen(true);
+  }, []);
+
   /* ── Create handler ── */
   const handleCreate = useCallback(async (payload: Parameters<typeof createTask>[0]) => {
     await createTask(payload);
@@ -153,9 +181,10 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
   }, [deleteTask]);
 
   /* ── Open create dialog ── */
-  const openCreateDialog = useCallback(() => {
-    setCreateOpen(true);
-  }, []);
+  const handleCreateSubtask = useCallback(() => {
+    if (!selectedFolderTask) return;
+    openCreateDialog(selectedFolderTask);
+  }, [openCreateDialog, selectedFolderTask]);
 
   const handleArchive = useCallback(async () => {
     await archiveDoneTasks();
@@ -246,16 +275,21 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
       {/* Create Task Modal */}
       <CreateTaskDialog
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={handleCreateDialogOpenChange}
         onCreate={handleCreate}
+        parentTask={createParentTask}
       />
 
       {/* Task Detail Drawer */}
       <TaskDetailDrawer
         task={selectedTask}
         onClose={handleCloseDrawer}
+        parentTask={selectedTask?.parentTaskId ? taskById.get(selectedTask.parentTaskId) ?? null : null}
+        subtasks={selectedFolderSubtasks}
         onUpdate={handleUpdate}
         onDelete={handleDelete}
+        onOpenRelatedTask={setSelectedTask}
+        onCreateSubtask={handleCreateSubtask}
         onExecute={executeTask}
         onApprove={approveTask}
         onReject={rejectTask}
