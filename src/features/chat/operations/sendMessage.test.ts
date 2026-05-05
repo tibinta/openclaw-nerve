@@ -274,6 +274,7 @@ describe('sendChatMessage', () => {
     expect(sentMessage).toContain('short, clear, and summary-like');
     expect(sentMessage).toContain('Do not answer with voice acknowledgements');
     expect(sentMessage).toContain('Start with the answer, not a greeting');
+    expect(sentMessage).toContain('If the answer is short, keep it direct');
   });
 
   it('handles null/empty rpc response gracefully', async () => {
