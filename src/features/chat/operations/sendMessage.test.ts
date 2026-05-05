@@ -273,6 +273,7 @@ describe('sendChatMessage', () => {
     expect(sentMessage).toContain('Nerve will speak it automatically');
     expect(sentMessage).toContain('short, clear, and summary-like');
     expect(sentMessage).toContain('Do not answer with voice acknowledgements');
+    expect(sentMessage).toContain('Start with the answer, not a greeting');
   });
 
   it('handles null/empty rpc response gracefully', async () => {
