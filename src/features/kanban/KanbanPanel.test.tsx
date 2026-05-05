@@ -42,7 +42,21 @@ vi.mock('./CreateTaskDialog', () => ({
 }));
 
 vi.mock('./TaskDetailDrawer', () => ({
-  TaskDetailDrawer: () => null,
+  TaskDetailDrawer: ({
+    task,
+    parentTask,
+    subtasks = [],
+  }: {
+    task?: { id: string; title: string } | null;
+    parentTask?: { id: string; title: string } | null;
+    subtasks?: { id: string; title: string }[];
+  }) => (
+    <div data-testid="drawer">
+      <span>{task?.title ?? 'none'}</span>
+      <span>{parentTask?.title ?? 'no-parent'}</span>
+      <span>{subtasks.length}</span>
+    </div>
+  ),
 }));
 
 vi.mock('@/components/ui/button', () => ({
@@ -62,6 +76,10 @@ describe('KanbanPanel', () => {
     const archiveDoneTasks = vi.fn(async () => {});
     mockUseKanban.mockReturnValue({
       tasks: [
+        { id: '1', title: 'Do the thing', status: 'in-progress', priority: 'high', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0, assignee: 'agent:designer', swarmSummary: { sourceKind: 'crm_goal', objective: 'Get 20 customers today', packetsTotal: 5, packetsRunning: 3, packetsPassed: 1, packetsBlocked: 1 } },
+        { id: '2', title: 'Later task', status: 'todo', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0 },
+      ],
+      rootTasks: [
         { id: '1', title: 'Do the thing', status: 'in-progress', priority: 'high', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0, assignee: 'agent:designer', swarmSummary: { sourceKind: 'crm_goal', objective: 'Get 20 customers today', packetsTotal: 5, packetsRunning: 3, packetsPassed: 1, packetsBlocked: 1 } },
         { id: '2', title: 'Later task', status: 'todo', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0 },
       ],
@@ -115,6 +133,10 @@ describe('KanbanPanel', () => {
         { id: '1', title: 'Unowned active', status: 'in-progress', priority: 'high', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0 },
         { id: '2', title: 'Owned active', status: 'in-progress', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 2, columnOrder: 1, assignee: 'agent:codex' },
       ],
+      rootTasks: [
+        { id: '1', title: 'Unowned active', status: 'in-progress', priority: 'high', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0 },
+        { id: '2', title: 'Owned active', status: 'in-progress', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 2, columnOrder: 1, assignee: 'agent:codex' },
+      ],
       loading: false,
       error: null,
       filters: { q: '', priority: [], assignee: '', labels: [] },
@@ -154,5 +176,56 @@ describe('KanbanPanel', () => {
 
     expect(screen.getByTestId('board')).toHaveTextContent('Unowned active');
     expect(screen.getByText('Current active task')).toBeInTheDocument();
+  });
+
+  it('preserves parent context when opening a child task', async () => {
+    mockUseKanban.mockReturnValue({
+      tasks: [
+        { id: 'parent-1', title: 'Parent task', status: 'review', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0 },
+        { id: 'child-1', title: 'Child one', status: 'todo', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 2, columnOrder: 0, parentTaskId: 'parent-1' },
+        { id: 'child-2', title: 'Child two', status: 'todo', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 3, columnOrder: 1, parentTaskId: 'parent-1' },
+      ],
+      rootTasks: [
+        { id: 'parent-1', title: 'Parent task', status: 'review', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0 },
+      ],
+      loading: false,
+      error: null,
+      filters: { q: '', priority: [], assignee: '', labels: [] },
+      setFilters: vi.fn(),
+      fetchTasks: vi.fn(),
+      createTask: vi.fn(),
+      updateTask: vi.fn(),
+      deleteTask: vi.fn(),
+      reorderTask: vi.fn(),
+      tasksByStatus: vi.fn((status: string) => {
+        if (status === 'review') {
+          return [
+            { id: 'parent-1', title: 'Parent task', status: 'review', priority: 'normal', version: 1, labels: [], feedback: [], createdBy: 'operator', createdAt: 1, updatedAt: 1, columnOrder: 0 },
+          ];
+        }
+        return [];
+      }),
+      statusCounts: { backlog: 0, todo: 0, 'in-progress': 0, review: 1, done: 0 },
+      boardColumns: ['review'],
+      executeTask: vi.fn(),
+      approveTask: vi.fn(),
+      rejectTask: vi.fn(),
+      abortTask: vi.fn(),
+      archivedTasks: [],
+      archiveDoneTasks: vi.fn(),
+      restoreArchivedTask: vi.fn(),
+    });
+    mockUseProposals.mockReturnValue({
+      proposals: [],
+      pendingCount: 0,
+      approveProposal: vi.fn(),
+      rejectProposal: vi.fn(),
+    });
+
+    render(<KanbanPanel initialTaskId="child-1" />);
+
+    expect(screen.getByTestId('drawer')).toHaveTextContent('Child one');
+    expect(screen.getByTestId('drawer')).toHaveTextContent('Parent task');
+    expect(screen.getByTestId('drawer')).toHaveTextContent('2');
   });
 });

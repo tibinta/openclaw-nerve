@@ -403,10 +403,12 @@ function hasProofGate(task: Pick<KanbanTask, 'evidence_links' | 'proof_gate'>): 
 
 function requiresReviewAfterSuccess(
   task: Pick<KanbanTask, 'assignee' | 'evidence_links' | 'proof_gate' | 'delegation_proof' | 'swarmSummary' | 'swarmPacket'>,
+  hasChildren = false,
 ): boolean {
   // Keep proof-heavy work on the review lane, but allow plain operator tasks
   // with no proof baggage to close immediately when the run succeeds.
-  return isDelegatedTask(task)
+  return hasChildren
+    || isDelegatedTask(task)
     || (Array.isArray(task.evidence_links) && task.evidence_links.length > 0)
     || task.proof_gate !== undefined
     || task.delegation_proof !== undefined
@@ -603,7 +605,10 @@ function reconcileSplitLanes(data: StoreData): boolean {
 
 function reconcileSimpleReviews(data: StoreData): boolean {
   const reviewTasks = data.tasks
-    .filter((task) => task.status === 'review' && task.run?.status === 'done' && !requiresReviewAfterSuccess(task))
+    .filter((task) => {
+      const hasChildren = data.tasks.some((candidate) => candidate.parentTaskId === task.id);
+      return task.status === 'review' && task.run?.status === 'done' && !requiresReviewAfterSuccess(task, hasChildren);
+    })
     .sort((a, b) => a.columnOrder - b.columnOrder || a.updatedAt - b.updatedAt);
 
   if (reviewTasks.length === 0) return false;
@@ -614,6 +619,73 @@ function reconcileSimpleReviews(data: StoreData): boolean {
     task.updatedAt = now;
     task.version += 1;
   }
+
+  const bucket = new Map<string, KanbanTask[]>();
+  for (const task of data.tasks) {
+    const list = bucket.get(task.status) ?? [];
+    list.push(task);
+    bucket.set(task.status, list);
+  }
+
+  for (const list of bucket.values()) {
+    list.sort((a, b) => a.columnOrder - b.columnOrder || a.updatedAt - b.updatedAt);
+    list.forEach((task, index) => {
+      task.columnOrder = index;
+    });
+  }
+
+  data.meta.updatedAt = now;
+  return true;
+}
+
+function getTaskDepth(task: KanbanTask, tasksById: Map<string, KanbanTask>): number {
+  let depth = 0;
+  let current: KanbanTask | undefined = task;
+  const seen = new Set<string>();
+
+  while (current?.parentTaskId) {
+    if (seen.has(current.id)) break;
+    seen.add(current.id);
+    const parent = tasksById.get(current.parentTaskId);
+    if (!parent) break;
+    depth += 1;
+    current = parent;
+  }
+
+  return depth;
+}
+
+function deriveHierarchyStatus(children: KanbanTask[]): TaskStatus | null {
+  if (children.length === 0) return null;
+  if (children.every((task) => task.status === 'done')) return 'done';
+  if (children.some((task) => task.status === 'in-progress' || task.status === 'review')) return 'review';
+  return 'todo';
+}
+
+// Keep parent rows honest: the board should reflect live child completion, not stale folder state.
+function reconcileHierarchyRollups(data: StoreData): boolean {
+  const tasksById = new Map(data.tasks.map((task) => [task.id, task] as const));
+  const parents = data.tasks
+    .filter((task) => data.tasks.some((candidate) => candidate.parentTaskId === task.id))
+    .sort((a, b) => getTaskDepth(b, tasksById) - getTaskDepth(a, tasksById));
+
+  if (parents.length === 0) return false;
+
+  let changed = false;
+  const now = Date.now();
+
+  for (const parent of parents) {
+    if (parent.status === 'cancelled') continue;
+    const children = data.tasks.filter((candidate) => candidate.parentTaskId === parent.id);
+    const nextStatus = deriveHierarchyStatus(children);
+    if (!nextStatus || nextStatus === parent.status) continue;
+    parent.status = nextStatus;
+    parent.updatedAt = now;
+    parent.version += 1;
+    changed = true;
+  }
+
+  if (!changed) return false;
 
   const bucket = new Map<string, KanbanTask[]>();
   for (const task of data.tasks) {
@@ -1094,8 +1166,13 @@ export class KanbanStore {
     return this.withStore(async () => {
       const data = await this.readRaw();
       const isBoardView = !filters.status?.length && !filters.priority?.length && !filters.assignee && !filters.label && !filters.q;
-      if (isBoardView && (reconcileSplitLanes(data) || reconcileSimpleReviews(data))) {
-        await this.writeRaw(data);
+      if (isBoardView) {
+        const hierarchyChanged = reconcileHierarchyRollups(data);
+        const simpleChanged = reconcileSimpleReviews(data);
+        const laneChanged = reconcileSplitLanes(data);
+        if (hierarchyChanged || simpleChanged || laneChanged) {
+          await this.writeRaw(data);
+        }
       }
       let tasks = data.tasks;
 
@@ -1194,6 +1271,7 @@ export class KanbanStore {
       };
 
       data.tasks.push(restored);
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.writeArchiveRaw(archive);
       await this.audit({ ts: now, action: 'update', taskId: id, actor, detail: 'restored from archive' });
@@ -1283,6 +1361,7 @@ export class KanbanStore {
       requireProofGate(task);
 
       data.tasks.push(task);
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: now, action: 'create', taskId: task.id, actor: input.createdBy });
       return task;
@@ -1364,6 +1443,7 @@ export class KanbanStore {
       }
 
       data.tasks[idx] = updated;
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({
         ts: now,
@@ -1385,6 +1465,7 @@ export class KanbanStore {
       if (idx === -1) throw new TaskNotFoundError(id);
 
       data.tasks.splice(idx, 1);
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: Date.now(), action: 'delete', taskId: id, actor });
     });
@@ -1558,6 +1639,7 @@ export class KanbanStore {
       task.version += 1;
 
       data.tasks[idx] = task;
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: now, action: 'execute', taskId: id, actor });
       return task;
@@ -1598,6 +1680,7 @@ export class KanbanStore {
         runId: nextRunId,
       };
       data.tasks[idx] = task;
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       return task;
     });
@@ -1644,6 +1727,7 @@ export class KanbanStore {
       task.version += 1;
 
       data.tasks[idx] = task;
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: now, action: 'approve', taskId: id, actor });
       return task;
@@ -1692,6 +1776,7 @@ export class KanbanStore {
       task.version += 1;
 
       data.tasks[idx] = task;
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: now, action: 'reject', taskId: id, actor });
       return task;
@@ -1743,6 +1828,7 @@ export class KanbanStore {
       task.version += 1;
 
       data.tasks[idx] = task;
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: now, action: 'abort', taskId: id, actor });
       return task;
@@ -1798,7 +1884,8 @@ export class KanbanStore {
       } else {
         // Success path: mark run as done, move to review
         task.run.status = 'done';
-        task.status = requiresReviewAfterSuccess(task) ? 'review' : 'done';
+        const hasChildren = data.tasks.some((candidate) => candidate.parentTaskId === task.id);
+        task.status = requiresReviewAfterSuccess(task, hasChildren) ? 'review' : 'done';
         if (result) {
           task.result = result;
           task.resultAt = now;
@@ -1814,6 +1901,7 @@ export class KanbanStore {
       task.version += 1;
 
       data.tasks[idx] = task;
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({
         ts: now,
@@ -1860,6 +1948,7 @@ export class KanbanStore {
       }
 
       if (reconciled.length > 0) {
+        reconcileHierarchyRollups(data);
         await this.writeRaw(data);
         await this.audit({
           ts: now,
@@ -1951,6 +2040,7 @@ export class KanbanStore {
       proposal.resolvedBy = actor;
       proposal.version += 1;
 
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: now, action: 'proposal_approve', detail: `proposal=${id}`, actor });
       return { proposal, task };
@@ -1975,6 +2065,7 @@ export class KanbanStore {
       proposal.reason = reason;
       proposal.version += 1;
 
+      reconcileHierarchyRollups(data);
       await this.writeRaw(data);
       await this.audit({ ts: now, action: 'proposal_reject', detail: `proposal=${id}`, actor });
       return proposal;
@@ -2041,11 +2132,12 @@ export class KanbanStore {
       feedback: [],
     };
 
-    assertValidSwarmPacket(task.swarmPacket);
-    requireProofGate(task);
+      assertValidSwarmPacket(task.swarmPacket);
+      requireProofGate(task);
 
-    data.tasks.push(task);
-    return task;
+      data.tasks.push(task);
+      reconcileHierarchyRollups(data);
+      return task;
   }
 
   private async _applyUpdateUnlocked(
@@ -2089,6 +2181,7 @@ export class KanbanStore {
     assertValidSwarmPacket(updated.swarmPacket);
     requireProofGate(updated);
     data.tasks[idx] = updated;
+    reconcileHierarchyRollups(data);
     return updated;
   }
 

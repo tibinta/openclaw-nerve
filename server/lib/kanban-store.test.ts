@@ -214,6 +214,27 @@ describe('createTask', () => {
     expect(result.items.some((task) => task.id === parent.id)).toBe(true);
     expect(result.items.some((task) => task.id === child.id)).toBe(true);
   });
+
+  it('reopens a completed parent when a new child is attached', async () => {
+    const parent = await createSampleTask({
+      title: 'Parent task',
+      status: 'done',
+      evidence_links: ['evidence://parent'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+    expect(parent.status).toBe('done');
+
+    await createSampleTask({ title: 'Child task', status: 'todo', parentTaskId: parent.id });
+
+    const refreshed = await store.getTask(parent.id);
+    expect(refreshed.status).toBe('todo');
+    expect(refreshed.parentTaskId).toBeUndefined();
+  });
 });
 
 // ── List + filters ───────────────────────────────────────────────────
@@ -1359,6 +1380,37 @@ describe('completeRun', () => {
     expect(completed.status).toBe('done');
     expect(completed.run!.status).toBe('done');
     expect(completed.result).toBeUndefined();
+  });
+
+  it('keeps a parent in review until every child is done, then rolls the parent up', async () => {
+    const parent = await createSampleTask({
+      title: 'Parent task',
+      status: 'todo',
+      evidence_links: ['evidence://parent'],
+      proof_gate: {
+        reindex_verified: true,
+        read_back_verified: true,
+        live_link_or_canvas_checked: true,
+        proof_log_updated: true,
+      },
+    });
+    const childOne = await createSampleTask({ title: 'Child one', status: 'todo', parentTaskId: parent.id });
+    const childTwo = await createSampleTask({ title: 'Child two', status: 'todo', parentTaskId: parent.id });
+
+    const firstRun = await store.executeTask(childOne.id);
+    const firstDone = await store.completeRun(firstRun.id, firstRun.run!.sessionKey, 'Child one done');
+    expect(firstDone.status).toBe('done');
+    expect(firstDone.parentTaskId).toBe(parent.id);
+
+    let refreshedParent = await store.getTask(parent.id);
+    expect(refreshedParent.status).toBe('todo');
+
+    const secondRun = await store.executeTask(childTwo.id);
+    const secondDone = await store.completeRun(secondRun.id, secondRun.run!.sessionKey, 'Child two done');
+    expect(secondDone.parentTaskId).toBe(parent.id);
+
+    refreshedParent = await store.getTask(parent.id);
+    expect(refreshedParent.status).toBe('done');
   });
 });
 
