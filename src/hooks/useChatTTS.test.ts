@@ -67,4 +67,24 @@ describe('useChatTTS', () => {
 
     expect(speak).toHaveBeenCalledWith('First sentence explains the answer.');
   });
+
+  it('drops COPY noise from spoken fallback text', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    act(() => {
+      result.current.trackVoiceMessage('[voice] answer this');
+      result.current.handleFinalTTS({
+        message: { role: 'assistant', content: 'COPY\nI will do that.' } as never,
+        text: 'COPY\nI will do that.',
+        ttsText: null,
+        charts: [],
+      }, false);
+    });
+
+    expect(speak).toHaveBeenCalledWith('I will do that.');
+  });
 });

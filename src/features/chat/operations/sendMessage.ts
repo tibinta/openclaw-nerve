@@ -9,7 +9,7 @@ import { renderMarkdown, renderToolResults } from '@/utils/helpers';
 
 // ─── Voice → TTS prompt hint ───────────────────────────────────────────────────
 const VOICE_PREFIX = '[voice] ';
-const TTS_HINT = '\n\n[system: User sent a voice message. Answer the user’s actual request directly in plain text. Start with the answer, not a greeting. If the answer is short, keep it direct. If you include a [tts:...] marker, Nerve will speak it automatically. Do not ask the user to trigger speech or confirm TTS just to make audio happen. Do not answer with voice acknowledgements like "Yes, I can hear you" or "I’m here too". Keep the [tts:...] text short, clear, and summary-like for ADHD and dyslexic listeners. Always include readable chat text and, when audio is needed, exactly one [tts:...] marker at the end of your reply. Example reply:\n\nHere is my text response.\n\n[tts: Here is my text response.]]';
+const TTS_HINT = '\n\n[system: User sent a voice message. Answer the user’s actual request directly in plain text. Start with the answer, not a greeting. If the answer is short, keep it direct. If you include a [tts:...] marker, Nerve will speak it automatically. Do not ask the user to trigger speech or confirm TTS just to make audio happen. Do not answer with voice acknowledgements like "Yes, I can hear you" or "I’m here too". Do not emit COPY or tool labels. Keep the [tts:...] text short, clear, and summary-like for ADHD and dyslexic listeners. Always include readable chat text and, when audio is needed, exactly one [tts:...] marker at the end of your reply. Example reply:\n\nHere is my text response.\n\n[tts: Here is my text response.]]';
 const UPLOAD_MANIFEST_OPEN = '<nerve-upload-manifest>';
 const UPLOAD_MANIFEST_CLOSE = '</nerve-upload-manifest>';
 

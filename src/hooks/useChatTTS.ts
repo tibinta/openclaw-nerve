@@ -27,6 +27,10 @@ export function buildVoiceFallbackText(raw: string): string | null {
   text = text.replace(/#{1,6}\s+/g, '');
   text = text.replace(/[*_~]{1,3}/g, '');
   text = text.replace(/^---+$/gm, '');
+  // Drop obvious transcript/editor noise that should never be spoken.
+  text = text.replace(/^\s*COPY\s*$/gmi, '');
+  text = text.replace(/^\s*Tool(?:\s+text-to-speech.*)?$/gmi, '');
+  text = text.replace(/^\s*text-to-speech.*$/gmi, '');
   // Collapse whitespace
   text = text.replace(/\n{2,}/g, '. ').replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
   // Must have at least 3 letter characters (unicode-aware for non-Latin scripts)
