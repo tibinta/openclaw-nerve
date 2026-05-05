@@ -111,6 +111,24 @@ describe('useModelEffort', () => {
       { value: 'openrouter/xiaomi/mimo-v2-pro', label: 'xiaomi/mimo-v2-pro' },
     ]);
   });
+
+  it('does not call session-info when no session is selected', async () => {
+    mockUseSessionContext.mockReturnValue({
+      currentSession: '',
+      sessions: [],
+      updateSession: vi.fn(),
+    });
+
+    const { result } = renderHook(() => useModelEffort());
+
+    await waitFor(() => {
+      expect(result.current.selectedModel).toBe('zai/glm-4.7');
+    });
+
+    const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[][] } };
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/gateway/models'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/gateway/session-info'))).toBe(false);
+  });
 });
 
 describe('buildModelCatalogUiError', () => {

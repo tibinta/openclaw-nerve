@@ -106,6 +106,7 @@ async function fetchGatewayModels(): Promise<GatewayModelsResponse | null> {
 
 async function fetchGatewaySessionInfo(sessionKey?: string): Promise<{ model?: string; thinking?: string } | null> {
   try {
+    if (!sessionKey) return null;
     const params = sessionKey ? `?sessionKey=${encodeURIComponent(sessionKey)}` : '';
     const res = await fetch(`/api/gateway/session-info${params}`);
     if (!res.ok) return null;
@@ -280,9 +281,10 @@ export function useModelEffort(): UseModelEffortReturn {
 
   // Fetch per-session info when session changes
   useEffect(() => {
+    if (!currentSession) return;
     const signal = { cancelled: false };
     (async () => {
-      const sessionInfo = await fetchGatewaySessionInfo(currentSession || undefined);
+      const sessionInfo = await fetchGatewaySessionInfo(currentSession);
       if (signal.cancelled) return;
 
       if (sessionInfo?.thinking && !currentSessionThinking) {

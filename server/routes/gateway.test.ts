@@ -510,12 +510,20 @@ describe('gateway routes', () => {
 
     it('returns empty object when gateway is unreachable', async () => {
       setDefaults();
-      invokeGatewayImpl = () => { throw new Error('ECONNREFUSED'); };
+      const invokedCalls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+      invokeGatewayImpl = (tool: string, args: Record<string, unknown>) => {
+        invokedCalls.push({ tool, args });
+        if (tool === 'sessions_list') throw new Error('ECONNREFUSED');
+        if (tool === 'session_status') throw new Error('should not reach session_status without an explicit sessionKey');
+        return {};
+      };
       const app = buildApp();
       const res = await app.request('/api/gateway/session-info');
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
       expect(json).toBeDefined();
+      expect(invokedCalls.map((call) => call.tool)).toEqual(['sessions_list']);
+      expect(invokedCalls.some((call) => call.tool === 'session_status')).toBe(false);
     });
 
     it('accepts custom sessionKey query param', async () => {
@@ -563,6 +571,23 @@ describe('gateway routes', () => {
       const json = (await res.json()) as Record<string, unknown>;
       expect(json.model).toBe('anthropic/claude-sonnet-4');
       expect(json.thinking).toBe('medium');
+    });
+
+    it('does not call session_status when no session can be resolved', async () => {
+      setDefaults();
+      const invokedCalls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+      invokeGatewayImpl = (tool: string, args: Record<string, unknown>) => {
+        invokedCalls.push({ tool, args });
+        if (tool === 'sessions_list') return { sessions: [] };
+        if (tool === 'session_status') throw new Error('session_status should not be called without a sessionKey');
+        return {};
+      };
+
+      const app = buildApp();
+      const res = await app.request('/api/gateway/session-info');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({});
+      expect(invokedCalls.map((call) => call.tool)).toEqual(['sessions_list']);
     });
   });
 

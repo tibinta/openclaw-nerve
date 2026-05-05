@@ -294,11 +294,19 @@ app.get('/api/gateway/session-info', rateLimitGeneral, async (c) => {
     console.warn(`[gateway/session-info] sessions_list failed:`, (err as Error).message);
   }
 
-  // Fallback: try global status tools (less accurate — returns global defaults, not per-session)
+  // Only fall back to session_status when the caller gave us a real session key.
+  // A blank lookup should fail softly instead of forcing the gateway to resolve
+  // an implicit "current" session that may no longer exist.
+  if (!requestedSessionKey) {
+    return c.json(info);
+  }
+
+  // Fallback: ask the gateway for the explicitly requested session.
+  // This keeps the recovery path explicit and avoids noisy "current" lookups.
   const toolsToTry = ['session_status'];
   for (const tool of toolsToTry) {
     try {
-      const result = await invokeGatewayTool(tool, {}, GATEWAY_TIMEOUT_MS);
+      const result = await invokeGatewayTool(tool, { sessionKey: requestedSessionKey }, GATEWAY_TIMEOUT_MS);
       const thinking = extractThinking(result);
       const model = extractSessionModel(result);
       if (thinking && !info.thinking) info.thinking = thinking;
