@@ -60,7 +60,9 @@ const app = new Hono();
 
 const POLL_SESSIONS_ACTIVE_MINUTES = 24 * 60;
 const PARENT_ROOT_LOOKUP_ACTIVE_MINUTES = 7 * 24 * 60;
-const PARENT_ROOT_LOOKUP_SESSIONS_LIMIT = 1000;
+// Root existence checks only need enough rows to find the assignee root; a
+// 1000-row scan is expensive and amplifies gateway pressure.
+const PARENT_ROOT_LOOKUP_SESSIONS_LIMIT = 200;
 const POLL_SESSIONS_LIMIT = 200;
 
 // ── Session completion poller ────────────────────────────────────────

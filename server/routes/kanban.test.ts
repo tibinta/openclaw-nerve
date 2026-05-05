@@ -1128,7 +1128,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     expect(invokeGatewayToolMock).not.toHaveBeenCalledWith('sessions_spawn', expect.anything());
     expect(gatewayRpcMock).toHaveBeenCalledWith('sessions.list', {
       activeMinutes: 7 * 24 * 60,
-      limit: 1000,
+      limit: 200,
     });
     expect(launchMock).toHaveBeenCalledWith(expect.objectContaining({
       parentSessionKey: 'agent:reviewer:main',
@@ -1725,7 +1725,7 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     }));
     expect(gatewayRpcMock).toHaveBeenCalledWith('sessions.list', {
       activeMinutes: 7 * 24 * 60,
-      limit: 1000,
+      limit: 200,
     });
     expect(invokeGatewayToolMock).not.toHaveBeenCalled();
   });

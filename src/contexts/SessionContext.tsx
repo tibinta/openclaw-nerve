@@ -25,8 +25,9 @@ const BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'delta', 'starte
 const IDLE_STATES = new Set(['idle', 'done', 'error', 'final', 'aborted', 'completed']);
 const SESSION_BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'streaming', 'started', 'busy', 'working']);
 
-// Use the full session list for the sidebar so older root chats stay visible.
-const FULL_SESSIONS_LIMIT = 1000;
+// Keep the sidebar list broad enough for older roots, but avoid dragging the
+// gateway with a 1000-row fetch on every refresh cycle.
+const FULL_SESSIONS_LIMIT = 200;
 
 export interface GatewayAgentRegistration {
   id: string;
@@ -110,6 +111,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const doneTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const delayedRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshSessionsInFlightRef = useRef(false);
+  const listAuthoritativeSessionsInFlightRef = useRef<Promise<Session[]> | null>(null);
 
   // Derive busyState from agentStatus for backward compatibility
   const busyState = useMemo(() => {
@@ -275,15 +277,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const listAuthoritativeSessions = useCallback(async () => {
     if (connectionState !== 'connected') return sessionsRef.current;
+    if (listAuthoritativeSessionsInFlightRef.current) {
+      return listAuthoritativeSessionsInFlightRef.current;
+    }
+
+    const inFlight = (async () => {
+      try {
+        const [res, hiddenCronSessions] = await Promise.all([
+          rpc('sessions.list', { limit: FULL_SESSIONS_LIMIT }) as Promise<SessionsListResponse>,
+          fetchHiddenCronSessions(24 * 60, FULL_SESSIONS_LIMIT),
+        ]);
+        return mergeSessionLists(res?.sessions ?? [], hiddenCronSessions);
+      } catch (err) {
+        console.debug('[SessionContext] Failed to fetch authoritative session list:', err);
+        return sessionsRef.current;
+      } finally {
+        listAuthoritativeSessionsInFlightRef.current = null;
+      }
+    })();
+
+    listAuthoritativeSessionsInFlightRef.current = inFlight;
     try {
-      const [res, hiddenCronSessions] = await Promise.all([
-        rpc('sessions.list', { limit: FULL_SESSIONS_LIMIT }) as Promise<SessionsListResponse>,
-        fetchHiddenCronSessions(24 * 60, FULL_SESSIONS_LIMIT),
-      ]);
-      return mergeSessionLists(res?.sessions ?? [], hiddenCronSessions);
-    } catch (err) {
-      console.debug('[SessionContext] Failed to fetch authoritative session list:', err);
-      return sessionsRef.current;
+      return await inFlight;
+    } finally {
+      if (listAuthoritativeSessionsInFlightRef.current === inFlight) {
+        listAuthoritativeSessionsInFlightRef.current = null;
+      }
     }
   }, [connectionState, fetchHiddenCronSessions, mergeSessionLists, rpc]);
 

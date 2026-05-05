@@ -415,7 +415,7 @@ describe('SessionContext', () => {
     }
 
     render(<SessionProvider><Spawn /></SessionProvider>);
-    await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 1000 }));
+    await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 200 }));
     screen.getByTestId('spawn-duplicate').click();
     await waitFor(() => {
       expect(rpcMock).toHaveBeenCalledWith('agents.create', expect.objectContaining({
@@ -440,7 +440,7 @@ describe('SessionContext', () => {
       expect(screen.getByText('Designer')).toBeInTheDocument();
     });
 
-    expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 1000 });
+    expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 200 });
     expect(rpcMock).not.toHaveBeenCalledWith('sessions.list', expect.objectContaining({ activeMinutes: expect.any(Number) }));
   });
 
@@ -753,7 +753,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { limit: 1000 });
+      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { limit: 200 });
     });
 
     vi.useFakeTimers();
@@ -813,7 +813,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { limit: 1000 });
+      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { limit: 200 });
     });
 
     vi.useFakeTimers();
