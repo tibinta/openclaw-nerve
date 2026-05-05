@@ -16,6 +16,7 @@ All endpoints are relative to the Nerve server origin (e.g. `http://localhost:30
 - **Tasks** flow through columns: `backlog` → `todo` → `in-progress` → `review` → `done` (or `cancelled`).
 - **CAS versioning**: Updates and reorders require the current `version` number. If it mismatches, you get a `409 version_conflict` with the server's latest task. Re-read and retry.
 - **Workflow actions** enforce valid transitions. You can't execute a task that's already in review.
+- **Subtasks do not force parent review**: child progress is informational. A parent only auto-closes when every child is done; partial child progress must not push the parent into `review`.
 - **Proposals** let agents suggest task creation or updates. The operator (or auto-policy) approves/rejects them.
 - **Actors** are either `"operator"` or `"agent:<name>"`.
 

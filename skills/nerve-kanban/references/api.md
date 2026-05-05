@@ -636,6 +636,8 @@ todo ─────┘       │              │
 
 Direct status changes via PATCH are also possible but bypass workflow guardrails.
 
+Subtasks are not a review trigger. Child progress should not push a parent task into `review`; only the terminal "all children done" state should auto-close the parent.
+
 ## Fetch Examples (JavaScript)
 
 ```javascript

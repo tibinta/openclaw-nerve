@@ -1382,7 +1382,7 @@ describe('completeRun', () => {
     expect(completed.result).toBeUndefined();
   });
 
-  it('keeps a parent in review until every child is done, then rolls the parent up', async () => {
+  it('keeps a parent stable while children are active, then closes it when all children are done', async () => {
     const parent = await createSampleTask({
       title: 'Parent task',
       status: 'todo',
@@ -1398,11 +1398,13 @@ describe('completeRun', () => {
     const childTwo = await createSampleTask({ title: 'Child two', status: 'todo', parentTaskId: parent.id });
 
     const firstRun = await store.executeTask(childOne.id);
+    let refreshedParent = await store.getTask(parent.id);
+    expect(refreshedParent.status).toBe('todo');
+
     const firstDone = await store.completeRun(firstRun.id, firstRun.run!.sessionKey, 'Child one done');
     expect(firstDone.status).toBe('done');
     expect(firstDone.parentTaskId).toBe(parent.id);
 
-    let refreshedParent = await store.getTask(parent.id);
     expect(refreshedParent.status).toBe('todo');
 
     const secondRun = await store.executeTask(childTwo.id);

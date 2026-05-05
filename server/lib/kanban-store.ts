@@ -656,14 +656,18 @@ function getTaskDepth(task: KanbanTask, tasksById: Map<string, KanbanTask>): num
   return depth;
 }
 
-function deriveHierarchyStatus(children: KanbanTask[]): TaskStatus | null {
+function deriveHierarchyStatus(parent: KanbanTask, children: KanbanTask[]): TaskStatus | null {
   if (children.length === 0) return null;
+  // Child tasks are workflow leaf nodes. Their status should not push the
+  // parent into review. We only auto-close on the terminal all-done state,
+  // and if a completed parent gains an active child again we reopen it to todo.
   if (children.every((task) => task.status === 'done')) return 'done';
-  if (children.some((task) => task.status === 'in-progress' || task.status === 'review')) return 'review';
-  return 'todo';
+  if (parent.status === 'done') return 'todo';
+  return null;
 }
 
-// Keep parent rows honest: the board should reflect live child completion, not stale folder state.
+// Keep parent rows honest without letting child work force a review hop.
+// Only the terminal all-done state should auto-close the parent.
 function reconcileHierarchyRollups(data: StoreData): boolean {
   const tasksById = new Map(data.tasks.map((task) => [task.id, task] as const));
   const parents = data.tasks
@@ -678,7 +682,7 @@ function reconcileHierarchyRollups(data: StoreData): boolean {
   for (const parent of parents) {
     if (parent.status === 'cancelled') continue;
     const children = data.tasks.filter((candidate) => candidate.parentTaskId === parent.id);
-    const nextStatus = deriveHierarchyStatus(children);
+    const nextStatus = deriveHierarchyStatus(parent, children);
     if (!nextStatus || nextStatus === parent.status) continue;
     parent.status = nextStatus;
     parent.updatedAt = now;
