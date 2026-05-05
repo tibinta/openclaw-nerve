@@ -73,6 +73,7 @@ const MONITOR_POLL_INTERVAL_MS = 5_000;
 const MONITOR_MAX_ATTEMPTS = 720;
 const MARKER_DISCOVERY_TIMEOUT_MS = 60_000;
 const MARKER_DISCOVERY_POLL_MS = 1_000;
+const SESSION_RESULT_FETCH_TIMEOUT_MS = 3_000;
 
 const activeMonitors = new Set<string>();
 
@@ -454,28 +455,30 @@ function startCompletionMonitor(params: {
         return;
       }
 
-      const historyResponse = await gatewayRpcCall('sessions.get', {
-        key: params.childSessionKey,
-        limit: 20,
-        includeTools: true,
-      }) as { messages?: Array<Record<string, unknown>> };
-      const messages = Array.isArray(historyResponse.messages) ? historyResponse.messages : [];
-      const extracted = extractAssistantResultForLaunch(messages, {
-        runId: params.runId,
-        launchTimestamp: params.launchTimestamp,
-      });
+      observedRunStart = true;
+      let resultText = 'Completed (no result text)';
+      try {
+        const historyResponse = await gatewayRpcCall('sessions.get', {
+          key: params.childSessionKey,
+          limit: 20,
+          includeTools: true,
+        }, SESSION_RESULT_FETCH_TIMEOUT_MS) as { messages?: Array<Record<string, unknown>> };
+        const messages = Array.isArray(historyResponse.messages) ? historyResponse.messages : [];
+        const extracted = extractAssistantResultForLaunch(messages, {
+          runId: params.runId,
+          launchTimestamp: params.launchTimestamp,
+        });
 
-      if (extracted.started) {
-        observedRunStart = true;
-      }
-
-      if (!observedRunStart) {
-        schedule(() => { void poll(); }, MONITOR_POLL_INTERVAL_MS);
-        return;
+        if (extracted.started) {
+          observedRunStart = true;
+        }
+        resultText = extracted.resultText ?? resultText;
+      } catch (error) {
+        console.warn(`[subagent-spawn] Could not fetch completion text for ${params.childSessionKey}:`, error);
       }
 
       await finish('completed', {
-        result: extracted.resultText ?? 'Completed (no result text)',
+        result: resultText,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

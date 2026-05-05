@@ -60,6 +60,7 @@ const app = new Hono();
 
 const POLL_SESSIONS_ACTIVE_MINUTES = 24 * 60;
 const PARENT_ROOT_LOOKUP_ACTIVE_MINUTES = 7 * 24 * 60;
+const SESSION_RESULT_FETCH_TIMEOUT_MS = 3_000;
 // Root existence checks only need enough rows to find the assignee root; a
 // 1000-row scan is expensive and amplifies gateway pressure.
 const PARENT_ROOT_LOOKUP_SESSIONS_LIMIT = 200;
@@ -297,6 +298,26 @@ function getLastAssistantText(
   return fallback;
 }
 
+async function fetchCompletionText(
+  sessionKey: string | undefined,
+  context: string,
+): Promise<string> {
+  if (!sessionKey) return 'Completed (no result text)';
+
+  try {
+    const histResponse = await gatewayRpcCall('sessions.get', {
+      key: sessionKey,
+      limit: 3,
+      includeTools: true,
+    }, SESSION_RESULT_FETCH_TIMEOUT_MS) as { messages?: Array<Record<string, unknown>> };
+    const messages = Array.isArray(histResponse.messages) ? histResponse.messages : [];
+    return getLastAssistantText(messages, 'Completed (no result text)');
+  } catch (err) {
+    console.warn(`[kanban] Could not fetch completion text for ${context}:`, err);
+    return 'Completed (no result text)';
+  }
+}
+
 function trimKanbanParentReportText(text: string, maxChars = 4_000): string {
   const normalized = text.trim();
   if (!normalized) return 'Completed (no result text)';
@@ -438,22 +459,10 @@ function pollSessionCompletion(
       }
 
       if (status === 'done') {
-        let resultText = 'Completed (no result text)';
         if (!childSessionKey) {
           console.warn(`[kanban] Run ${identity.correlationKey} completed without a child session key`);
-        } else {
-          try {
-            const histRaw = await invokeGatewayTool('sessions_history', {
-              sessionKey: childSessionKey,
-              limit: 3,
-            });
-            const histParsed = parseGatewayResponse(histRaw);
-            const messages = (histParsed.messages ?? []) as Array<Record<string, unknown>>;
-            resultText = getLastAssistantText(messages, resultText);
-          } catch (err) {
-            console.warn(`[kanban] Could not fetch history for ${identity.correlationKey}:`, err);
-          }
         }
+        const resultText = await fetchCompletionText(childSessionKey, identity.correlationKey);
 
         const markers = parseKanbanMarkers(resultText);
         const cleanResult = markers.length > 0 ? stripKanbanMarkers(resultText) : resultText;
@@ -686,18 +695,7 @@ function pollFallbackSessionCompletion(
       const isDone = status === 'done' || (agentState === 'idle' && !busy && !processing);
 
       if (isDone) {
-        let resultText = 'Completed (no result text)';
-        try {
-          const histResponse = await gatewayRpcCall('sessions.get', {
-            key: activeSessionKey,
-            limit: 3,
-            includeTools: true,
-          }) as { messages?: Array<Record<string, unknown>> };
-          const messages = Array.isArray(histResponse.messages) ? histResponse.messages : [];
-          resultText = getLastAssistantText(messages, resultText);
-        } catch (err) {
-          console.warn(`[kanban] Could not fetch history for ${activeSessionKey}:`, err);
-        }
+        const resultText = await fetchCompletionText(activeSessionKey, activeSessionKey);
 
         const markers = parseKanbanMarkers(resultText);
         const cleanResult = markers.length > 0 ? stripKanbanMarkers(resultText) : resultText;

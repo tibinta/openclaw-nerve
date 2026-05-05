@@ -1762,6 +1762,75 @@ describe('POST /api/kanban/tasks/:id/execute', () => {
     expect(launchMock).not.toHaveBeenCalled();
   });
 
+  it('starts direct runs without calling sessions_history', async () => {
+    const childSessionKey = 'agent:designer:subagent:direct-child';
+    const invokeGatewayToolMock = vi.fn(async (tool: string, args?: Record<string, unknown>) => {
+      if (tool === 'sessions_spawn') {
+        return { sessionKey: childSessionKey, runId: 'run-direct-child' };
+      }
+      if (tool === 'subagents') {
+        expect(args).toMatchObject({ action: 'list' });
+        return {
+          active: [],
+          recent: [
+            {
+              sessionKey: childSessionKey,
+              childSessionKey,
+              status: 'done',
+              runId: 'run-direct-child',
+            },
+          ],
+        };
+      }
+      if (tool === 'sessions_history') {
+        throw new Error('sessions_history should not be called');
+      }
+      return {};
+    });
+
+    const gatewayRpcMock: GatewayRpcMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'sessions.list') {
+        return { sessions: [{ sessionKey: 'agent:designer:main' }] };
+      }
+      if (method === 'sessions.get') {
+        expect(params?.key).toBe(childSessionKey);
+        return {
+          messages: [
+            {
+              role: 'assistant',
+              content: 'Direct child done\n[kanban:create]{"title":"direct follow-up"}[/kanban:create]',
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const app = await buildApp({ executionMode: 'primary', invokeGatewayToolMock, gatewayRpcMock });
+    const task = await createTask(app, { status: 'todo', assignee: 'agent:designer' });
+
+    const res = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
+    expect(res.status).toBe(200);
+    const body = await res.json() as KanbanTask;
+    expect(body.status).toBe('in-progress');
+
+    expect(invokeGatewayToolMock).not.toHaveBeenCalledWith('sessions_history', expect.anything());
+    expect(gatewayRpcMock).toHaveBeenCalledWith('sessions.list', {
+      activeMinutes: 7 * 24 * 60,
+      limit: 200,
+    });
+
+    const taskRes = await app.request('/api/kanban/tasks');
+    const tasks = await taskRes.json() as { items: KanbanTask[] };
+    const completed = tasks.items.find((item) => item.id === task.id);
+    expect(completed?.status).toBe('in-progress');
+    expect(completed?.result).toBeUndefined();
+
+    const proposalsRes = await app.request('/api/kanban/proposals');
+    const proposals = await proposalsRes.json() as { proposals: Array<{ payload: Record<string, unknown> }> };
+    expect(proposals.proposals.find((proposal) => proposal.payload.title === 'direct follow-up')).toBeUndefined();
+  });
+
   it('fails fast when an assigned normal-path root session is missing', async () => {
     const invokeGatewayToolMock = vi.fn(async () => ({ sessionKey: 'agent:main:subagent:unexpected' }));
     const launchMock = vi.fn(async ({ label, parentSessionKey }: { label: string; parentSessionKey: string }) => ({
@@ -3109,7 +3178,7 @@ describe('POST /api/kanban/tasks/:id/complete — run key integrity', () => {
       key: childSessionKey,
       limit: 3,
       includeTools: true,
-    });
+    }, 3_000);
 
     const tasksRes = await app.request('/api/kanban/tasks');
     const tasks = await tasksRes.json() as { items: KanbanTask[] };
