@@ -444,7 +444,7 @@ describe('SessionContext', () => {
     expect(rpcMock).not.toHaveBeenCalledWith('sessions.list', expect.objectContaining({ activeMinutes: expect.any(Number) }));
   });
 
-  it('deletes every loaded session and resets the current session to blank', async () => {
+  it('deletes every loaded session except the protected main root and resets the current session to blank', async () => {
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'sessions.list') {
         return {
@@ -476,9 +476,9 @@ describe('SessionContext', () => {
       expect(screen.getByTestId('current-session').textContent).toBe('');
     });
 
-    expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:main', deleteTranscript: true });
     expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:designer:main', deleteTranscript: true });
     expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:cron:daily-digest', deleteTranscript: true });
+    expect(rpcMock).not.toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:main', deleteTranscript: true });
   });
 
   it('auto-compacts the current session once when context usage crosses 90 percent', async () => {

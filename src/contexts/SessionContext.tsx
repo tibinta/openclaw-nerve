@@ -10,6 +10,8 @@ import { buildSessionTree } from '@/features/sessions/sessionTree';
 import {
   buildAgentRootSessionKey,
   getAgentRegistrationName,
+  LEGACY_MAIN_SESSION_KEY,
+  PRIMARY_AGENT_SESSION_KEY,
   getRootAgentSessionKey,
   getSessionDisplayLabel,
   getTopLevelAgentSessions,
@@ -82,6 +84,10 @@ function isSessionActivelyBusy(session: Session | undefined, granularBusy: boole
     || session.processing === true
     || SESSION_BUSY_STATES.has(state)
     || SESSION_BUSY_STATES.has(agentState);
+}
+
+function isProtectedRootSessionKey(sessionKey: string): boolean {
+  return sessionKey === PRIMARY_AGENT_SESSION_KEY || sessionKey === LEGACY_MAIN_SESSION_KEY;
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
@@ -793,6 +799,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const deleteSession = useCallback(async (sessionKey: string) => {
+    if (isProtectedRootSessionKey(sessionKey)) {
+      return;
+    }
+
     const authoritativeSessions = await listAuthoritativeSessions();
     const descendants = findDescendantSessionKeys(sessionKey, authoritativeSessions);
     const keysToDelete = [...descendants, sessionKey];
@@ -821,6 +831,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const authoritativeSessions = await listAuthoritativeSessions();
     const keysToDelete = authoritativeSessions
       .map((session) => getSessionKey(session))
+      .filter((sessionKey): sessionKey is string => Boolean(sessionKey))
+      .filter((sessionKey) => !isProtectedRootSessionKey(sessionKey))
       .sort((a, b) => {
         const depthDiff = b.split(':').length - a.split(':').length;
         return depthDiff !== 0 ? depthDiff : a.localeCompare(b);
