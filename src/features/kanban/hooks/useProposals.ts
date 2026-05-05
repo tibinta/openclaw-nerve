@@ -25,11 +25,17 @@ export function useProposals() {
   const [proposals, setProposals] = useState<KanbanProposal[]>([]);
   const [loading, setLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
+  const refreshInFlightRef = useRef(false);
 
   const fetchProposals = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
-    abortRef.current?.abort();
+    if (silent && refreshInFlightRef.current) return;
+
+    if (!silent) {
+      abortRef.current?.abort();
+    }
     const controller = new AbortController();
     abortRef.current = controller;
+    refreshInFlightRef.current = true;
 
     if (!silent) setLoading(true);
     try {
@@ -41,6 +47,8 @@ export function useProposals() {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       // Silent errors on polls
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      refreshInFlightRef.current = false;
       if (!silent) setLoading(false);
     }
   }, []);
@@ -48,7 +56,10 @@ export function useProposals() {
   /* Initial fetch + poll every 5s */
   useEffect(() => {
     fetchProposals();
-    const id = setInterval(() => fetchProposals({ silent: true }), 5_000);
+    const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void fetchProposals({ silent: true });
+    }, 15_000);
     return () => {
       clearInterval(id);
       abortRef.current?.abort();

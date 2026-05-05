@@ -109,6 +109,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const toolSeenRef = useRef<Map<string, number>>(new Map());
   const doneTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const delayedRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshSessionsInFlightRef = useRef(false);
 
   // Derive busyState from agentStatus for backward compatibility
   const busyState = useMemo(() => {
@@ -491,6 +492,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const refreshSessions = useCallback(async () => {
     if (connectionState !== 'connected') return;
+    if (refreshSessionsInFlightRef.current) return;
+    refreshSessionsInFlightRef.current = true;
     try {
       const newSessions = await listAuthoritativeSessions();
       const nextCurrentSession = pickDefaultSessionKey(newSessions, currentSessionRef.current);
@@ -544,6 +547,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.debug('[SessionContext] Failed to refresh sessions:', err);
     } finally {
+      refreshSessionsInFlightRef.current = false;
       setSessionsLoading(false);
     }
   }, [connectionState, listAuthoritativeSessions, setCurrentSession]);
@@ -777,7 +781,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (connectionState !== 'connected') return;
     refreshSessions();
     // Polling is now just a fallback for catching missed updates
-    const iv = setInterval(() => refreshSessions(), 30000);
+    const iv = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void refreshSessions();
+    }, 60000);
     return () => clearInterval(iv);
   }, [connectionState, refreshSessions]);
 

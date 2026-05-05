@@ -84,9 +84,12 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
   }, [onEvent]);
 
   const rpcRef = useRef(rpc);
+  const statusRefreshInFlightRef = useRef(false);
   useEffect(() => { rpcRef.current = rpc; }, [rpc]);
 
   const updateStatus = useCallback(async () => {
+    if (statusRefreshInFlightRef.current) return;
+    statusRefreshInFlightRef.current = true;
     const currentRpc = rpcRef.current;
     try {
       const h = await currentRpc('status', {}) as Record<string, unknown>;
@@ -120,6 +123,8 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       setThinking(resolvedThinking);
     } catch (err) {
       console.debug('[GatewayContext] Failed to poll status:', err);
+    } finally {
+      statusRefreshInFlightRef.current = false;
     }
 
     // Update activity sparkline
@@ -136,7 +141,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     if (connectionState !== 'connected') return;
     updateStatus();
     const iv = setInterval(() => {
-      if (isVisibleRef.current) updateStatus();
+      if (isVisibleRef.current) void updateStatus();
     }, 10000);
     return () => clearInterval(iv);
   }, [connectionState, updateStatus]);

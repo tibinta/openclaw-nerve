@@ -99,6 +99,37 @@ interface ChatContextValue {
 
 const ChatContext = createContext<ChatContextValue | null>(null);
 
+function makeReplayKey(msg: ChatMsg): string {
+  if (msg.msgId) return `id:${msg.msgId}`;
+
+  const imageKey = (msg.extractedImages || []).map((img) => img.url).sort().join('|');
+  const toolKey = (msg.toolGroup || []).map((entry) => `${entry.preview}:${entry.rawText}`).join('|');
+  return [
+    `role:${msg.role}`,
+    `raw:${msg.rawText.trim().replace(/\s+/g, ' ')}`,
+    `html:${msg.html.trim().replace(/\s+/g, ' ')}`,
+    `thinking:${Boolean(msg.isThinking)}`,
+    `intermediate:${Boolean(msg.intermediate)}`,
+    `images:${imageKey}`,
+    `tools:${toolKey}`,
+    `ts:${Math.floor(msg.timestamp.getTime() / 1000)}`,
+  ].join('::');
+}
+
+function dedupeReplayMessages(messages: ChatMsg[]): ChatMsg[] {
+  const seen = new Set<string>();
+  const deduped: ChatMsg[] = [];
+
+  for (const msg of messages) {
+    const key = makeReplayKey(msg);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(msg);
+  }
+
+  return deduped;
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { connectionState, rpc, subscribe } = useGateway();
   const { currentSession, sessions } = useSessionContext();
@@ -206,6 +237,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!isSubagentActive || connectionState !== 'connected') return;
 
     const pollInterval = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       if (subagentPollInFlightRef.current) return;
       subagentPollInFlightRef.current = true;
       try {
@@ -219,11 +251,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           result[result.length - 1]?.rawText === prev[prev.length - 1]?.rawText &&
           result[result.length - 1]?.role === prev[prev.length - 1]?.role
         ) return;
-        msgHook.applyMessageWindow(result, false);
+        msgHook.applyMessageWindow(dedupeReplayMessages(result), false);
       } catch { /* best-effort */ } finally {
         subagentPollInFlightRef.current = false;
       }
-    }, 3000);
+    }, 10000);
 
     return () => {
       clearInterval(pollInterval);
@@ -350,7 +382,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               if (capturedSession !== currentSessionRef.current) return;
               if (capturedGeneration !== recoveryHook.getGeneration()) return;
               if (recovered.length > 0) {
-                const merged = mergeRecoveredTail(msgHook.getAllMessages(), recovered);
+                const merged = dedupeReplayMessages(mergeRecoveredTail(msgHook.getAllMessages(), recovered));
                 msgHook.applyMessageWindow(merged, false);
               }
             } catch { /* best-effort */ }
@@ -449,7 +481,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const finalMessages = processChatMessages(extractFinalMessages(cp));
 
         if (finalMessages.length > 0) {
-          const merged = mergeFinalMessages(msgHook.getAllMessages(), finalMessages);
+          const merged = dedupeReplayMessages(mergeFinalMessages(msgHook.getAllMessages(), finalMessages));
           const thinkingDuration = streamHook.getThinkingDuration(runId);
           const withDuration = thinkingDuration
             ? patchThinkingDuration(merged, thinkingDuration)

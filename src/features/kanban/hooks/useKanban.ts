@@ -111,6 +111,7 @@ export function useKanban() {
   const [boardConfig, setBoardConfig] = useState<BoardConfig | null>(null);
   const [archivedTasks, setArchivedTasks] = useState<KanbanTask[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const refreshInFlightRef = useRef(false);
 
   /* ── Fetch board config (columns are user-configurable) ── */
   useEffect(() => {
@@ -129,9 +130,15 @@ export function useKanban() {
   /* ── Fetch ── */
 
   const fetchTasks = useCallback(async (f?: KanbanFilters, { silent = false }: { silent?: boolean } = {}) => {
-    abortRef.current?.abort();
+    if (silent && refreshInFlightRef.current) return;
+
+    if (!silent) {
+      abortRef.current?.abort();
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
+    refreshInFlightRef.current = true;
 
     // Only show loading skeleton on first load or explicit filter changes, not background polls
     if (!silent) {
@@ -151,6 +158,8 @@ export function useKanban() {
       // Only surface errors on explicit fetches, not silent polls
       if (!silent) setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      refreshInFlightRef.current = false;
       if (!silent) setLoading(false);
     }
   }, [filters]);
@@ -171,7 +180,10 @@ export function useKanban() {
 
   /* Auto-refresh every 5s so board stays current (silent — no loading flash) */
   useEffect(() => {
-    const id = setInterval(() => fetchTasks(undefined, { silent: true }), 5_000);
+    const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void fetchTasks(undefined, { silent: true });
+    }, 15_000);
     return () => clearInterval(id);
   }, [fetchTasks]);
 
@@ -243,6 +255,9 @@ export function useKanban() {
   const setTasksOptimistic = useCallback((updater: (prev: KanbanTask[]) => KanbanTask[]) => {
     setTasks(updater);
   }, []);
+
+  /** Root tasks power the board lanes; subtasks stay attached to their parent folder. */
+  const rootTasks = useMemo(() => tasks.filter((task) => !task.parentTaskId), [tasks]);
 
   const deleteTask = useCallback(async (id: string): Promise<void> => {
     const res = await fetch(`/api/kanban/tasks/${encodeURIComponent(id)}`, {
@@ -342,14 +357,14 @@ export function useKanban() {
   /* ── Helpers ── */
   const tasksByStatusMap = useMemo(() => {
     const map = new Map<TaskStatus, KanbanTask[]>();
-    for (const t of tasks) {
+    for (const t of rootTasks) {
       let list = map.get(t.status);
       if (!list) { list = []; map.set(t.status, list); }
       list.push(t);
     }
     for (const list of map.values()) list.sort((a, b) => a.columnOrder - b.columnOrder);
     return map;
-  }, [tasks]);
+  }, [rootTasks]);
 
   const tasksByStatus = useCallback((status: TaskStatus): KanbanTask[] => {
     return tasksByStatusMap.get(status) ?? [];
@@ -357,12 +372,13 @@ export function useKanban() {
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const t of tasks) counts[t.status] = (counts[t.status] || 0) + 1;
+    for (const t of rootTasks) counts[t.status] = (counts[t.status] || 0) + 1;
     return counts;
-  }, [tasks]);
+  }, [rootTasks]);
 
   return {
     tasks,
+    rootTasks,
     setTasks,
     total,
     loading,
