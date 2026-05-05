@@ -46,18 +46,18 @@ interface UseChatTTSDeps {
 }
 
 export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
-  const lastMessageWasVoiceRef = useRef(false);
+  const voiceReplyPendingRef = useRef(false);
   const playedSoundsRef = useRef<Set<string>>(new Set());
 
   /** Track whether the user sent a voice message (for TTS fallback). */
   const trackVoiceMessage = useCallback((text: string) => {
-    lastMessageWasVoiceRef.current = text.startsWith('[voice] ');
+    voiceReplyPendingRef.current = text.startsWith('[voice] ');
   }, []);
 
   /** Clear the played-sounds dedup set (called on chat_started). */
   const resetPlayedSounds = useCallback(() => {
     playedSoundsRef.current.clear();
-    lastMessageWasVoiceRef.current = false;
+    voiceReplyPendingRef.current = false;
   }, []);
 
   /**
@@ -65,15 +65,20 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
    * Called from chat_final processing when the run is the active run.
    */
   const handleFinalTTS = useCallback((finalData: FinalMessageData | null, isActiveRun: boolean) => {
-    if (!isActiveRun) return;
+    if (!isActiveRun && !voiceReplyPendingRef.current) return;
 
     if (finalData?.ttsText && !playedSoundsRef.current.has(finalData.ttsText)) {
       playedSoundsRef.current.add(finalData.ttsText);
       speak.current(finalData.ttsText);
-    } else if (!finalData?.ttsText && lastMessageWasVoiceRef.current && finalData?.text) {
-      // Voice fallback: agent forgot [tts:...] marker — auto-speak cleaned response
-      const fallback = buildVoiceFallbackText(finalData.text);
+      voiceReplyPendingRef.current = false;
+    } else if (!finalData?.ttsText && voiceReplyPendingRef.current) {
+      // Voice fallback: agent forgot [tts:...] marker — auto-speak a cleaned response,
+      // and fall back to the raw text if sanitizing strips it too aggressively.
+      const fallback = finalData?.text
+        ? buildVoiceFallbackText(finalData.text) ?? finalData.text.trim()
+        : '';
       if (fallback) speak.current(fallback);
+      voiceReplyPendingRef.current = false;
     } else if (soundEnabled.current) {
       playPing();
     }
