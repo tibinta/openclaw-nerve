@@ -39,6 +39,10 @@ import {
   launchKanbanFallbackSubagentViaRpc,
 } from '../lib/kanban-subagent-fallback.js';
 import {
+  classifySessionAuditBlocker,
+  type SessionAuditObservation,
+} from '../lib/session-audit.js';
+import {
   validateSwarmDispatchInput,
   type SwarmDispatchPacketInput,
 } from '../lib/swarm-registry.js';
@@ -132,6 +136,10 @@ interface GatewaySessionSummary {
   agentState?: string;
   busy?: boolean;
   processing?: boolean;
+  updatedAt?: number;
+  lastActivity?: number | string;
+  pinned?: boolean;
+  waiting?: boolean;
 }
 
 interface KanbanRunIdentity {
@@ -234,6 +242,16 @@ function getSessionKey(session: GatewaySessionSummary): string | null {
   if (typeof session.sessionKey === 'string' && session.sessionKey.trim()) return session.sessionKey;
   if (typeof session.key === 'string' && session.key.trim()) return session.key;
   return null;
+}
+
+function getSessionAuditUpdatedAt(session: GatewaySessionSummary, fallback: number): number {
+  if (typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt)) return session.updatedAt;
+  if (typeof session.lastActivity === 'number' && Number.isFinite(session.lastActivity)) return session.lastActivity;
+  if (typeof session.lastActivity === 'string') {
+    const parsed = Number(session.lastActivity);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
 }
 
 function isFallbackChildSession(sessionKey: string, parentSessionKey: string): boolean {
@@ -340,6 +358,11 @@ function pollSessionCompletion(
   maxAttempts = 720, // 60 minutes max
 ): void {
   let attempts = 0;
+  const auditHistory: SessionAuditObservation[] = [];
+
+  const recordObservation = (observation: SessionAuditObservation): void => {
+    auditHistory.push(observation);
+  };
 
   const poll = async () => {
     attempts++;
@@ -359,6 +382,7 @@ function pollSessionCompletion(
       ) {
         return;
       }
+      const runStartedAt = task.run?.startedAt ?? Date.now();
 
       const raw = await invokeGatewayTool('subagents', { action: 'list', recentMinutes: 120 });
       const parsed = parseGatewayResponse(raw);
@@ -368,6 +392,18 @@ function pollSessionCompletion(
 
       const match = findGatewayRunMatch(all, identity);
       if (!match) {
+        recordObservation({
+          sessionKey: identity.childSessionKey ?? identity.correlationKey,
+          source: 'poll',
+          updatedAt: runStartedAt,
+          status: 'waiting',
+          detail: 'subagent entry not yet visible',
+        });
+        const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+        if (blocker) {
+          await store.completeRun(taskId, identity.correlationKey, undefined, blocker.message).catch(() => {});
+          return;
+        }
         trackTimeout(poll, intervalMs);
         return;
       }
@@ -377,9 +413,27 @@ function pollSessionCompletion(
         ? match.childSessionKey
         : typeof match.sessionKey === 'string'
           ? match.sessionKey
-          : typeof match.sessionId === 'string'
-            ? match.sessionId
-            : identity.childSessionKey;
+        : typeof match.sessionId === 'string'
+          ? match.sessionId
+          : identity.childSessionKey;
+
+      recordObservation({
+        sessionKey: identity.childSessionKey ?? identity.correlationKey,
+        source: 'gateway',
+        updatedAt: getSessionAuditUpdatedAt(match as GatewaySessionSummary, runStartedAt),
+        status,
+        error: match.error as string | undefined,
+        pinned: Boolean((match as Record<string, unknown>).pinned),
+        waiting: Boolean((match as Record<string, unknown>).waiting),
+        childSessionKey,
+        runId: identity.runId,
+      });
+
+      const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+      if (blocker) {
+        await store.completeRun(taskId, identity.correlationKey, undefined, blocker.message).catch(() => {});
+        return;
+      }
 
       if (status === 'done') {
         let resultText = 'Completed (no result text)';
@@ -433,6 +487,19 @@ function pollSessionCompletion(
 
       trackTimeout(poll, intervalMs);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      recordObservation({
+        sessionKey: identity.childSessionKey ?? identity.correlationKey,
+        source: 'poll',
+        updatedAt: Date.now(),
+        status: 'error',
+        error: message,
+      });
+      const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+      if (blocker) {
+        await store.completeRun(taskId, identity.correlationKey, undefined, blocker.message).catch(() => {});
+        return;
+      }
       console.error(`[kanban] Poll error for task ${taskId}:`, err);
       trackTimeout(poll, intervalMs);
     }
@@ -450,6 +517,11 @@ function pollFallbackSessionCompletion(
   maxAttempts = 720,
 ): void {
   let attempts = 0;
+  const auditHistory: SessionAuditObservation[] = [];
+
+  const recordObservation = (observation: SessionAuditObservation): void => {
+    auditHistory.push(observation);
+  };
 
   const poll = async () => {
     attempts++;
@@ -469,6 +541,7 @@ function pollFallbackSessionCompletion(
       ) {
         return;
       }
+      const runStartedAt = task.run?.startedAt ?? Date.now();
 
       const sessionsResponse = await gatewayRpcCall('sessions.list', {
         activeMinutes: POLL_SESSIONS_ACTIVE_MINUTES,
@@ -494,17 +567,98 @@ function pollFallbackSessionCompletion(
       }
 
       if (!activeSessionKey) {
+        recordObservation({
+          sessionKey: identity.correlationKey,
+          source: 'poll',
+          updatedAt: runStartedAt,
+          status: 'waiting',
+          detail: 'fallback child not yet visible',
+        });
+        const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+        if (blocker) {
+          const failedTask = await store.completeRun(taskId, identity.correlationKey, undefined, blocker.message).catch(() => null);
+          if (failedTask) {
+            try {
+              await reportKanbanChildCompletionToParent({
+                task: failedTask,
+                parentSessionKey: identity.parentSessionKey,
+                childSessionKey: identity.childSessionKey ?? identity.correlationKey,
+                outcome: 'failed',
+                error: blocker.message,
+              });
+            } catch (err) {
+              console.warn(`[kanban] Failed to report child failure back to ${identity.parentSessionKey}:`, err);
+            }
+          }
+          return;
+        }
         trackTimeout(poll, intervalMs);
         return;
       }
 
       const session = sessions.find((candidate) => getSessionKey(candidate) === activeSessionKey);
       if (!session) {
+        recordObservation({
+          sessionKey: identity.correlationKey,
+          source: 'gateway',
+          updatedAt: runStartedAt,
+          status: 'waiting',
+          childSessionKey: activeSessionKey,
+        });
+        const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+        if (blocker) {
+          const failedTask = await store.completeRun(taskId, identity.correlationKey, undefined, blocker.message).catch(() => null);
+          if (failedTask) {
+            try {
+              await reportKanbanChildCompletionToParent({
+                task: failedTask,
+                parentSessionKey: identity.parentSessionKey,
+                childSessionKey: activeSessionKey,
+                outcome: 'failed',
+                error: blocker.message,
+              });
+            } catch (err) {
+              console.warn(`[kanban] Failed to report child failure back to ${identity.parentSessionKey}:`, err);
+            }
+          }
+          return;
+        }
         trackTimeout(poll, intervalMs);
         return;
       }
 
       const status = session.status;
+      recordObservation({
+        sessionKey: identity.correlationKey,
+        source: 'gateway',
+        updatedAt: getSessionAuditUpdatedAt(session, runStartedAt),
+        status,
+        error: session.error,
+        pinned: Boolean(session.pinned),
+        waiting: Boolean(session.waiting),
+        childSessionKey: activeSessionKey,
+        runId: identity.runId,
+      });
+
+      const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+      if (blocker) {
+        const failedTask = await store.completeRun(taskId, identity.correlationKey, undefined, blocker.message).catch(() => null);
+        if (failedTask) {
+          try {
+            await reportKanbanChildCompletionToParent({
+              task: failedTask,
+              parentSessionKey: identity.parentSessionKey,
+              childSessionKey: activeSessionKey,
+              outcome: 'failed',
+              error: blocker.message,
+            });
+          } catch (err) {
+            console.warn(`[kanban] Failed to report child failure back to ${identity.parentSessionKey}:`, err);
+          }
+        }
+        return;
+      }
+
       if (status === 'error' || status === 'failed') {
         const errorMsg = session.error || 'Session failed';
         const failedTask = await store.completeRun(taskId, identity.correlationKey, undefined, errorMsg).catch(() => null);
@@ -583,6 +737,32 @@ function pollFallbackSessionCompletion(
 
       trackTimeout(poll, intervalMs);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      recordObservation({
+        sessionKey: identity.correlationKey,
+        source: 'poll',
+        updatedAt: Date.now(),
+        status: 'error',
+        error: message,
+      });
+      const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+      if (blocker) {
+        const failedTask = await store.completeRun(taskId, identity.correlationKey, undefined, blocker.message).catch(() => null);
+        if (failedTask) {
+          try {
+            await reportKanbanChildCompletionToParent({
+              task: failedTask,
+              parentSessionKey: identity.parentSessionKey,
+              childSessionKey: identity.childSessionKey ?? identity.correlationKey,
+              outcome: 'failed',
+              error: blocker.message,
+            });
+          } catch (reportErr) {
+            console.warn(`[kanban] Failed to report child failure back to ${identity.parentSessionKey}:`, reportErr);
+          }
+        }
+        return;
+      }
       console.error(`[kanban] Poll error for task ${taskId}:`, err);
       trackTimeout(poll, intervalMs);
     }

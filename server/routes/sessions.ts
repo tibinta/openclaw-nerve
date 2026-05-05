@@ -18,6 +18,7 @@ import { access, readdir, readFile } from 'node:fs/promises';
 import { config } from '../lib/config.js';
 import { rateLimitGeneral } from '../middleware/rate-limit.js';
 import { spawnSubagent } from '../lib/subagent-spawn.js';
+import { aggregateSessionAudit, type SessionAuditObservation } from '../lib/session-audit.js';
 
 const app = new Hono();
 const CRON_SESSION_RE = /^agent:[^:]+:cron:[^:]+(?::run:.+)?$/;
@@ -32,9 +33,13 @@ interface StoredSessionSummary {
   thinkingLevel?: string;
   totalTokens?: number;
   contextTokens?: number;
+  status?: string;
+  error?: string;
+  pinned?: boolean;
+  waiting?: boolean;
 }
 
-interface TranscriptImageContentBlock {
+interface TranscriptMediaContentBlock {
   type?: string;
   data?: string;
   mimeType?: string;
@@ -121,10 +126,10 @@ async function readModelFromTranscript(filePath: string): Promise<string | null>
   });
 }
 
-async function readImageBlockFromTranscript(
+async function readMediaBlockFromTranscript(
   filePath: string,
   messageTimestamp: number,
-  imageIndex: number,
+  mediaIndex: number,
 ): Promise<{ buffer: Buffer; mimeType: string; filename: string } | null> {
   return new Promise((resolve) => {
     const stream = createReadStream(filePath, { encoding: 'utf-8' });
@@ -144,15 +149,15 @@ async function readImageBlockFromTranscript(
       try {
         const entry = JSON.parse(line) as {
           type?: string;
-          message?: { timestamp?: number; content?: TranscriptImageContentBlock[] | unknown };
+          message?: { timestamp?: number; content?: TranscriptMediaContentBlock[] | unknown };
         };
         if (entry.type !== 'message') return;
         if ((entry.message?.timestamp ?? null) !== messageTimestamp) return;
         const content = Array.isArray(entry.message?.content)
-          ? entry.message.content as TranscriptImageContentBlock[]
+          ? entry.message.content as TranscriptMediaContentBlock[]
           : [];
-        const imageBlocks = content.filter((block) => block?.type === 'image');
-        const target = imageBlocks[imageIndex];
+        const mediaBlocks = content.filter((block) => ['image', 'audio', 'video', 'file'].includes(block?.type || ''));
+        const target = mediaBlocks[mediaIndex];
         if (!target) return done(null);
         const base64 = target.data || target.source?.data;
         const mimeType = target.mimeType || target.source?.media_type || 'application/octet-stream';
@@ -161,11 +166,19 @@ async function readImageBlockFromTranscript(
           : mimeType === 'image/png' ? '.png'
           : mimeType === 'image/gif' ? '.gif'
           : mimeType === 'image/webp' ? '.webp'
+          : mimeType === 'audio/mpeg' ? '.mp3'
+          : mimeType === 'audio/wav' ? '.wav'
+          : mimeType === 'audio/ogg' ? '.ogg'
+          : mimeType === 'video/mp4' ? '.mp4'
+          : mimeType === 'video/webm' ? '.webm'
+          : mimeType === 'application/pdf' ? '.pdf'
+          : mimeType === 'text/plain' ? '.txt'
           : '';
+        const kind = target.type || 'media';
         return done({
           buffer: Buffer.from(base64, 'base64'),
           mimeType,
-          filename: `message-${messageTimestamp}-image-${imageIndex}${ext}`,
+          filename: `message-${messageTimestamp}-${kind}-${mediaIndex}${ext}`,
         });
       } catch {
         // skip malformed lines
@@ -182,9 +195,9 @@ app.get('/api/sessions/media', rateLimitGeneral, async (c) => {
   const timestampRaw = c.req.query('timestamp') || '';
   const imageIndexRaw = c.req.query('imageIndex') || '0';
   const messageTimestamp = Number(timestampRaw);
-  const imageIndex = Number(imageIndexRaw);
+  const mediaIndex = Number(imageIndexRaw);
 
-  if (!sessionKey || !Number.isFinite(messageTimestamp) || !Number.isInteger(imageIndex) || imageIndex < 0) {
+  if (!sessionKey || !Number.isFinite(messageTimestamp) || !Number.isInteger(mediaIndex) || mediaIndex < 0) {
     return c.json({ ok: false, error: 'Invalid media lookup params' }, 400);
   }
 
@@ -194,8 +207,8 @@ app.get('/api/sessions/media', rateLimitGeneral, async (c) => {
     if (!sessionId) return c.json({ ok: false, error: 'Unknown session key' }, 404);
     const transcriptPath = await findTranscript(sessionId);
     if (!transcriptPath) return c.json({ ok: false, error: 'Transcript not found' }, 404);
-    const media = await readImageBlockFromTranscript(transcriptPath, messageTimestamp, imageIndex);
-    if (!media) return c.json({ ok: false, error: 'Image not found' }, 404);
+    const media = await readMediaBlockFromTranscript(transcriptPath, messageTimestamp, mediaIndex);
+    if (!media) return c.json({ ok: false, error: 'Media not found' }, 404);
     return new Response(media.buffer, {
       headers: {
         'Content-Type': media.mimeType,
@@ -224,6 +237,8 @@ app.get('/api/sessions/hidden', rateLimitGeneral, async (c) => {
 
   try {
     const store = await loadSessionStore();
+    const auditNow = Date.now();
+    const auditObservations: SessionAuditObservation[] = [];
 
     const sessions = Object.entries(store)
       .filter(([sessionKey, session]) => {
@@ -237,22 +252,84 @@ app.get('/api/sessions/hidden', rateLimitGeneral, async (c) => {
         return updatedB - updatedA;
       })
       .slice(0, limit)
-      .map(([sessionKey, session]) => ({
-        key: sessionKey,
-        sessionKey,
-        id: session?.sessionId,
-        label: session?.label,
-        displayName: session?.displayName || session?.label,
-        updatedAt: session?.updatedAt,
-        model: session?.model,
-        thinking: session?.thinking,
-        thinkingLevel: session?.thinkingLevel,
-        totalTokens: session?.totalTokens,
-        contextTokens: session?.contextTokens,
-        parentId: inferParentSessionKey(sessionKey),
-      }));
+      .map(([sessionKey, session]) => {
+        const updatedAt = typeof session?.updatedAt === 'number' ? session.updatedAt : 0;
+        const baseObservation: SessionAuditObservation = {
+          sessionKey,
+          source: 'store',
+          updatedAt,
+          label: session?.label,
+          displayName: session?.displayName || session?.label,
+          status: session?.status,
+          error: session?.error,
+          pinned: Boolean((session as Record<string, unknown> | undefined)?.pinned),
+          waiting: String(session?.status ?? '').toLowerCase() === 'waiting',
+          sessionId: session?.sessionId,
+        };
+        auditObservations.push(baseObservation);
 
-    return c.json({ ok: true, sessions });
+        return (async () => {
+          const transcriptPath = session?.sessionId ? await findTranscript(session.sessionId) : null;
+          if (transcriptPath) {
+            const modelId = await readModelFromTranscript(transcriptPath);
+            auditObservations.push({
+              sessionKey,
+              source: 'transcript',
+              updatedAt: updatedAt + 1,
+              label: session?.label,
+              displayName: session?.displayName || session?.label,
+              status: session?.status || (modelId ? 'done' : undefined),
+              detail: modelId ? `model=${modelId}` : 'transcript present',
+              pinned: Boolean((session as Record<string, unknown> | undefined)?.pinned),
+              waiting: String(session?.status ?? '').toLowerCase() === 'waiting',
+              sessionId: session?.sessionId,
+            });
+          }
+
+          return {
+            key: sessionKey,
+            sessionKey,
+            id: session?.sessionId,
+            label: session?.label,
+            displayName: session?.displayName || session?.label,
+            updatedAt: session?.updatedAt,
+            model: session?.model,
+            thinking: session?.thinking,
+            thinkingLevel: session?.thinkingLevel,
+            totalTokens: session?.totalTokens,
+            contextTokens: session?.contextTokens,
+            parentId: inferParentSessionKey(sessionKey),
+          };
+        })();
+      });
+
+    const resolvedSessions = await Promise.all(sessions);
+    const audits = aggregateSessionAudit(auditObservations, { now: auditNow });
+    const auditByKey = new Map(audits.map((audit) => [audit.sessionKey, audit] as const));
+    const enrichedSessions = resolvedSessions.map((session) => {
+      const audit = auditByKey.get(session.sessionKey);
+      if (!audit) return session;
+      return {
+        ...session,
+        sources: audit.sources.map((source) => ({
+          source: source.source,
+          updatedAt: source.updatedAt,
+          label: source.label,
+          displayName: source.displayName,
+          status: source.status,
+          error: source.error,
+          detail: source.detail,
+          pinned: source.pinned,
+          waiting: source.waiting,
+          sessionId: source.sessionId,
+          childSessionKey: source.childSessionKey,
+          runId: source.runId,
+        })),
+        blocker: audit.blocker,
+      };
+    });
+
+    return c.json({ ok: true, sessions: enrichedSessions });
   } catch (err) {
     const errCode = (err as NodeJS.ErrnoException).code;
     const isRemote = errCode === 'ENOENT';

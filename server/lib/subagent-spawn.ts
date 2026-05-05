@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { gatewayRpcCall } from './gateway-rpc.js';
+import { classifySessionAuditBlocker, type SessionAuditObservation } from './session-audit.js';
 
 export type SubagentCleanupMode = 'keep' | 'delete';
 
@@ -19,6 +20,8 @@ export interface SpawnSubagentParams {
   model?: string;
   thinking?: string;
   cleanup?: SubagentCleanupMode;
+  workerLane?: string;
+  checkerLane?: string;
 }
 
 export interface SpawnSubagentResult {
@@ -38,6 +41,10 @@ interface GatewaySessionSummary {
   runId?: string;
   currentRunId?: string;
   latestRunId?: string;
+  updatedAt?: number;
+  lastActivity?: number | string;
+  pinned?: boolean;
+  waiting?: boolean;
 }
 
 interface LaunchMessage {
@@ -89,6 +96,33 @@ function isRootChildSession(sessionKey: string, parentSessionKey: string): boole
   return sessionKey.startsWith(`agent:${parentMatch[1]}:subagent:`);
 }
 
+function ensureDistinctWorkerAndCheckerLanes(params: { workerLane?: string; checkerLane?: string }): void {
+  if (!params.workerLane || !params.checkerLane) return;
+  if (params.workerLane === params.checkerLane) {
+    throw new Error(`workerLane and checkerLane must be different: ${params.workerLane}`);
+  }
+}
+
+function buildSpawnPayload(params: {
+  key: string;
+  parentSessionKey: string;
+  label?: string;
+  model?: string;
+  workerLane?: string;
+  checkerLane?: string;
+}): Record<string, unknown> {
+  ensureDistinctWorkerAndCheckerLanes(params);
+  return {
+    key: params.key,
+    parentSessionKey: params.parentSessionKey,
+    context: 'isolated',
+    workerLane: params.workerLane ?? 'fast-worker',
+    checkerLane: params.checkerLane ?? 'ledger',
+    ...(params.label ? { label: params.label } : {}),
+    ...(params.model ? { model: params.model } : {}),
+  };
+}
+
 function buildRequestedChildSessionKey(parentSessionKey: string): string {
   const match = parentSessionKey.match(/^agent:([^:]+):main$/);
   if (!match) {
@@ -125,6 +159,16 @@ function isTerminalSuccess(session: GatewaySessionSummary): boolean {
 function sessionMentionsRunId(session: GatewaySessionSummary, runId?: string): boolean {
   if (!runId) return false;
   return [session.runId, session.currentRunId, session.latestRunId].some((value) => value === runId);
+}
+
+function getSessionAuditUpdatedAt(session: GatewaySessionSummary, fallback: number): number {
+  if (typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt)) return session.updatedAt;
+  if (typeof session.lastActivity === 'number' && Number.isFinite(session.lastActivity)) return session.lastActivity;
+  if (typeof session.lastActivity === 'string') {
+    const parsed = Number(session.lastActivity);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
 }
 
 function getMessageTimestamp(message: LaunchMessage): number | undefined {
@@ -312,6 +356,11 @@ function startCompletionMonitor(params: {
 
   let attempts = 0;
   let observedRunStart = false;
+  const auditHistory: SessionAuditObservation[] = [];
+
+  const recordObservation = (observation: SessionAuditObservation): void => {
+    auditHistory.push(observation);
+  };
 
   const finish = async (outcome: 'completed' | 'failed', details: { result?: string; error?: string }) => {
     activeMonitors.delete(params.childSessionKey);
@@ -358,7 +407,36 @@ function startCompletionMonitor(params: {
       const session = sessions.find((candidate) => getSessionKey(candidate) === params.childSessionKey);
 
       if (!session) {
+        recordObservation({
+          sessionKey: params.childSessionKey,
+          source: 'poll',
+          updatedAt: params.launchTimestamp,
+          status: 'waiting',
+          detail: 'child session not yet visible',
+        });
+        const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+        if (blocker) {
+          await finish('failed', { error: blocker.message });
+          return;
+        }
         schedule(() => { void poll(); }, MONITOR_POLL_INTERVAL_MS);
+        return;
+      }
+
+      recordObservation({
+        sessionKey: params.childSessionKey,
+        source: 'gateway',
+        updatedAt: getSessionAuditUpdatedAt(session, params.launchTimestamp),
+        status: session.status,
+        error: session.error,
+        pinned: session.pinned,
+        waiting: session.waiting,
+        runId: params.runId,
+      });
+
+      const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+      if (blocker) {
+        await finish('failed', { error: blocker.message });
         return;
       }
 
@@ -400,6 +478,19 @@ function startCompletionMonitor(params: {
         result: extracted.resultText ?? 'Completed (no result text)',
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      recordObservation({
+        sessionKey: params.childSessionKey,
+        source: 'poll',
+        updatedAt: Date.now(),
+        status: 'error',
+        error: message,
+      });
+      const blocker = classifySessionAuditBlocker(auditHistory, { now: Date.now() });
+      if (blocker) {
+        await finish('failed', { error: blocker.message });
+        return;
+      }
       console.warn(`[subagent-spawn] Poll error for ${params.childSessionKey}:`, error);
       schedule(() => { void poll(); }, MONITOR_POLL_INTERVAL_MS);
     }
@@ -414,12 +505,10 @@ async function launchDirect(params: SpawnSubagentParams): Promise<SpawnSubagentR
   }
 
   const requestedKey = buildRequestedChildSessionKey(params.parentSessionKey);
-  const createResponse = await gatewayRpcCall('sessions.create', {
+  const createResponse = await gatewayRpcCall('sessions.create', buildSpawnPayload({
+    ...params,
     key: requestedKey,
-    parentSessionKey: params.parentSessionKey,
-    ...(params.label ? { label: params.label } : {}),
-    ...(params.model ? { model: params.model } : {}),
-  }) as { key?: string; sessionKey?: string };
+  })) as { key?: string; sessionKey?: string };
 
   const sessionKey = typeof createResponse.key === 'string' && createResponse.key.trim()
     ? createResponse.key

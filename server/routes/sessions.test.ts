@@ -65,6 +65,49 @@ describe('sessions routes', () => {
     expect(json.missing).toBe(true);
   });
 
+  it('aggregates hidden session sources from the store and transcript within the audit window', async () => {
+    const app = await buildApp();
+    const sessionKey = 'agent:reviewer:cron:daily:run:abc123';
+    const sessionId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const updatedAt = Date.now();
+
+    await fs.writeFile(path.join(tmpDir, 'sessions.json'), JSON.stringify({
+      [sessionKey]: {
+        sessionId,
+        label: 'daily summary',
+        displayName: 'daily summary',
+        updatedAt,
+        model: 'openai/gpt-4.1',
+        thinking: 'medium',
+        thinkingLevel: 'medium',
+      },
+    }));
+    await fs.writeFile(path.join(tmpDir, `${sessionId}.jsonl`), [
+      JSON.stringify({ type: 'session_start', ts: updatedAt - 10_000 }),
+      JSON.stringify({ type: 'model_change', modelId: 'openai/gpt-4.1', ts: updatedAt - 5_000 }),
+    ].join('\n'));
+
+    const res = await app.request('/api/sessions/hidden?activeMinutes=180&limit=10');
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { ok?: boolean; sessions?: Array<Record<string, unknown>> };
+    expect(json.ok).toBe(true);
+    expect(json.sessions).toHaveLength(1);
+    expect(json.sessions?.[0]).toMatchObject({
+      key: sessionKey,
+      sessionKey,
+      id: sessionId,
+      label: 'daily summary',
+      displayName: 'daily summary',
+      model: 'openai/gpt-4.1',
+    });
+    expect(Array.isArray(json.sessions?.[0]?.sources)).toBe(true);
+    expect((json.sessions?.[0]?.sources as Array<Record<string, unknown>>).map((source) => source.source)).toEqual([
+      'transcript',
+      'store',
+    ]);
+    expect(json.sessions?.[0]?.blocker).toBeNull();
+  });
+
   it('returns model from transcript with model_change entry', async () => {
     const app = await buildApp();
     const uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -144,6 +187,70 @@ describe('sessions routes', () => {
     expect(res.headers.get('content-disposition')).toContain(`message-${timestamp}-image-0.png`);
     const body = Buffer.from(await res.arrayBuffer()).toString('utf-8');
     expect(body).toBe('hello-image');
+  });
+
+  it('serves omitted audio bytes from a session transcript', async () => {
+    const app = await buildApp();
+    const sessionKey = 'agent:main:main';
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const timestamp = 1775131617236;
+    const base64 = Buffer.from('hello-audio').toString('base64');
+
+    await fs.writeFile(path.join(tmpDir, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionId },
+    }));
+    await fs.writeFile(path.join(tmpDir, `${sessionId}.jsonl`), [
+      JSON.stringify({ type: 'session_start', ts: Date.now() }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          timestamp,
+          content: [
+            { type: 'text', text: 'testing' },
+            { type: 'audio', mimeType: 'audio/mpeg', data: base64 },
+          ],
+        },
+      }),
+    ].join('\n'));
+
+    const res = await app.request(`/api/sessions/media?sessionKey=${encodeURIComponent(sessionKey)}&timestamp=${timestamp}&imageIndex=0`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('audio/mpeg');
+    expect(res.headers.get('content-disposition')).toContain(`message-${timestamp}-audio-0.mp3`);
+    const body = Buffer.from(await res.arrayBuffer()).toString('utf-8');
+    expect(body).toBe('hello-audio');
+  });
+
+  it('serves omitted file bytes from a session transcript', async () => {
+    const app = await buildApp();
+    const sessionKey = 'agent:main:main';
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const timestamp = 1775131617237;
+    const base64 = Buffer.from('hello-file').toString('base64');
+
+    await fs.writeFile(path.join(tmpDir, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionId },
+    }));
+    await fs.writeFile(path.join(tmpDir, `${sessionId}.jsonl`), [
+      JSON.stringify({ type: 'session_start', ts: Date.now() }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          timestamp,
+          content: [
+            { type: 'text', text: 'testing' },
+            { type: 'file', mimeType: 'application/pdf', data: base64 },
+          ],
+        },
+      }),
+    ].join('\n'));
+
+    const res = await app.request(`/api/sessions/media?sessionKey=${encodeURIComponent(sessionKey)}&timestamp=${timestamp}&imageIndex=0`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/pdf');
+    expect(res.headers.get('content-disposition')).toContain(`message-${timestamp}-file-0.pdf`);
+    const body = Buffer.from(await res.arrayBuffer()).toString('utf-8');
+    expect(body).toBe('hello-file');
   });
 
   it('returns 404 when session transcript media cannot be resolved', async () => {

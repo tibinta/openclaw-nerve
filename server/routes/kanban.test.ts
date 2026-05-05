@@ -3125,6 +3125,39 @@ describe('POST /api/kanban/tasks/:id/complete — run key integrity', () => {
     expect(proposals.proposals.find((proposal) => proposal.payload.title === 'proposal from child session')).toBeDefined();
   });
 
+  it('stops primary polling after repeated identical gateway list failures', async () => {
+    const invokeGatewayToolMock = vi.fn(async (tool: string) => {
+      if (tool === 'sessions_spawn') {
+        return {
+          childSessionKey: 'agent:reviewer:subagent:primary-child',
+          runId: 'run-primary',
+        };
+      }
+      if (tool === 'subagents') {
+        throw new Error('subagents unavailable');
+      }
+      return {};
+    });
+
+    const app = await buildApp({ invokeGatewayToolMock, executionMode: 'primary' });
+    const task = await createTask(app, { status: 'todo', title: 'Primary failure task', assignee: 'operator' });
+
+    const execRes = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
+    expect(execRes.status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 8_500));
+
+    const listCalls = invokeGatewayToolMock.mock.calls.filter(([tool]) => tool === 'subagents');
+    expect(listCalls).toHaveLength(2);
+
+    const taskRes = await app.request(`/api/kanban/tasks/${task.id}`);
+    expect(taskRes.status).toBe(200);
+    const latest = await taskRes.json() as KanbanTask;
+    expect(latest.status).toBe('todo');
+    expect(latest.run?.status).toBe('error');
+    expect(latest.run?.error).toContain('subagents unavailable');
+  }, 15_000);
+
   it('treats terminal failed child sessions as errors even when they are idle', async () => {
     let runKey = '';
     const childSessionKey = 'agent:reviewer:subagent:failed-child';
