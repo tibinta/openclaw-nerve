@@ -112,4 +112,20 @@ describe('SessionList live tree', () => {
     expect(screen.queryByText('Jane Registry')).not.toBeInTheDocument();
     expect(screen.getByText(/Working · 5m ago/i)).toBeInTheDocument();
   });
+
+  it('groups heartbeat-suffixed family rows and suppresses duplicate fallback roots', () => {
+    const sessions: Session[] = [
+      { sessionKey: 'agent:henry:main:heartbeat', label: 'heartbeat', status: 'running', totalTokens: 420, updatedAt: Date.now() - 2_000 },
+      { sessionKey: 'agent:henry:subagent:abc:heartbeat', label: 'Evidence audit', status: 'running', totalTokens: 84, updatedAt: Date.now() - 1_000, parentId: 'agent:henry:main' },
+    ];
+    const agents: GatewayAgentRegistration[] = [
+      { id: 'henry', name: 'Henry Registry' },
+    ];
+
+    renderSessionList({ sessions, agents });
+
+    expect(screen.getByText('Agent henry')).toBeInTheDocument();
+    expect(screen.getByText('Evidence audit')).toBeInTheDocument();
+    expect(screen.queryByText('Henry Registry')).not.toBeInTheDocument();
+  });
 });

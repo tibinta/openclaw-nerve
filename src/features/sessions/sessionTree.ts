@@ -2,8 +2,8 @@ import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 import {
   getSessionType,
+  normalizeSessionKey,
   isTopLevelAgentSessionKey,
-  resolveParentSessionKey,
 } from './sessionKeys';
 
 export interface TreeNode {
@@ -22,49 +22,79 @@ export function isAgentSidebarRootSessionKey(sessionKey: string): boolean {
   return isTopLevelAgentSessionKey(sessionKey);
 }
 
-function buildParentMap(sessions: Session[]): Map<string, string | null> {
-  const keyMap = new Map<string, Session>();
+function getSessionSortTime(session: Session | undefined): number {
+  if (!session) return 0;
+  const candidates = [session.updatedAt, session.lastActivity];
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = new Date(value).getTime();
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return 0;
+}
+
+function pickRepresentativeSession(familyKey: string, members: Session[]): Session {
+  const exact = members.find((session) => getSessionKey(session) === familyKey);
+  if (exact) return exact;
+
+  return members.reduce((best, candidate) => (
+    getSessionSortTime(candidate) > getSessionSortTime(best) ? candidate : best
+  ));
+}
+
+function buildFamilyRepresentatives(sessions: Session[]): Map<string, Session> {
+  const families = new Map<string, Session[]>();
   for (const session of sessions) {
-    keyMap.set(getSessionKey(session), session);
+    const familyKey = normalizeSessionKey(getSessionKey(session));
+    const list = families.get(familyKey);
+    if (list) {
+      list.push(session);
+    } else {
+      families.set(familyKey, [session]);
+    }
   }
 
-  const knownKeys = new Set(keyMap.keys());
+  const representatives = new Map<string, Session>();
+  for (const [familyKey, members] of families) {
+    representatives.set(familyKey, pickRepresentativeSession(familyKey, members));
+  }
+  return representatives;
+}
+
+function buildParentMap(representatives: Map<string, Session>): Map<string, string | null> {
   const parentMap = new Map<string, string | null>();
-  for (const session of sessions) {
-    const sessionKey = getSessionKey(session);
-    parentMap.set(sessionKey, resolveParentSessionKey(session, knownKeys));
+  for (const [familyKey, session] of representatives) {
+    const inferredParentFamily = (() => {
+      const cronRunMatch = familyKey.match(/^(.+:cron:[^:]+):run:.+$/);
+      if (cronRunMatch) return cronRunMatch[1];
+
+      const subagentMatch = familyKey.match(/^((?:agent:[^:]+)):subagent:.+$/);
+      if (subagentMatch) return `${subagentMatch[1]}:main`;
+
+      const cronMatch = familyKey.match(/^((?:agent:[^:]+)):cron:[^:]+$/);
+      if (cronMatch) return `${cronMatch[1]}:main`;
+
+      const directMatch = familyKey.match(/^((?:agent:[^:]+))(?::[^:]+)*:direct:.+$/);
+      if (directMatch) return `${directMatch[1]}:main`;
+
+      const channelMatch = familyKey.match(/^((?:agent:[^:]+))(?::[^:]+)*:channel:.+$/);
+      if (channelMatch) return `${channelMatch[1]}:main`;
+
+      return null;
+    })();
+
+    if (!inferredParentFamily) {
+      parentMap.set(getSessionKey(session), null);
+      continue;
+    }
+
+    const parentRepresentative = representatives.get(inferredParentFamily);
+    parentMap.set(getSessionKey(session), parentRepresentative ? getSessionKey(parentRepresentative) : null);
   }
 
   return parentMap;
-}
-
-function hasAgentSidebarEligibleLineage(
-  sessionKey: string,
-  parentMap: Map<string, string | null>,
-  memo: Map<string, boolean>,
-  visiting = new Set<string>(),
-): boolean {
-  if (memo.has(sessionKey)) return memo.get(sessionKey) ?? false;
-  if (visiting.has(sessionKey)) return false;
-
-  visiting.add(sessionKey);
-
-  const parentKey = parentMap.get(sessionKey) ?? null;
-  const result = parentKey === null
-    ? isAgentSidebarRootSessionKey(sessionKey)
-    : parentMap.has(parentKey) && hasAgentSidebarEligibleLineage(parentKey, parentMap, memo, visiting);
-
-  visiting.delete(sessionKey);
-  memo.set(sessionKey, result);
-  return result;
-}
-
-function filterAgentSidebarSessions(
-  sessions: Session[],
-  parentMap: Map<string, string | null>,
-): Session[] {
-  const memo = new Map<string, boolean>();
-  return sessions.filter((session) => hasAgentSidebarEligibleLineage(getSessionKey(session), parentMap, memo));
 }
 
 function buildTreeNodes(
@@ -88,18 +118,6 @@ function buildTreeNodes(
   }
 
   const typeOrder = { main: 0, subagent: 1, cron: 2, 'cron-run': 3 };
-  const getSessionSortTime = (session: Session | undefined): number => {
-    if (!session) return 0;
-    const candidates = [session.updatedAt, session.lastActivity];
-    for (const value of candidates) {
-      if (typeof value === 'number' && Number.isFinite(value)) return value;
-      if (typeof value === 'string') {
-        const parsed = new Date(value).getTime();
-        if (Number.isFinite(parsed)) return parsed;
-      }
-    }
-    return 0;
-  };
   const familySortTimeMemo = new Map<string, number>();
   const familySortTimeStack = new Set<string>();
 
@@ -180,15 +198,14 @@ function buildTreeNodes(
  * Returns an array of root-level TreeNodes (usually just one).
  */
 export function buildSessionTree(sessions: Session[]): TreeNode[] {
-  const parentMap = buildParentMap(sessions);
-  return buildTreeNodes(sessions, parentMap);
+  const representatives = buildFamilyRepresentatives(sessions);
+  const parentMap = buildParentMap(representatives);
+  return buildTreeNodes([...representatives.values()], parentMap);
 }
 
 /** Build the AGENTS sidebar tree, limited to real agent roots and their descendants. */
 export function buildAgentSidebarTree(sessions: Session[]): TreeNode[] {
-  const parentMap = buildParentMap(sessions);
-  const eligibleSessions = filterAgentSidebarSessions(sessions, parentMap);
-  return buildTreeNodes(eligibleSessions, parentMap);
+  return buildSessionTree(sessions).filter((node) => isAgentSidebarRootSessionKey(node.key));
 }
 
 /** Flatten a tree into an ordered list, respecting collapsed state. */

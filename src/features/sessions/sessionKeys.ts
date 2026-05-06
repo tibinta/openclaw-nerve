@@ -3,6 +3,7 @@ import { getSessionKey } from '@/types';
 
 export const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
 export const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
+const HEARTBEAT_SUFFIX = ':heartbeat';
 
 const ROOT_AGENT_RE = /^agent:([^:]+):main$/;
 const SUBAGENT_RE = /^((?:agent:[^:]+)):subagent:.+$/;
@@ -22,46 +23,59 @@ function slugifyPart(value: string): string {
   return slug || 'agent';
 }
 
+/** Strip transient heartbeat suffixes so tree/grouping logic sees the stable session family. */
+export function normalizeSessionKey(sessionKey: string): string {
+  return sessionKey.endsWith(HEARTBEAT_SUFFIX)
+    ? sessionKey.slice(0, -HEARTBEAT_SUFFIX.length)
+    : sessionKey;
+}
+
+function isHeartbeatLabel(value?: string): boolean {
+  return value?.trim().toLowerCase() === 'heartbeat';
+}
+
 export function getSessionType(sessionKey: string): SessionType {
-  if (CRON_RUN_RE.test(sessionKey)) return 'cron-run';
-  if (CRON_RE.test(sessionKey)) return 'cron';
-  if (SUBAGENT_RE.test(sessionKey)) return 'subagent';
+  const normalized = normalizeSessionKey(sessionKey);
+  if (CRON_RUN_RE.test(normalized)) return 'cron-run';
+  if (CRON_RE.test(normalized)) return 'cron';
+  if (SUBAGENT_RE.test(normalized)) return 'subagent';
   return 'main';
 }
 
 export function isTopLevelAgentSessionKey(sessionKey: string): boolean {
-  return ROOT_AGENT_RE.test(sessionKey);
+  return ROOT_AGENT_RE.test(normalizeSessionKey(sessionKey));
 }
 
 export function isSubagentSessionKey(sessionKey: string): boolean {
-  return SUBAGENT_RE.test(sessionKey);
+  return SUBAGENT_RE.test(normalizeSessionKey(sessionKey));
 }
 
 export function isCronSessionKey(sessionKey: string): boolean {
-  return CRON_RE.test(sessionKey);
+  return CRON_RE.test(normalizeSessionKey(sessionKey));
 }
 
 export function isCronRunSessionKey(sessionKey: string): boolean {
-  return CRON_RUN_RE.test(sessionKey);
+  return CRON_RUN_RE.test(normalizeSessionKey(sessionKey));
 }
 
 export function getRootAgentId(sessionKey: string): string | null {
-  const rootMatch = sessionKey.match(ROOT_AGENT_RE);
+  const normalized = normalizeSessionKey(sessionKey);
+  const rootMatch = normalized.match(ROOT_AGENT_RE);
   if (rootMatch) return rootMatch[1];
 
-  const subagentMatch = sessionKey.match(SUBAGENT_RE);
+  const subagentMatch = normalized.match(SUBAGENT_RE);
   if (subagentMatch) return subagentMatch[1].split(':')[1] ?? null;
 
-  const cronMatch = sessionKey.match(CRON_RE);
+  const cronMatch = normalized.match(CRON_RE);
   if (cronMatch) return cronMatch[1].split(':')[1] ?? null;
 
-  const cronRunMatch = sessionKey.match(/^((?:agent:[^:]+)):cron:[^:]+:run:.+$/);
+  const cronRunMatch = normalized.match(/^((?:agent:[^:]+)):cron:[^:]+:run:.+$/);
   if (cronRunMatch) return cronRunMatch[1].split(':')[1] ?? null;
 
-  const directMatch = sessionKey.match(DIRECT_RE);
+  const directMatch = normalized.match(DIRECT_RE);
   if (directMatch) return directMatch[1].split(':')[1] ?? null;
 
-  const channelMatch = sessionKey.match(CHANNEL_RE);
+  const channelMatch = normalized.match(CHANNEL_RE);
   if (channelMatch) return channelMatch[1].split(':')[1] ?? null;
 
   return null;
@@ -73,19 +87,20 @@ export function getRootAgentSessionKey(sessionKey: string): string | null {
 }
 
 export function inferParentSessionKey(sessionKey: string): string | null {
-  const cronRunMatch = sessionKey.match(CRON_RUN_RE);
+  const normalized = normalizeSessionKey(sessionKey);
+  const cronRunMatch = normalized.match(CRON_RUN_RE);
   if (cronRunMatch) return cronRunMatch[1];
 
-  const subagentMatch = sessionKey.match(SUBAGENT_RE);
+  const subagentMatch = normalized.match(SUBAGENT_RE);
   if (subagentMatch) return `${subagentMatch[1]}:main`;
 
-  const cronMatch = sessionKey.match(CRON_RE);
+  const cronMatch = normalized.match(CRON_RE);
   if (cronMatch) return `${cronMatch[1]}:main`;
 
-  const directMatch = sessionKey.match(DIRECT_RE);
+  const directMatch = normalized.match(DIRECT_RE);
   if (directMatch) return `${directMatch[1]}:main`;
 
-  const channelMatch = sessionKey.match(CHANNEL_RE);
+  const channelMatch = normalized.match(CHANNEL_RE);
   if (channelMatch) return `${channelMatch[1]}:main`;
 
   return null;
@@ -101,68 +116,111 @@ export function resolveParentSessionKey(session: Session, knownKeys?: Set<string
 
   const inferred = inferParentSessionKey(sessionKey);
   if (!inferred) return null;
-  if (!knownKeys || knownKeys.has(inferred)) return inferred;
+  if (!knownKeys) return inferred;
+  if (knownKeys.has(inferred)) return inferred;
+
+  const normalized = normalizeSessionKey(inferred);
+  for (const candidate of knownKeys) {
+    if (normalizeSessionKey(candidate) === normalized) return candidate;
+  }
   return null;
 }
 
 export function isSessionDescendantOf(sessionKey: string, ancestorKey: string): boolean {
-  let current = inferParentSessionKey(sessionKey);
+  let current = inferParentSessionKey(normalizeSessionKey(sessionKey));
+  const normalizedAncestor = normalizeSessionKey(ancestorKey);
   while (current) {
-    if (current === ancestorKey) return true;
+    if (normalizeSessionKey(current) === normalizedAncestor) return true;
     current = inferParentSessionKey(current);
   }
   return false;
 }
 
 export function isRootChildSession(sessionKey: string, rootSessionKey: string): boolean {
-  return getRootAgentSessionKey(sessionKey) === rootSessionKey && sessionKey !== rootSessionKey;
+  return getRootAgentSessionKey(sessionKey) === normalizeSessionKey(rootSessionKey) && normalizeSessionKey(sessionKey) !== normalizeSessionKey(rootSessionKey);
 }
 
 export function getTopLevelAgentSessions(sessions: Session[]): Session[] {
-  return sessions
-    .filter((session) => isTopLevelAgentSessionKey(getSessionKey(session)))
-    .sort((a, b) => {
-      const keyA = getSessionKey(a);
-      const keyB = getSessionKey(b);
-      if (keyA === PRIMARY_AGENT_SESSION_KEY) return -1;
-      if (keyB === PRIMARY_AGENT_SESSION_KEY) return 1;
-      if (keyA === LEGACY_MAIN_SESSION_KEY) return -1;
-      if (keyB === LEGACY_MAIN_SESSION_KEY) return 1;
+  const families = new Map<string, Session>();
+  const sortTime = (session: Session): number => {
+    const candidates = [session.updatedAt, session.lastActivity];
+    for (const value of candidates) {
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (typeof value === 'string') {
+        const parsed = new Date(value).getTime();
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return 0;
+  };
 
-      const labelA = (a.displayName || a.label || keyA).toLowerCase();
-      const labelB = (b.displayName || b.label || keyB).toLowerCase();
-      return labelA.localeCompare(labelB);
-    });
+  for (const session of sessions) {
+    const sessionKey = getSessionKey(session);
+    if (!isTopLevelAgentSessionKey(sessionKey)) continue;
+
+    const familyKey = normalizeSessionKey(sessionKey);
+    const current = families.get(familyKey);
+    if (!current) {
+      families.set(familyKey, session);
+      continue;
+    }
+
+    const currentKey = getSessionKey(current);
+    const isExactCanonical = currentKey === familyKey;
+    const nextIsExactCanonical = sessionKey === familyKey;
+    if (isExactCanonical !== nextIsExactCanonical) {
+      if (nextIsExactCanonical) families.set(familyKey, session);
+      continue;
+    }
+
+    if (sortTime(session) > sortTime(current)) {
+      families.set(familyKey, session);
+    }
+  }
+
+  return [...families.values()].sort((a, b) => {
+    const keyA = getSessionKey(a);
+    const keyB = getSessionKey(b);
+    if (keyA === PRIMARY_AGENT_SESSION_KEY) return -1;
+    if (keyB === PRIMARY_AGENT_SESSION_KEY) return 1;
+    if (keyA === LEGACY_MAIN_SESSION_KEY) return -1;
+    if (keyB === LEGACY_MAIN_SESSION_KEY) return 1;
+
+    const labelA = getSessionDisplayLabel(a).toLowerCase();
+    const labelB = getSessionDisplayLabel(b).toLowerCase();
+    return labelA.localeCompare(labelB);
+  });
 }
 
 export function getSessionDisplayLabel(session: Session, agentName = 'Agent'): string {
   const sessionKey = getSessionKey(session);
+  const normalizedKey = normalizeSessionKey(sessionKey);
 
-  if (sessionKey === PRIMARY_AGENT_SESSION_KEY || sessionKey === LEGACY_MAIN_SESSION_KEY) {
+  if (normalizedKey === PRIMARY_AGENT_SESSION_KEY || normalizedKey === LEGACY_MAIN_SESSION_KEY) {
     return `${agentName} (main)`;
   }
 
-  if (session.label?.trim()) return session.label.trim();
-  if (session.displayName?.trim()) return session.displayName.trim();
+  if (session.label?.trim() && !isHeartbeatLabel(session.label)) return session.label.trim();
+  if (session.displayName?.trim() && !isHeartbeatLabel(session.displayName)) return session.displayName.trim();
 
-  if (isTopLevelAgentSessionKey(sessionKey)) {
-    const rootId = getRootAgentId(sessionKey);
+  if (isTopLevelAgentSessionKey(normalizedKey)) {
+    const rootId = getRootAgentId(normalizedKey);
     if (rootId) return `Agent ${rootId}`;
   }
 
-  if (isCronSessionKey(sessionKey)) {
-    return `Cron ${sessionKey.split(':')[3]?.slice(0, 8) || ''}`.trim();
+  if (isCronSessionKey(normalizedKey)) {
+    return `Cron ${normalizedKey.split(':')[3]?.slice(0, 8) || ''}`.trim();
   }
 
-  if (isCronRunSessionKey(sessionKey)) {
-    return `Run ${sessionKey.split(':').pop()?.slice(0, 8) || ''}`.trim();
+  if (isCronRunSessionKey(normalizedKey)) {
+    return `Run ${normalizedKey.split(':').pop()?.slice(0, 8) || ''}`.trim();
   }
 
-  if (isSubagentSessionKey(sessionKey)) {
-    return `Subagent ${sessionKey.split(':').pop()?.slice(0, 8) || ''}`.trim();
+  if (isSubagentSessionKey(normalizedKey)) {
+    return `Subagent ${normalizedKey.split(':').pop()?.slice(0, 8) || ''}`.trim();
   }
 
-  return sessionKey.split(':').pop() || sessionKey;
+  return normalizedKey.split(':').pop() || normalizedKey;
 }
 
 export function pickDefaultSessionKey(sessions: Session[], preferredKey?: string): string {

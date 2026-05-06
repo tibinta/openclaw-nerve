@@ -4,7 +4,7 @@ import { getSessionKey } from '@/types';
 import type { SpawnSessionOpts, GatewayAgentRegistration } from '@/contexts/SessionContext';
 import { SessionSkeletonGroup } from '@/components/skeletons';
 import { buildSessionTree, flattenTree, getSessionType, type TreeNode } from './sessionTree';
-import { getSessionDisplayLabel, isTopLevelAgentSessionKey } from './sessionKeys';
+import { getSessionDisplayLabel, isTopLevelAgentSessionKey, normalizeSessionKey } from './sessionKeys';
 import { SessionNode } from './SessionNode';
 import type { GranularAgentState } from '@/types';
 import {
@@ -121,7 +121,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
 
   const prevPercentsRef = useRef<Record<string, number>>({});
   const prevTokensRef = useRef<Record<string, number>>({});
-  const liveSessionKeys = useMemo(() => new Set(sessions.map((session) => getSessionKey(session))), [sessions]);
+  const liveSessionKeys = useMemo(() => new Set(sessions.map((session) => normalizeSessionKey(getSessionKey(session)))), [sessions]);
 
   // Calculate which sessions are growing (compare to previous render via ref)
   const growingSessions = useMemo(() => {
@@ -156,7 +156,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     if (!id || id === 'main') return [];
 
     const sessionKey = `agent:${id}:main`;
-    if (liveSessionKeys.has(sessionKey)) return [];
+    if (liveSessionKeys.has(normalizeSessionKey(sessionKey))) return [];
 
     return [{
       sessionKey,
@@ -194,7 +194,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     const label = getSessionDisplayLabel(node.session, agentName);
     const isGrowing = growingSessions[sessionKey] ?? false;
     const running = busyState[sessionKey] || node.session.state === 'running' || node.session.agentState === 'running' || node.session.busy || node.session.processing || node.session.status === 'running' || node.session.status === 'busy' || (isGrowing && isSubagent);
-    const isActive = sessionKey === currentSession;
+    const isActive = normalizeSessionKey(sessionKey) === normalizeSessionKey(currentSession);
     const currentTokens = node.session.totalTokens || 0;
     const prevTokens = prevTokensRef.current[sessionKey] || 0;
     const displayTokens = Math.max(currentTokens, prevTokens);

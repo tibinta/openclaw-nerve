@@ -149,6 +149,25 @@ describe('buildSessionTree', () => {
     ]);
   });
 
+  it('keeps heartbeat-suffixed agent families grouped under one root row', () => {
+    const sessions = [
+      session('agent:henry:main:heartbeat', { updatedAt: 1_000, label: 'heartbeat' }),
+      session('agent:henry:subagent:alpha:heartbeat', { updatedAt: 2_000, label: 'Alpha helper', parentId: 'agent:henry:main' }),
+      session('agent:henry:subagent:beta', { updatedAt: 1_500, label: 'Beta helper', parentId: 'agent:henry:main' }),
+    ];
+
+    const tree = buildSessionTree(sessions);
+    expect(flattenTree(tree, {}).map((node) => node.key)).toEqual([
+      'agent:henry:main:heartbeat',
+      'agent:henry:subagent:alpha:heartbeat',
+      'agent:henry:subagent:beta',
+    ]);
+    expect(tree[0].children.map((node) => node.key)).toEqual([
+      'agent:henry:subagent:alpha:heartbeat',
+      'agent:henry:subagent:beta',
+    ]);
+  });
+
   it('orders root families by the newest descendant and keeps each family contiguous', () => {
     const sessions = [
       session('agent:older:main', { updatedAt: 1_000 }),

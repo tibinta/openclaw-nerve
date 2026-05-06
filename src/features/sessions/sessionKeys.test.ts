@@ -85,6 +85,13 @@ describe('sessionKeys', () => {
     expect(pickDefaultSessionKey(sessions)).toBe('agent:main:main');
   });
 
+  it('treats heartbeat-suffixed roots as the same agent family', () => {
+    expect(isTopLevelAgentSessionKey('agent:reviewer:main:heartbeat')).toBe(true);
+    expect(getRootAgentId('agent:reviewer:main:heartbeat')).toBe('reviewer');
+    expect(inferParentSessionKey('agent:reviewer:subagent:child:heartbeat')).toBe('agent:reviewer:main');
+    expect(getSessionDisplayLabel(session('agent:reviewer:main:heartbeat', { label: 'heartbeat' }), 'Nerve')).toBe('Agent reviewer');
+  });
+
   it('prefers the Jane root before legacy main when both are present', () => {
     const sessions = [
       session('agent:main:main', { label: 'Main' }),
@@ -97,6 +104,18 @@ describe('sessionKeys', () => {
       'agent:reviewer:main',
     ]);
     expect(pickDefaultSessionKey(sessions)).toBe('agent:jane-whitmore---ceo:main');
+  });
+
+  it('deduplicates heartbeat aliases when choosing top-level agents', () => {
+    const sessions = [
+      session('agent:reviewer:main', { label: 'Reviewer' }),
+      session('agent:reviewer:main:heartbeat', { label: 'heartbeat', updatedAt: 2_000 }),
+      session('agent:reviewer:subagent:child', { label: 'Worker', updatedAt: 3_000 }),
+    ];
+
+    expect(getTopLevelAgentSessions(sessions).map(getSessionKey)).toEqual([
+      'agent:reviewer:main',
+    ]);
   });
 
   it('builds display labels from label, displayName, then root id', () => {
