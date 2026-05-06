@@ -51,9 +51,10 @@ describe('useConnectionManager', () => {
 
     expect(connectMock).toHaveBeenCalledWith('ws://127.0.0.1:18789/ws', '');
     expect(result.current.serverSideAuth).toBe(true);
+    expect(result.current.dialogOpen).toBe(false);
   });
 
-  it('shows the official gateway url in the UI even when a stale custom saved URL exists', async () => {
+  it('auto-connects to the official gateway url even when a stale custom saved URL exists', async () => {
     const { loadConfig } = await import('../contexts/GatewayContext');
     vi.mocked(loadConfig).mockReturnValue({ url: 'ws://custom.host:1234/ws', token: 'saved-token' });
 
@@ -69,12 +70,13 @@ describe('useConnectionManager', () => {
       expect(result.current.serverSideAuth).toBe(true);
     });
 
-    expect(connectMock).not.toHaveBeenCalled();
+    expect(connectMock).toHaveBeenCalledWith('ws://default:1234/ws', '');
     expect(result.current.editableUrl).toBe('ws://default:1234/ws');
     expect(result.current.editableToken).toBe('');
+    expect(result.current.dialogOpen).toBe(false);
   });
 
-  it('keeps a manually saved token when the official url changes but server-side auth is unavailable', async () => {
+  it('auto-connects with the saved token when the official url changes but server-side auth is unavailable', async () => {
     const { loadConfig } = await import('../contexts/GatewayContext');
     vi.mocked(loadConfig).mockReturnValue({ url: 'ws://custom.host:1234/ws', token: 'saved-token' });
 
@@ -90,9 +92,10 @@ describe('useConnectionManager', () => {
       expect(result.current.officialUrl).toBe('ws://default:1234/ws');
     });
 
-    expect(connectMock).not.toHaveBeenCalled();
+    expect(connectMock).toHaveBeenCalledWith('ws://default:1234/ws', 'saved-token');
     expect(result.current.editableUrl).toBe('ws://default:1234/ws');
     expect(result.current.editableToken).toBe('saved-token');
+    expect(result.current.dialogOpen).toBe(false);
   });
 
   it('auto-connects if saved URL matches official URL but token is missing (Managed Upgrade)', async () => {

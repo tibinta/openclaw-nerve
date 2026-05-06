@@ -46,10 +46,24 @@ async function fetchConnectDefaults(): Promise<{ wsUrl: string; token: string | 
   }
 }
 
+function isLoopbackGatewayUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'localhost'
+      || parsed.hostname === '127.0.0.1'
+      || parsed.hostname === '::1'
+      || parsed.hostname.startsWith('127.');
+  } catch {
+    return false;
+  }
+}
+
 export function useConnectionManager(): ConnectionManagerState {
   const { connectionState, connect, disconnect } = useGateway();
 
-  const [dialogOpen, setDialogOpen] = useState(true);
+  // Keep the cockpit connected automatically. The connect dialog is a
+  // recovery fallback, not the default user flow.
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   // Editable connection settings (local state for settings drawer)
   // Lazy initializers avoid re-parsing sessionStorage on every render
@@ -60,6 +74,34 @@ export function useConnectionManager(): ConnectionManagerState {
 
   // Track if we've attempted auto-connect to avoid re-running
   const autoConnectAttempted = useRef(false);
+  const autoConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoConnectAttemptRef = useRef(0);
+
+  const clearAutoConnectTimer = useCallback(() => {
+    if (autoConnectTimerRef.current) {
+      clearTimeout(autoConnectTimerRef.current);
+      autoConnectTimerRef.current = null;
+    }
+  }, []);
+
+  const tryAutoConnect = useCallback(async (url: string, token: string) => {
+    clearAutoConnectTimer();
+    try {
+      saveConfig(url, token);
+      await connect(url, token);
+      setDialogOpen(false);
+      autoConnectAttemptRef.current = 0;
+    } catch {
+      const attempt = ++autoConnectAttemptRef.current;
+      const delay = Math.min(
+        (isLoopbackGatewayUrl(url) ? 1000 : 3000) * Math.pow(1.5, attempt - 1),
+        isLoopbackGatewayUrl(url) ? 15_000 : 60_000,
+      );
+      autoConnectTimerRef.current = setTimeout(() => {
+        void tryAutoConnect(url, token);
+      }, delay);
+    }
+  }, [clearAutoConnectTimer, connect]);
 
   /** Connect to the gateway, save config, and close the dialog. */
   const handleConnect = useCallback(async (url: string, token: string) => {
@@ -73,20 +115,19 @@ export function useConnectionManager(): ConnectionManagerState {
     if (autoConnectAttempted.current) return;
     autoConnectAttempted.current = true;
 
-    const saved = loadConfig();
+      const saved = loadConfig();
 
-    // Always fetch defaults once on mount to establish serverSideAuth and officialUrl
-    fetchConnectDefaults().then((defaults) => {
-      const isServerSideAuth = defaults?.serverSideAuth ?? false;
-      setServerSideAuth(isServerSideAuth);
+      // Always fetch defaults once on mount to establish serverSideAuth and officialUrl
+      fetchConnectDefaults().then((defaults) => {
+        const isServerSideAuth = defaults?.serverSideAuth ?? false;
+        setServerSideAuth(isServerSideAuth);
 
-      const savedUrl = saved.url?.trim();
-      const officialWsUrl = defaults?.wsUrl?.trim();
-      const savedMatchesOfficial = areGatewayUrlsEquivalent(savedUrl, officialWsUrl);
+        const savedUrl = saved.url?.trim();
+        const officialWsUrl = defaults?.wsUrl?.trim();
 
-      if (officialWsUrl) {
-        setOfficialUrl(officialWsUrl);
-        // Treat the server-provided gateway as the authoritative default UI target.
+        if (officialWsUrl) {
+          setOfficialUrl(officialWsUrl);
+          // Treat the server-provided gateway as the authoritative default UI target.
         // This lets fresh installs and env-driven reconfiguration win over stale
         // browser storage, while still avoiding an automatic reconnect to a truly
         // different gateway unless the user explicitly confirms by connecting.
@@ -102,19 +143,18 @@ export function useConnectionManager(): ConnectionManagerState {
         setEditableToken('');
       }
 
-      // Auto-connect if server-side auth is supported and the saved gateway is
-      // either empty or the same official gateway under a loopback alias.
-      if (
-        isServerSideAuth &&
-        officialWsUrl &&
-        (!savedUrl || savedMatchesOfficial)
-      ) {
-        handleConnect(officialWsUrl, '').catch(() => {
-          // Auto-connect failed - user can manually connect via dialog
-        });
+      const targetUrl = officialWsUrl || savedUrl || DEFAULT_GATEWAY_WS;
+      const targetToken = isServerSideAuth && officialWsUrl
+        ? ''
+        : (saved.token?.trim() || defaults?.token?.trim() || '');
+
+      if (targetUrl) {
+        setDialogOpen(false);
+        void tryAutoConnect(targetUrl, targetToken);
       }
     });
-  }, [handleConnect]);
+    return () => clearAutoConnectTimer();
+  }, [clearAutoConnectTimer, tryAutoConnect]);
 
   const handleReconnect = useCallback(async () => {
     // Don't reconnect if already connecting
@@ -141,14 +181,14 @@ export function useConnectionManager(): ConnectionManagerState {
       // Small delay to ensure clean disconnect
       await new Promise(r => setTimeout(r, 100));
       try {
-        await connect(targetUrl, token);
+        await tryAutoConnect(targetUrl, token);
       } catch {
         // Connection failed - don't loop, just stay disconnected
       }
     } else {
-      setDialogOpen(true);
+      setDialogOpen(false);
     }
-  }, [connect, disconnect, editableUrl, editableToken, connectionState, serverSideAuth, officialUrl]);
+  }, [clearAutoConnectTimer, connectionState, disconnect, editableToken, editableUrl, officialUrl, serverSideAuth, tryAutoConnect]);
 
   return {
     dialogOpen,
