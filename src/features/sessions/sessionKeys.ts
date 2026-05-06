@@ -230,12 +230,30 @@ export function getSessionDisplayLabel(session: Session, agentName = 'Agent'): s
 }
 
 export function pickDefaultSessionKey(sessions: Session[], preferredKey?: string): string {
+  const janeDirectChatSession = findSessionByFamilyKey(sessions, JANE_DIRECT_CHAT_SESSION_KEY);
+
   if (preferredKey) {
     const preferred = findSessionByFamilyKey(sessions, preferredKey);
-    if (preferred) return getSessionKey(preferred);
+    if (preferred) {
+      const preferredRootId = getRootAgentId(preferredKey);
+      const janeDirectRootId = getRootAgentId(JANE_DIRECT_CHAT_SESSION_KEY);
+      if (
+        janeDirectChatSession &&
+        preferredRootId &&
+        janeDirectRootId &&
+        preferredRootId === janeDirectRootId
+      ) {
+        // Jane's direct iMessage thread is the operator-facing default.
+        // If the current selection is any other Jane-family session, switch
+        // back to the real direct thread so refreshes and sends stay on the
+        // phone-backed conversation instead of a stale sibling row.
+        return getSessionKey(janeDirectChatSession);
+      }
+
+      return getSessionKey(preferred);
+    }
   }
 
-  const janeDirectChatSession = findSessionByFamilyKey(sessions, JANE_DIRECT_CHAT_SESSION_KEY);
   if (janeDirectChatSession) {
     // Jane is the operator-facing default chat thread, so prefer it before
     // falling back to the broader agent root list.

@@ -117,6 +117,16 @@ describe('sessionKeys', () => {
     expect(pickDefaultSessionKey(sessions)).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
   });
 
+  it('returns Jane direct even when the preferred key is another Jane-family session', () => {
+    const sessions = [
+      session('agent:jane-whitmore---ceo:main', { label: 'Jane Whitmore' }),
+      session(JANE_DIRECT_CHAT_SESSION_KEY, { label: 'Jane Direct' }),
+      session('agent:reviewer:main', { label: 'Reviewer' }),
+    ];
+
+    expect(pickDefaultSessionKey(sessions, 'agent:jane-whitmore---ceo:main')).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
+  });
+
   it('deduplicates heartbeat aliases when choosing top-level agents', () => {
     const sessions = [
       session('agent:reviewer:main', { label: 'Reviewer' }),
