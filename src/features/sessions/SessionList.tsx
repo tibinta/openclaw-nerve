@@ -3,7 +3,7 @@ import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 import type { SpawnSessionOpts, GatewayAgentRegistration } from '@/contexts/SessionContext';
 import { SessionSkeletonGroup } from '@/components/skeletons';
-import { buildSessionTree, flattenTree, getSessionType, type TreeNode } from './sessionTree';
+import { buildAgentSidebarTree, flattenTree, getSessionType, type TreeNode } from './sessionTree';
 import { getSessionDisplayLabel, isTopLevelAgentSessionKey, normalizeSessionKey } from './sessionKeys';
 import { SessionNode } from './SessionNode';
 import type { GranularAgentState } from '@/types';
@@ -39,11 +39,11 @@ interface SessionListProps {
   compact?: boolean;
 }
 
-function countDescendants(node: ReturnType<typeof buildSessionTree>[number]): number {
+function countDescendants(node: TreeNode): number {
   return node.children.reduce((total, child) => total + 1 + countDescendants(child), 0);
 }
 
-function findNodeByKey(nodes: ReturnType<typeof buildSessionTree>, key: string): ReturnType<typeof buildSessionTree>[number] | null {
+function findNodeByKey(nodes: TreeNode[], key: string): TreeNode | null {
   const queue = [...nodes];
   while (queue.length > 0) {
     const node = queue.shift()!;
@@ -168,10 +168,10 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     } as Session];
   }), [agents, liveSessionKeys]);
 
-  // Build separate trees for live gateway sessions and configured fallbacks.
-  const liveTree = useMemo(() => buildSessionTree(sessions), [sessions]);
+  // The AGENTS panel is agent-first: keep only agent roots and their descendants.
+  const liveTree = useMemo(() => buildAgentSidebarTree(sessions), [sessions]);
   const liveFlatNodes = useMemo(() => flattenTree(liveTree, expandedState), [liveTree, expandedState]);
-  const fallbackTree = useMemo(() => buildSessionTree(configuredFallbackSessions), [configuredFallbackSessions]);
+  const fallbackTree = useMemo(() => buildAgentSidebarTree(configuredFallbackSessions), [configuredFallbackSessions]);
   const fallbackFlatNodes = useMemo(() => flattenTree(fallbackTree, expandedState), [fallbackTree, expandedState]);
 
   const handleSetDeleteTarget = useCallback((key: string, label: string) => {

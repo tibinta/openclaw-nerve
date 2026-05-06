@@ -24,15 +24,15 @@ function renderSessionList(props: Partial<React.ComponentProps<typeof SessionLis
 }
 
 describe('SessionList live tree', () => {
-  it('shows real live sessions instead of collapsing them into an empty state', () => {
+  it('shows real live agent roots instead of collapsing them into an empty state', () => {
     const sessions: Session[] = [
-      { sessionKey: 'discord:sean', label: 'Discord Root' },
-      { sessionKey: 'whatsapp:sean', label: 'WhatsApp Root' },
+      { sessionKey: 'agent:sean:main', label: 'Sean Root' },
+      { sessionKey: 'agent:whatsapp:main', label: 'WhatsApp Root' },
     ];
 
     renderSessionList({ sessions });
 
-    expect(screen.getByText('Discord Root')).toBeInTheDocument();
+    expect(screen.getByText('Sean Root')).toBeInTheDocument();
     expect(screen.getByText('WhatsApp Root')).toBeInTheDocument();
     expect(screen.queryByText('No active sessions')).not.toBeInTheDocument();
   });
@@ -127,5 +127,18 @@ describe('SessionList live tree', () => {
     expect(screen.getByText('Agent henry')).toBeInTheDocument();
     expect(screen.getByText('Evidence audit')).toBeInTheDocument();
     expect(screen.queryByText('Henry Registry')).not.toBeInTheDocument();
+  });
+
+  it('hides non-agent root sessions from the AGENTS panel', () => {
+    const sessions: Session[] = [
+      { sessionKey: 'discord:sean', label: 'Discord Root' },
+      { sessionKey: 'heartbeat-dispatch-2026-05-06', label: 'Dispatch Run' },
+    ];
+
+    renderSessionList({ sessions });
+
+    expect(screen.getByText('No active sessions')).toBeInTheDocument();
+    expect(screen.queryByText('Discord Root')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dispatch Run')).not.toBeInTheDocument();
   });
 });
