@@ -24,16 +24,24 @@ function renderSessionList(props: Partial<React.ComponentProps<typeof SessionLis
 }
 
 describe('SessionList live tree', () => {
-  it('shows real live agent roots instead of collapsing them into an empty state', () => {
+  it('shows real live agent families instead of collapsing them into an empty state', () => {
     const sessions: Session[] = [
-      { sessionKey: 'agent:sean:main', label: 'Sean Root' },
-      { sessionKey: 'agent:whatsapp:main', label: 'WhatsApp Root' },
+      { sessionKey: 'agent:sean:main', label: 'heartbeat', updatedAt: Date.now() - 1_000 },
+      { sessionKey: 'agent:sean:subagent:abc123', label: 'Worker', parentId: 'agent:sean:main', updatedAt: Date.now() },
+      { sessionKey: 'agent:whatsapp:main', label: 'heartbeat', updatedAt: Date.now() - 2_000 },
     ];
 
-    renderSessionList({ sessions });
+    renderSessionList({
+      sessions,
+      agents: [
+        { id: 'sean', identityName: 'Sean Root' },
+        { id: 'whatsapp', identityName: 'WhatsApp Root' },
+      ],
+    });
 
     expect(screen.getByText('Sean Root')).toBeInTheDocument();
     expect(screen.getByText('WhatsApp Root')).toBeInTheDocument();
+    expect(screen.getByText('Worker')).toBeInTheDocument();
     expect(screen.queryByText('No active sessions')).not.toBeInTheDocument();
   });
 
@@ -65,8 +73,8 @@ describe('SessionList live tree', () => {
 
     expect(screen.getByText('No active sessions')).toBeInTheDocument();
     expect(screen.getByText('Configured agents')).toBeInTheDocument();
-    expect(screen.getByText('Jane')).toBeInTheDocument();
-    expect(screen.getByText('Support')).toBeInTheDocument();
+    expect(screen.getAllByText('Jane')).toHaveLength(2);
+    expect(screen.getAllByText('Support')).toHaveLength(2);
   });
 
   it('opens a confirmation dialog for deleting all sessions without counting fallback rows', async () => {
@@ -74,7 +82,8 @@ describe('SessionList live tree', () => {
 
     renderSessionList({
       sessions: [
-        { sessionKey: 'agent:designer:main', label: 'Designer' },
+        { sessionKey: 'agent:designer:main', label: 'heartbeat', updatedAt: Date.now() - 2_000 },
+        { sessionKey: 'agent:designer:subagent:abc123', label: 'Designer worker', parentId: 'agent:designer:main', updatedAt: Date.now() - 1_000 },
         { sessionKey: 'heartbeat-dispatch-2026-05-06', label: 'Dispatch Run' },
       ],
       agents: [
@@ -88,10 +97,10 @@ describe('SessionList live tree', () => {
 
     expect(screen.getByText(/delete all sessions/i)).toBeInTheDocument();
     expect(screen.getByText(/delete every loaded session and transcript/i)).toBeInTheDocument();
-    expect(screen.getByTestId('loaded-session-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('loaded-session-count')).toHaveTextContent('3');
     expect(screen.getByText(/visible agent sessions/i)).toBeInTheDocument();
     expect(screen.getByText('Configured agents')).toBeInTheDocument();
-    expect(screen.getByText('Reviewer')).toBeInTheDocument();
+    expect(screen.getAllByText('Reviewer')).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('button', { name: /^delete all$/i }));
 
@@ -100,19 +109,21 @@ describe('SessionList live tree', () => {
     });
   });
 
-  it('uses the registry name for top-level agent roots and keeps the live session underneath', () => {
+  it('uses the registry name for the family row and keeps Jane direct as the child session', () => {
     const sessions: Session[] = [
-      { sessionKey: 'agent:jane:main', label: 'heartbeat-jane', displayName: 'Jane Live', lastActivity: Date.now() - 5 * 60_000, updatedAt: Date.now() - 5 * 60_000, state: 'running', processing: true },
+      { sessionKey: 'agent:jane-whitmore---ceo:main', label: 'heartbeat', lastActivity: Date.now() - 5 * 60_000, updatedAt: Date.now() - 5 * 60_000, state: 'running', processing: true },
+      { sessionKey: 'agent:jane-whitmore---ceo:imessage:direct:+447494722196', label: 'Jane Whitmore - CEO', lastActivity: Date.now() - 2 * 60_000, updatedAt: Date.now() - 2 * 60_000, state: 'idle' },
     ];
     const agents: GatewayAgentRegistration[] = [
-      { id: 'jane', name: 'Jane Registry' },
+      { id: 'jane-whitmore---ceo', name: 'Jane Registry' },
     ];
 
     renderSessionList({ sessions, agents });
 
     expect(screen.getByText('Jane Registry')).toBeInTheDocument();
-    expect(screen.queryByText('Jane Live')).not.toBeInTheDocument();
-    expect(screen.getByText(/Working · 5m ago/i)).toBeInTheDocument();
+    expect(screen.getByText('+447494722196')).toBeInTheDocument();
+    expect(screen.queryByText('Jane Whitmore - CEO')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Idle · 2m ago/i)).toHaveLength(2);
   });
 
   it('groups heartbeat-suffixed family rows and suppresses duplicate fallback roots', () => {

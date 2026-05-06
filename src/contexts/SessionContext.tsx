@@ -6,7 +6,7 @@ import { getSessionKey, type Session, type AgentLogEntry, type EventEntry, type 
 import { CONTEXT_CRITICAL_THRESHOLD } from '@/lib/constants';
 import { playPing } from '@/features/voice/audio-feedback';
 import { describeToolUse } from '@/utils/helpers';
-import { buildSessionTree } from '@/features/sessions/sessionTree';
+import { buildAgentSidebarTree, buildSessionTree } from '@/features/sessions/sessionTree';
 import {
   buildAgentRootSessionKey,
   getAgentRegistrationName,
@@ -196,20 +196,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setAgents(Array.isArray(data.agents) ? data.agents : []);
     } catch (err) {
       console.debug('[SessionContext] Failed to load agents registry, deriving from live sessions:', err);
-      setAgents(getTopLevelAgentSessions(sessionsRef.current)
-        .filter((session) => {
-          const rootId = getRootAgentId(getSessionKey(session));
-          return Boolean(rootId && rootId !== 'main');
-        })
-        .map((session) => {
-          const rootId = getRootAgentId(getSessionKey(session)) || 'agent';
+      setAgents(buildAgentSidebarTree(sessionsRef.current)
+        .map((node) => {
+          const familyId = node.familyId || getRootAgentId(node.selectKey || node.key);
+          if (!familyId) return null;
           return {
-            id: rootId,
-            name: session.label?.trim() || session.displayName?.trim() || `Agent ${rootId}`,
-            identityName: session.displayName?.trim() || session.label?.trim() || undefined,
-            label: session.label?.trim() || session.displayName?.trim() || undefined,
+            id: familyId,
+            name: node.displayLabel?.trim() || node.session.displayName?.trim() || node.session.label?.trim() || undefined,
+            identityName: node.displayLabel?.trim() || node.session.displayName?.trim() || undefined,
+            label: node.displayLabel?.trim() || node.session.displayName?.trim() || node.session.label?.trim() || undefined,
           };
-        }));
+        })
+        .filter((entry): entry is GatewayAgentRegistration => entry !== null));
     } finally {
       setAgentsLoading(false);
     }

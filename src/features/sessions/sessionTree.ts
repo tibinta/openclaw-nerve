@@ -1,18 +1,37 @@
 import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 import {
+  humanizeAgentFamilyId,
+  isDirectSessionKey,
   getSessionType,
+  getRootAgentId,
   normalizeSessionKey,
+  resolveParentSessionKey,
   isTopLevelAgentSessionKey,
 } from './sessionKeys';
 
 export interface TreeNode {
   session: Session;
   key: string;
+  /** Actual session key to activate when this node is selected. */
+  selectKey?: string;
+  /** Family identity for synthetic agent rows. */
+  familyId?: string | null;
+  /** Human-readable label for synthetic rows. */
+  displayLabel?: string;
+  /** Distinguishes synthetic family rows from live session rows. */
+  kind?: 'family' | 'session';
   parentId: string | null;
   depth: number;
   children: TreeNode[];
   isExpanded: boolean;
+}
+
+export interface AgentRegistryEntry {
+  id: string;
+  name?: string;
+  identityName?: string;
+  label?: string;
 }
 
 export { getSessionType } from './sessionKeys';
@@ -196,6 +215,8 @@ function buildTreeNodes(
       return {
         session,
         key: sessionKey,
+        selectKey: sessionKey,
+        kind: 'session',
         parentId: parentKey,
         depth,
         children: buildNodes(sessionKey, depth + 1),
@@ -205,6 +226,94 @@ function buildTreeNodes(
   }
 
   return buildNodes(null, 0);
+}
+
+function getSessionFamilyId(
+  session: Session,
+  sessionsByKey: Map<string, Session>,
+  normalizedSessionsByKey: Map<string, Session>,
+  knownKeys: Set<string>,
+  cache: Map<string, string | null>,
+  activeStack: Set<string>,
+): string | null {
+  const sessionKey = getSessionKey(session);
+  if (!sessionKey) return null;
+
+  const normalizedKey = normalizeSessionKey(sessionKey);
+  const cached = cache.get(normalizedKey);
+  if (cached !== undefined) return cached;
+
+  const directRootId = getRootAgentId(normalizedKey);
+  if (directRootId) {
+    cache.set(normalizedKey, directRootId);
+    return directRootId;
+  }
+
+  if (activeStack.has(normalizedKey)) {
+    cache.set(normalizedKey, null);
+    return null;
+  }
+
+  activeStack.add(normalizedKey);
+
+  const parentKey = resolveParentSessionKey(session, knownKeys);
+  if (parentKey) {
+    const parentSession = sessionsByKey.get(parentKey) || normalizedSessionsByKey.get(normalizeSessionKey(parentKey));
+    if (parentSession) {
+      const parentFamilyId = getSessionFamilyId(
+        parentSession,
+        sessionsByKey,
+        normalizedSessionsByKey,
+        knownKeys,
+        cache,
+        activeStack,
+      );
+      if (parentFamilyId) {
+        cache.set(normalizedKey, parentFamilyId);
+        activeStack.delete(normalizedKey);
+        return parentFamilyId;
+      }
+    }
+  }
+
+  activeStack.delete(normalizedKey);
+  cache.set(normalizedKey, null);
+  return null;
+}
+
+function pickFamilySelectionKey(familyId: string, members: Session[]): string {
+  const janeFamilyId = getRootAgentId('agent:jane-whitmore---ceo:main');
+  if (familyId === janeFamilyId) {
+    const janeDirect = members.find((session) => getSessionKey(session) === 'agent:jane-whitmore---ceo:imessage:direct:+447494722196');
+    if (janeDirect) return getSessionKey(janeDirect);
+  }
+
+  const canonicalRootKey = `agent:${familyId}:main`;
+  const exactRoot = members.find((session) => normalizeSessionKey(getSessionKey(session)) === canonicalRootKey);
+  if (exactRoot) return getSessionKey(exactRoot);
+
+  const directSession = members.find((session) => isDirectSessionKey(getSessionKey(session)));
+  if (directSession) return getSessionKey(directSession);
+
+  return getSessionKey(pickRepresentativeSession(canonicalRootKey, members));
+}
+
+function resolveFamilyLabel(familyId: string, members: Session[], agents: AgentRegistryEntry[]): string {
+  const registryEntry = agents.find((agent) => agent.id.trim() === familyId.trim());
+  const registryLabel = registryEntry?.identityName?.trim() || registryEntry?.name?.trim() || registryEntry?.label?.trim();
+  if (registryLabel) return registryLabel;
+
+  const exactRoot = members.find((session) => normalizeSessionKey(getSessionKey(session)) === `agent:${familyId}:main`);
+  if (exactRoot?.displayName?.trim()) return exactRoot.displayName.trim();
+  if (exactRoot?.label?.trim() && exactRoot.label.trim().toLowerCase() !== 'heartbeat') return exactRoot.label.trim();
+
+  return humanizeAgentFamilyId(familyId);
+}
+
+function pickFamilySummarySession(members: Session[]): Session {
+  return members.reduce((best, candidate) => (
+    getSessionSortTime(candidate) > getSessionSortTime(best) ? candidate : best
+  ));
 }
 
 /**
@@ -223,8 +332,107 @@ export function buildSessionTree(sessions: Session[]): TreeNode[] {
 }
 
 /** Build the AGENTS sidebar tree, limited to real agent roots and their descendants. */
-export function buildAgentSidebarTree(sessions: Session[]): TreeNode[] {
-  return buildSessionTree(sessions).filter((node) => isAgentSidebarRootSessionKey(node.key));
+export function buildAgentSidebarTree(sessions: Session[], agents: AgentRegistryEntry[] = []): TreeNode[] {
+  if (sessions.length === 0) return [];
+
+  const sessionsByKey = new Map<string, Session>();
+  const normalizedSessionsByKey = new Map<string, Session>();
+  const knownKeys = new Set<string>();
+  for (const session of sessions) {
+    const key = getSessionKey(session);
+    if (!key) continue;
+    sessionsByKey.set(key, session);
+    normalizedSessionsByKey.set(normalizeSessionKey(key), session);
+    knownKeys.add(key);
+  }
+
+  const familyCache = new Map<string, string | null>();
+  const familyGroups = new Map<string, Session[]>();
+  for (const session of sessions) {
+    const familyId = getSessionFamilyId(
+      session,
+      sessionsByKey,
+      normalizedSessionsByKey,
+      knownKeys,
+      familyCache,
+      new Set<string>(),
+    );
+
+    if (!familyId) continue;
+
+    const list = familyGroups.get(familyId);
+    if (list) {
+      list.push(session);
+    } else {
+      familyGroups.set(familyId, [session]);
+    }
+  }
+
+  const familyNodes: Array<TreeNode & { _sortTime: number }> = [...familyGroups.entries()].map(([familyId, members]) => {
+    const summarySession = pickFamilySummarySession(members);
+    const summaryTime = getSessionSortTime(summarySession);
+    const familyLabel = resolveFamilyLabel(familyId, members, agents);
+    const selectKey = pickFamilySelectionKey(familyId, members);
+    const wrapperSession: Session = {
+      ...summarySession,
+      sessionKey: `family:${familyId}`,
+      key: `family:${familyId}`,
+      label: familyLabel,
+      displayName: familyLabel,
+      updatedAt: summaryTime,
+      lastActivity: summarySession.lastActivity ?? summaryTime,
+    };
+
+    const childNodes = [...members]
+      .sort((a, b) => {
+        const timeA = getSessionSortTime(a);
+        const timeB = getSessionSortTime(b);
+        if (timeA !== timeB) return timeB - timeA;
+
+        const typeA = getSessionType(getSessionKey(a));
+        const typeB = getSessionType(getSessionKey(b));
+        const typeOrder = { main: 0, subagent: 1, cron: 2, 'cron-run': 3 };
+        const orderA = typeOrder[typeA] ?? 9;
+        const orderB = typeOrder[typeB] ?? 9;
+        if (orderA !== orderB) return orderA - orderB;
+
+        const labelA = (a.displayName || a.label || getSessionKey(a)).toLowerCase();
+        const labelB = (b.displayName || b.label || getSessionKey(b)).toLowerCase();
+        return labelA.localeCompare(labelB);
+      })
+      .map((session): TreeNode => {
+        const sessionKey = getSessionKey(session);
+        return {
+          session,
+          key: sessionKey,
+          selectKey: sessionKey,
+          familyId,
+          parentId: `family:${familyId}`,
+          depth: 1,
+          children: [],
+          isExpanded: true,
+          kind: 'session',
+        };
+      });
+
+    return {
+      session: wrapperSession,
+      key: `family:${familyId}`,
+      selectKey,
+      familyId,
+      displayLabel: familyLabel,
+      parentId: null,
+      depth: 0,
+      children: childNodes,
+      isExpanded: true,
+      kind: 'family',
+      _sortTime: summaryTime,
+    } as TreeNode & { _sortTime: number };
+  });
+
+  return familyNodes
+    .sort((a, b) => b._sortTime - a._sortTime)
+    .map(({ _sortTime: _discard, ...node }) => node);
 }
 
 /** Flatten a tree into an ordered list, respecting collapsed state. */

@@ -35,6 +35,7 @@ interface SessionNodeProps {
   running: boolean;
   displayTokens: number;
   label: string;
+  selectKey?: string;
   isExpanded: boolean;
   hasChildren: boolean;
   isRootAgent: boolean;
@@ -68,6 +69,7 @@ function arePropsEqual(prev: SessionNodeProps, next: SessionNodeProps): boolean 
     prev.running === next.running &&
     prev.displayTokens === next.displayTokens &&
     prev.label === next.label &&
+    prev.selectKey === next.selectKey &&
     prev.isExpanded === next.isExpanded &&
     prev.hasChildren === next.hasChildren &&
     prev.isRootAgent === next.isRootAgent &&
@@ -82,6 +84,29 @@ function arePropsEqual(prev: SessionNodeProps, next: SessionNodeProps): boolean 
   );
 }
 
+
+function relativeTime(timestamp: number | string | undefined): string {
+  if (!timestamp) return 'unknown';
+  const ms = typeof timestamp === 'string' ? new Date(timestamp).getTime() : timestamp;
+  if (!Number.isFinite(ms)) return 'unknown';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function describeActivity(session: TreeNode['session'], granularStatus?: GranularAgentState): string {
+  const tool = granularStatus?.toolDescription?.trim() || granularStatus?.toolName?.trim();
+  if (tool) return tool;
+  if (session.processing || session.busy || session.state === 'running' || session.agentState === 'running' || session.status === 'running' || session.status === 'busy') {
+    return 'Working';
+  }
+  if (session.thinking?.trim()) return session.thinking.trim();
+  if (session.thinkingLevel?.trim()) return session.thinkingLevel.trim();
+  return 'Idle';
+}
+
 /** Single session node in the session tree with status badge and actions. */
 export const SessionNode = memo(function SessionNode({
   node,
@@ -90,6 +115,7 @@ export const SessionNode = memo(function SessionNode({
   running,
   displayTokens,
   label,
+  selectKey,
   isExpanded,
   hasChildren,
   isRootAgent,
@@ -112,6 +138,7 @@ export const SessionNode = memo(function SessionNode({
   compact = false,
 }: SessionNodeProps) {
   const { session, key: sessionKey, depth } = node;
+  const activationKey = selectKey || sessionKey;
   const max = session.contextTokens || 200000;
   const pct = Math.min(100, Math.round((displayTokens / max) * 100));
   const colors = pct >= 80 ? COLORS_CRITICAL : pct >= 50 ? COLORS_WARNING : COLORS_NORMAL;
@@ -119,7 +146,7 @@ export const SessionNode = memo(function SessionNode({
     ? `0 0 6px ${colors.growGlow}`
     : `0 0 4px ${colors.glow}`;
 
-  const handleSelect = useCallback(() => onSelect(sessionKey), [onSelect, sessionKey]);
+  const handleSelect = useCallback(() => onSelect(activationKey), [activationKey, onSelect]);
   const handleToggle = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     onToggleExpand(sessionKey);
@@ -194,6 +221,8 @@ export const SessionNode = memo(function SessionNode({
 
   // Indentation: 14px per depth level
   const indent = depth * 14;
+  const activity = describeActivity(session, granularStatus);
+  const lastInteraction = relativeTime(session.updatedAt ?? session.lastActivity);
 
   return (
     <div
@@ -256,13 +285,18 @@ export const SessionNode = memo(function SessionNode({
           />
         ) : (
           <SessionInfoPanel session={node.session} running={running}>
-            <span className={cn(
-              "text-[0.667rem] font-bold flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap cursor-pointer",
-              isCronRun ? "text-muted-foreground font-normal" : "text-foreground"
-            )}>
-              {isCron && <Timer size={11} className="text-purple mr-1 inline shrink-0" aria-label="Cron job" />}
-              {isCronRun && <CornerDownRight size={10} className="text-purple/60 mr-1 inline shrink-0" aria-label="Cron run" />}
-              {label}
+            <span className="flex-1 min-w-0 flex flex-col gap-[1px] cursor-pointer overflow-hidden">
+              <span className={cn(
+                "text-[0.667rem] font-bold min-w-0 overflow-hidden text-ellipsis whitespace-nowrap",
+                isCronRun ? "text-muted-foreground font-normal" : "text-foreground"
+              )}>
+                {isCron && <Timer size={11} className="text-purple mr-1 inline shrink-0" aria-label="Cron job" />}
+                {isCronRun && <CornerDownRight size={10} className="text-purple/60 mr-1 inline shrink-0" aria-label="Cron run" />}
+                {label}
+              </span>
+              <span className="text-[0.58rem] text-muted-foreground font-normal truncate">
+                {activity} · {lastInteraction}
+              </span>
             </span>
           </SessionInfoPanel>
         )}

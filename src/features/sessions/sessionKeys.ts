@@ -59,6 +59,37 @@ export function isCronRunSessionKey(sessionKey: string): boolean {
   return CRON_RUN_RE.test(normalizeSessionKey(sessionKey));
 }
 
+export function isDirectSessionKey(sessionKey: string): boolean {
+  return DIRECT_RE.test(normalizeSessionKey(sessionKey));
+}
+
+export function getSessionTailSegment(sessionKey: string): string {
+  const normalized = normalizeSessionKey(sessionKey);
+  return normalized.split(':').pop() || normalized;
+}
+
+function titleCaseWord(value: string): string {
+  if (!value) return value;
+  if (/^[a-z0-9]+$/i.test(value) && value.length <= 3) return value.toUpperCase();
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** Convert a slug-like agent id back into a readable family label. */
+export function humanizeAgentFamilyId(agentId: string): string {
+  const compact = agentId.trim();
+  if (!compact) return 'Agent';
+
+  return compact
+    .split('---')
+    .filter(Boolean)
+    .map((part) => part
+      .split('-')
+      .filter(Boolean)
+      .map((token) => titleCaseWord(token))
+      .join(' '))
+    .join(' - ');
+}
+
 export function getRootAgentId(sessionKey: string): string | null {
   const normalized = normalizeSessionKey(sessionKey);
   const rootMatch = normalized.match(ROOT_AGENT_RE);

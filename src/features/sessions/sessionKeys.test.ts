@@ -7,7 +7,10 @@ import {
   getRootAgentId,
   getRootAgentSessionKey,
   getSessionDisplayLabel,
+  getSessionTailSegment,
   getTopLevelAgentSessions,
+  humanizeAgentFamilyId,
+  isDirectSessionKey,
   inferParentSessionKey,
   JANE_DIRECT_CHAT_SESSION_KEY,
   isRootChildSession,
@@ -36,9 +39,11 @@ describe('sessionKeys', () => {
 
   it('resolves root agent id and parent for direct and channel delivery sessions', () => {
     // per-channel-peer: agent:X:<channel>:direct:<peerId>
+    expect(isDirectSessionKey('agent:reviewer:telegram:direct:123')).toBe(true);
     expect(getRootAgentId('agent:reviewer:telegram:direct:123')).toBe('reviewer');
     expect(getRootAgentSessionKey('agent:reviewer:telegram:direct:123')).toBe('agent:reviewer:main');
     expect(inferParentSessionKey('agent:reviewer:telegram:direct:123')).toBe('agent:reviewer:main');
+    expect(getSessionTailSegment('agent:reviewer:telegram:direct:123')).toBe('123');
 
     // per-account-channel-peer: agent:X:<channel>:<accountId>:direct:<peerId>
     expect(getRootAgentId('agent:reviewer:telegram:myaccount:direct:123')).toBe('reviewer');
@@ -161,5 +166,10 @@ describe('sessionKeys', () => {
     const knownKeys = new Set(['agent:reviewer:main', 'agent:reviewer:subagent:child']);
     const child = session('agent:reviewer:subagent:child', { parentId: 'agent:missing:main' });
     expect(resolveParentSessionKey(child, knownKeys)).toBe('agent:reviewer:main');
+  });
+
+  it('humanizes slugged agent family ids', () => {
+    expect(humanizeAgentFamilyId('jane-whitmore---ceo')).toBe('Jane Whitmore - CEO');
+    expect(humanizeAgentFamilyId('atlas-reed---fast-worker')).toBe('Atlas Reed - Fast Worker');
   });
 });

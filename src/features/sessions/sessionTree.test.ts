@@ -238,41 +238,67 @@ describe('buildAgentSidebarTree', () => {
     expect(isAgentSidebarRootSessionKey('agent:main:cron:nightly')).toBe(false);
   });
 
-  it('still filters out unrelated root sessions for legacy sidebar views', () => {
+  it('groups a family into a synthetic agent row with children ordered by recency', () => {
     const sessions = [
-      session('agent:main:main', { label: 'Main' }),
-      session('agent:main:subagent:abc123', { label: 'Worker' }),
-      session('discord:sean', { label: 'Discord Root' }),
+      session('agent:jane-whitmore---ceo:main', { label: 'heartbeat', updatedAt: 1_000 }),
+      session('agent:jane-whitmore---ceo:imessage:direct:+447494722196', { label: 'Jane Whitmore - CEO', updatedAt: 3_000 }),
+      session('agent:jane-whitmore---ceo:subagent:abc', { label: 'Worker', updatedAt: 2_000, parentId: 'agent:jane-whitmore---ceo:main' }),
+    ];
+
+    const tree = buildAgentSidebarTree(sessions, [
+      { id: 'jane-whitmore---ceo', identityName: 'Jane Whitmore - CEO' },
+    ]);
+
+    expect(tree).toHaveLength(1);
+    expect(tree[0].kind).toBe('family');
+    expect(tree[0].displayLabel).toBe('Jane Whitmore - CEO');
+    expect(tree[0].selectKey).toBe('agent:jane-whitmore---ceo:imessage:direct:+447494722196');
+    expect(flattenTree(tree, {}).map((node) => node.key)).toEqual([
+      'family:jane-whitmore---ceo',
+      'agent:jane-whitmore---ceo:imessage:direct:+447494722196',
+      'agent:jane-whitmore---ceo:subagent:abc',
+      'agent:jane-whitmore---ceo:main',
+    ]);
+  });
+
+  it('sorts families by their newest descendant activity', () => {
+    const sessions = [
+      session('agent:older:main', { updatedAt: 1_000 }),
+      session('agent:older:subagent:alpha', { updatedAt: 1_100 }),
+      session('agent:newer:main', { updatedAt: 900 }),
+      session('agent:newer:subagent:beta', { updatedAt: 2_000 }),
     ];
 
     const tree = buildAgentSidebarTree(sessions);
-    const flat = flattenTree(tree, {});
-    expect(flat.map((node) => node.key)).toEqual([
-      'agent:main:main',
-      'agent:main:subagent:abc123',
+
+    expect(tree.map((node) => node.familyId)).toEqual(['newer', 'older']);
+    expect(flattenTree(tree, {}).map((node) => node.key)).toEqual([
+      'family:newer',
+      'agent:newer:subagent:beta',
+      'agent:newer:main',
+      'family:older',
+      'agent:older:subagent:alpha',
+      'agent:older:main',
     ]);
   });
-});
 
-describe('live session tree visibility', () => {
-  it('keeps subagents and other live children in the tree', () => {
+  it('keeps non-agent roots out of the AGENTS tree unless they tie back to a family', () => {
     const sessions = [
       session('agent:main:main', { label: 'Main' }),
       session('agent:main:subagent:abc123', { label: 'Worker' }),
-      session('agent:main:cron:nightly', { label: 'Nightly' }),
-      session('agent:main:cron:nightly:run:run123', { label: 'Run 123' }),
       session('discord:sean', { label: 'Discord Root' }),
     ];
 
-    const tree = buildSessionTree(sessions);
+    const tree = buildAgentSidebarTree(sessions, [
+      { id: 'main', name: 'Main' },
+    ]);
     const flat = flattenTree(tree, {});
     expect(flat.map((node) => node.key)).toEqual([
+      'family:main',
       'agent:main:main',
       'agent:main:subagent:abc123',
-      'agent:main:cron:nightly',
-      'agent:main:cron:nightly:run:run123',
-      'discord:sean',
     ]);
+    expect(flat.some((node) => node.key === 'discord:sean')).toBe(false);
   });
 });
 

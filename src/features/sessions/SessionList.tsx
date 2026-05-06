@@ -4,7 +4,15 @@ import { getSessionKey } from '@/types';
 import type { SpawnSessionOpts, GatewayAgentRegistration } from '@/contexts/SessionContext';
 import { SessionSkeletonGroup } from '@/components/skeletons';
 import { buildAgentSidebarTree, flattenTree, getSessionType, type TreeNode } from './sessionTree';
-import { getRootAgentId, getSessionDisplayLabel, isTopLevelAgentSessionKey, normalizeSessionKey } from './sessionKeys';
+import {
+  getRootAgentId,
+  getSessionDisplayLabel,
+  getSessionTailSegment,
+  humanizeAgentFamilyId,
+  isDirectSessionKey,
+  isTopLevelAgentSessionKey,
+  normalizeSessionKey,
+} from './sessionKeys';
 import { SessionNode } from './SessionNode';
 import type { GranularAgentState } from '@/types';
 import {
@@ -53,12 +61,47 @@ function findNodeByKey(nodes: TreeNode[], key: string): TreeNode | null {
   return null;
 }
 
-function resolveRootAgentLabel(
+function resolveFamilyLabel(
+  familyId: string | null | undefined,
+  agents: GatewayAgentRegistration[],
+  session?: Session,
+): string {
+  if (!familyId) {
+    return session?.displayName?.trim() || session?.label?.trim() || 'Agent';
+  }
+
+  const registryEntry = agents.find((agent) => agent.id.trim() === familyId.trim());
+  const registryLabel = registryEntry?.identityName?.trim() || registryEntry?.name?.trim() || registryEntry?.label?.trim();
+  if (registryLabel) return registryLabel;
+
+  return humanizeAgentFamilyId(familyId);
+}
+
+function resolveSidebarLabel(
   session: Session,
   agentName: string,
   agents: GatewayAgentRegistration[],
+  kind?: TreeNode['kind'],
+  familyId?: string | null,
 ): string {
+  if (kind === 'family') {
+    return resolveFamilyLabel(familyId, agents, session);
+  }
+
   const sessionKey = normalizeSessionKey(getSessionKey(session));
+  if (isDirectSessionKey(sessionKey)) {
+    const peer = getSessionTailSegment(sessionKey).trim();
+    if (peer) return peer;
+  }
+
+  if (familyId) {
+    if (session.label?.trim() && session.label.trim().toLowerCase() !== 'heartbeat') return session.label.trim();
+    if (session.displayName?.trim() && session.displayName.trim().toLowerCase() !== 'heartbeat') return session.displayName.trim();
+    if (session.label?.trim()) return session.label.trim();
+    if (session.displayName?.trim()) return session.displayName.trim();
+    return getSessionTailSegment(sessionKey);
+  }
+
   if (!isTopLevelAgentSessionKey(sessionKey)) {
     return getSessionDisplayLabel(session, agentName);
   }
@@ -149,9 +192,16 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     });
   }, [sessions]);
 
+  // The AGENTS panel is agent-first: keep only agent roots and their descendants.
+  const liveTree = useMemo(() => buildAgentSidebarTree(sessions, agents), [agents, sessions]);
+  const liveFlatNodes = useMemo(() => flattenTree(liveTree, expandedState), [liveTree, expandedState]);
+  const liveFamilyIds = useMemo(
+    () => new Set(liveTree.map((node) => node.familyId).filter((familyId): familyId is string => Boolean(familyId))),
+    [liveTree],
+  );
   const configuredFallbackSessions = useMemo<Session[]>(() => agents.flatMap((agent) => {
     const id = agent.id.trim();
-    if (!id || id === 'main') return [];
+    if (!id || id === 'main' || liveFamilyIds.has(id)) return [];
 
     const sessionKey = `agent:${id}:main`;
     if (liveSessionKeys.has(normalizeSessionKey(sessionKey))) return [];
@@ -164,12 +214,8 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
       agentState: 'idle',
       status: 'idle',
     } as Session];
-  }), [agents, liveSessionKeys]);
-
-  // The AGENTS panel is agent-first: keep only agent roots and their descendants.
-  const liveTree = useMemo(() => buildAgentSidebarTree(sessions), [sessions]);
-  const liveFlatNodes = useMemo(() => flattenTree(liveTree, expandedState), [liveTree, expandedState]);
-  const fallbackTree = useMemo(() => buildAgentSidebarTree(configuredFallbackSessions), [configuredFallbackSessions]);
+  }), [agents, liveFamilyIds, liveSessionKeys]);
+  const fallbackTree = useMemo(() => buildAgentSidebarTree(configuredFallbackSessions, agents), [agents, configuredFallbackSessions]);
   const fallbackFlatNodes = useMemo(() => flattenTree(fallbackTree, expandedState), [fallbackTree, expandedState]);
   // Count the visible live agent rows, not the raw gateway payload, so the
   // bulk-delete confirmation matches what the user actually sees.
@@ -217,11 +263,12 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     const isSubagent = sessionType === 'subagent';
     const isCron = sessionType === 'cron';
     const isCronRun = sessionType === 'cron-run';
-    const isRootAgent = isTopLevelAgentSessionKey(sessionKey);
-    const label = resolveRootAgentLabel(node.session, agentName, agents);
+    const isRootAgent = node.kind === 'family' || isTopLevelAgentSessionKey(sessionKey);
+    const label = node.displayLabel?.trim() || resolveSidebarLabel(node.session, agentName, agents, node.kind, node.familyId);
     const isGrowing = growingSessions[sessionKey] ?? false;
     const running = busyState[sessionKey] || node.session.state === 'running' || node.session.agentState === 'running' || node.session.busy || node.session.processing || node.session.status === 'running' || node.session.status === 'busy' || (isGrowing && isSubagent);
-    const isActive = normalizeSessionKey(sessionKey) === normalizeSessionKey(currentSession);
+    const activationKey = normalizeSessionKey(node.selectKey || sessionKey);
+    const isActive = activationKey === normalizeSessionKey(currentSession);
     const currentTokens = node.session.totalTokens || 0;
     const prevTokens = prevTokensRef.current[sessionKey] || 0;
     const displayTokens = Math.max(currentTokens, prevTokens);
@@ -236,6 +283,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
         running={running}
         displayTokens={displayTokens}
         label={label}
+        selectKey={node.selectKey}
         isExpanded={isExpanded}
         hasChildren={node.children.length > 0}
         isRootAgent={isRootAgent}
