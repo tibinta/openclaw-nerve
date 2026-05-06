@@ -8,11 +8,13 @@ import os from 'node:os';
 describe('sessions routes', () => {
   let tmpDir: string;
   let spawnSubagentMock: ReturnType<typeof vi.fn>;
+  let gatewayRpcCallMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.resetModules();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sessions-test-'));
     spawnSubagentMock = vi.fn();
+    gatewayRpcCallMock = vi.fn();
   });
 
   afterEach(async () => {
@@ -37,6 +39,9 @@ describe('sessions routes', () => {
     }));
     vi.doMock('../lib/subagent-spawn.js', () => ({
       spawnSubagent: spawnSubagentMock,
+    }));
+    vi.doMock('../lib/gateway-rpc.js', () => ({
+      gatewayRpcCall: gatewayRpcCallMock,
     }));
 
     const mod = await import('./sessions.js');
@@ -413,5 +418,46 @@ describe('sessions routes', () => {
     expect(spawnSubagentMock).toHaveBeenCalledWith(expect.objectContaining({
       cleanup: 'keep',
     }));
+  });
+
+  it('bulk deletes loaded sessions through the gateway while keeping protected roots', async () => {
+    gatewayRpcCallMock.mockResolvedValue({});
+
+    const app = await buildApp();
+    const res = await app.request('/api/sessions/delete-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        keys: [
+          'agent:main:main',
+          'agent:designer:main',
+          'agent:designer:subagent:abc123',
+          'agent:designer:main',
+          'agent:main:cron:daily-digest',
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { ok: boolean; deleted: number; failed: string[] };
+    expect(json.ok).toBe(true);
+    expect(json.deleted).toBe(3);
+    expect(json.failed).toEqual([]);
+    expect(gatewayRpcCallMock).toHaveBeenCalledWith('sessions.delete', {
+      key: 'agent:designer:main',
+      deleteTranscript: true,
+    });
+    expect(gatewayRpcCallMock).toHaveBeenCalledWith('sessions.delete', {
+      key: 'agent:designer:subagent:abc123',
+      deleteTranscript: true,
+    });
+    expect(gatewayRpcCallMock).toHaveBeenCalledWith('sessions.delete', {
+      key: 'agent:main:cron:daily-digest',
+      deleteTranscript: true,
+    });
+    expect(gatewayRpcCallMock).not.toHaveBeenCalledWith('sessions.delete', {
+      key: 'agent:main:main',
+      deleteTranscript: true,
+    });
   });
 });

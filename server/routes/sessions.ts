@@ -19,9 +19,13 @@ import { config } from '../lib/config.js';
 import { rateLimitGeneral } from '../middleware/rate-limit.js';
 import { spawnSubagent } from '../lib/subagent-spawn.js';
 import { aggregateSessionAudit, type SessionAuditObservation } from '../lib/session-audit.js';
+import { gatewayRpcCall } from '../lib/gateway-rpc.js';
 
 const app = new Hono();
 const CRON_SESSION_RE = /^agent:[^:]+:cron:[^:]+(?::run:.+)?$/;
+const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
+const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
+const BULK_DELETE_BATCH_SIZE = 8;
 
 interface StoredSessionSummary {
   sessionId?: string;
@@ -61,6 +65,26 @@ function inferParentSessionKey(sessionKey: string): string | null {
   if (cronMatch) return `${cronMatch[1]}:main`;
 
   return null;
+}
+
+function isProtectedRootSessionKey(sessionKey: string): boolean {
+  return sessionKey === PRIMARY_AGENT_SESSION_KEY || sessionKey === LEGACY_MAIN_SESSION_KEY;
+}
+
+function normalizeSessionKeys(rawKeys: unknown): string[] {
+  if (!Array.isArray(rawKeys)) return [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of rawKeys) {
+    if (typeof value !== 'string') continue;
+    const key = value.trim();
+    if (!key || isProtectedRootSessionKey(key) || seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(key);
+  }
+
+  return normalized;
 }
 
 async function loadSessionStore(): Promise<Record<string, StoredSessionSummary | undefined>> {
@@ -220,6 +244,52 @@ app.get('/api/sessions/media', rateLimitGeneral, async (c) => {
     console.warn('[sessions] media lookup failed:', (err as Error).message);
     return c.json({ ok: false, error: 'Failed to load media' }, 500);
   }
+});
+
+app.post('/api/sessions/delete-all', rateLimitGeneral, async (c) => {
+  let body: { keys?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: 'Invalid JSON body' }, 400);
+  }
+
+  const keysToDelete = normalizeSessionKeys(body.keys);
+  if (keysToDelete.length === 0) {
+    return c.json({ ok: true, deleted: 0, failed: [] });
+  }
+
+  const failed: string[] = [];
+  let deleted = 0;
+
+  for (let i = 0; i < keysToDelete.length; i += BULK_DELETE_BATCH_SIZE) {
+    const batch = keysToDelete.slice(i, i + BULK_DELETE_BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map(async (key) => {
+        await gatewayRpcCall('sessions.delete', {
+          key,
+          deleteTranscript: true,
+        });
+      }),
+    );
+
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        deleted += 1;
+        return;
+      }
+
+      const key = batch[index];
+      failed.push(key);
+      console.warn('[sessions] bulk delete failed:', key, (result.reason as Error).message);
+    });
+  }
+
+  return c.json({
+    ok: failed.length === 0,
+    deleted,
+    failed,
+  });
 });
 
 app.get('/api/sessions/hidden', rateLimitGeneral, async (c) => {

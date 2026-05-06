@@ -144,6 +144,7 @@ describe('SessionContext', () => {
       if (url.includes('/api/server-info')) return Promise.resolve(jsonResponse({ agentName: 'Jen' }));
       if (url.includes('/api/agentlog')) return Promise.resolve(jsonResponse([]));
       if (url.includes('/api/sessions/hidden')) return Promise.resolve(jsonResponse({ ok: true, sessions: [] }));
+      if (url.includes('/api/sessions/delete-all')) return Promise.resolve(jsonResponse({ ok: true, deleted: 2, failed: [] }));
       return Promise.resolve(jsonResponse({}));
     }) as typeof fetch;
   });
@@ -476,9 +477,13 @@ describe('SessionContext', () => {
       expect(screen.getByTestId('current-session').textContent).toBe('');
     });
 
-    expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:designer:main', deleteTranscript: true });
-    expect(rpcMock).toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:cron:daily-digest', deleteTranscript: true });
-    expect(rpcMock).not.toHaveBeenCalledWith('sessions.delete', { key: 'agent:main:main', deleteTranscript: true });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/sessions/delete-all',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
   });
 
   it('auto-compacts the current session once when context usage crosses 90 percent', async () => {
