@@ -18,8 +18,10 @@ interface UseWebSocketReturn {
   reconnectAttempt: number;
 }
 
-const RECONNECT_BASE_DELAY = 1000;
-const RECONNECT_MAX_DELAY = 30000;
+// Slow the retry curve when the gateway is congested so reconnects do not
+// keep hammering the handshake path while the server is already saturated.
+const RECONNECT_BASE_DELAY = 5000;
+const RECONNECT_MAX_DELAY = 120000;
 const INSTANCE_ID_STORAGE_KEY = 'oc-webchat-instance-id';
 
 function generateInstanceId(): string {

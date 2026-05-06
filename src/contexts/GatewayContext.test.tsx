@@ -79,7 +79,7 @@ describe('GatewayContext', () => {
     expect(observed.at(-1)).toBe('high');
 
     await act(async () => {
-      vi.advanceTimersByTime(10_000);
+      vi.advanceTimersByTime(60_000);
       await Promise.resolve();
       await Promise.resolve();
     });

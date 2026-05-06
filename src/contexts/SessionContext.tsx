@@ -28,6 +28,10 @@ const SESSION_BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'streami
 // Keep the sidebar list broad enough for older roots, but avoid dragging the
 // gateway with a 1000-row fetch on every refresh cycle.
 const FULL_SESSIONS_LIMIT = 200;
+// When the gateway is already slow, backing off the fallback polling keeps the
+// session list from piling on top of live event-driven refreshes.
+const SESSION_REFRESH_POLL_INTERVAL_MS = 120_000;
+const DELAYED_SESSION_REFRESH_MS = 5_000;
 
 export interface GatewayAgentRegistration {
   id: string;
@@ -654,7 +658,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     delayedRefreshTimeoutRef.current = setTimeout(() => {
       delayedRefreshTimeoutRef.current = null;
       void refreshSessionsRef.current();
-    }, 1500);
+    }, DELAYED_SESSION_REFRESH_MS);
   }, []);
 
   // Subscribe to gateway events for granular status tracking + session state sync + agent log + event log
@@ -803,7 +807,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const iv = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void refreshSessions();
-    }, 60000);
+    }, SESSION_REFRESH_POLL_INTERVAL_MS);
     return () => clearInterval(iv);
   }, [connectionState, refreshSessions]);
 

@@ -379,6 +379,7 @@ describe('useWebSocket', () => {
           wsInstances.push(this);
         }
       };
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
 
       const { result } = renderHook(() => useWebSocket());
       
@@ -405,11 +406,21 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(4_999);
+      });
+
+      expect(wsInstances.length).toBe(1);
+      expect(result.current.connectionState).toBe('reconnecting');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+        await vi.runOnlyPendingTimersAsync();
       });
 
       expect(result.current.connectionState).toBe('reconnecting');
       expect(result.current.reconnectAttempt).toBeGreaterThan(0);
+      expect(wsInstances.length).toBeGreaterThanOrEqual(2);
+      randomSpy.mockRestore();
     });
 
     it('should stop reconnecting after intentional disconnect', async () => {

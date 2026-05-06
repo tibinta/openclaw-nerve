@@ -29,6 +29,9 @@ const GatewayContext = createContext<GatewayContextValue | null>(null);
 
 const SESSIONS_ACTIVE_MINUTES = 24 * 60;
 const SESSIONS_LIMIT = 200;
+// Status polling can fall back to sessions.list, which is expensive under load.
+// Keep this slower so a congested gateway has room to recover.
+const STATUS_POLL_INTERVAL_MS = 60_000;
 
 /**
  * Normalize a model ref to a consistent string, but preserve the full
@@ -142,7 +145,7 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
     updateStatus();
     const iv = setInterval(() => {
       if (isVisibleRef.current) void updateStatus();
-    }, 10000);
+    }, STATUS_POLL_INTERVAL_MS);
     return () => clearInterval(iv);
   }, [connectionState, updateStatus]);
 
