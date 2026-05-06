@@ -63,27 +63,46 @@ function buildFamilyRepresentatives(sessions: Session[]): Map<string, Session> {
   return representatives;
 }
 
+function inferParentFamilyKey(familyKey: string): string | null {
+  const cronRunMatch = familyKey.match(/^(.+:cron:[^:]+):run:.+$/);
+  if (cronRunMatch) return cronRunMatch[1];
+
+  const subagentMatch = familyKey.match(/^((?:agent:[^:]+)):subagent:.+$/);
+  if (subagentMatch) return `${subagentMatch[1]}:main`;
+
+  const cronMatch = familyKey.match(/^((?:agent:[^:]+)):cron:[^:]+$/);
+  if (cronMatch) return `${cronMatch[1]}:main`;
+
+  const directMatch = familyKey.match(/^((?:agent:[^:]+))(?::[^:]+)*:direct:.+$/);
+  if (directMatch) return `${directMatch[1]}:main`;
+
+  const channelMatch = familyKey.match(/^((?:agent:[^:]+))(?::[^:]+)*:channel:.+$/);
+  if (channelMatch) return `${channelMatch[1]}:main`;
+
+  return null;
+}
+
 function buildParentMap(representatives: Map<string, Session>): Map<string, string | null> {
   const parentMap = new Map<string, string | null>();
+  const representativesByRawKey = new Map<string, Session>();
+  for (const session of representatives.values()) {
+    representativesByRawKey.set(getSessionKey(session), session);
+  }
+
   for (const [familyKey, session] of representatives) {
-    const inferredParentFamily = (() => {
-      const cronRunMatch = familyKey.match(/^(.+:cron:[^:]+):run:.+$/);
-      if (cronRunMatch) return cronRunMatch[1];
+    const rawKey = getSessionKey(session);
+    const explicitParent = session.parentId?.trim();
+    if (explicitParent) {
+      const parentRepresentative = representativesByRawKey.get(explicitParent)
+        || [...representativesByRawKey.entries()].find(([, candidate]) => normalizeSessionKey(getSessionKey(candidate)) === normalizeSessionKey(explicitParent))?.[1];
 
-      const subagentMatch = familyKey.match(/^((?:agent:[^:]+)):subagent:.+$/);
-      if (subagentMatch) return `${subagentMatch[1]}:main`;
+      if (parentRepresentative) {
+        parentMap.set(rawKey, getSessionKey(parentRepresentative));
+        continue;
+      }
+    }
 
-      const cronMatch = familyKey.match(/^((?:agent:[^:]+)):cron:[^:]+$/);
-      if (cronMatch) return `${cronMatch[1]}:main`;
-
-      const directMatch = familyKey.match(/^((?:agent:[^:]+))(?::[^:]+)*:direct:.+$/);
-      if (directMatch) return `${directMatch[1]}:main`;
-
-      const channelMatch = familyKey.match(/^((?:agent:[^:]+))(?::[^:]+)*:channel:.+$/);
-      if (channelMatch) return `${channelMatch[1]}:main`;
-
-      return null;
-    })();
+    const inferredParentFamily = inferParentFamilyKey(familyKey);
 
     if (!inferredParentFamily) {
       parentMap.set(getSessionKey(session), null);
