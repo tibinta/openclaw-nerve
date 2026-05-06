@@ -89,6 +89,23 @@ function SessionAutoCompactProbe() {
   );
 }
 
+function SessionRefreshProbe() {
+  const { currentSession, sessions, refreshSessions } = useSessionContext();
+
+  return (
+    <div>
+      <div data-testid="current-session">{currentSession}</div>
+      <div data-testid="session-count">{sessions.length}</div>
+      <button data-testid="refresh" onClick={() => void refreshSessions()}>
+        Refresh
+      </button>
+      {sessions.map((session) => (
+        <div key={getSessionKey(session)}>{session.label || session.displayName || getSessionKey(session)}</div>
+      ))}
+    </div>
+  );
+}
+
 describe('SessionContext', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -443,6 +460,47 @@ describe('SessionContext', () => {
 
     expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 200 });
     expect(rpcMock).not.toHaveBeenCalledWith('sessions.list', expect.objectContaining({ activeMinutes: expect.any(Number) }));
+  });
+
+  it('keeps the last live snapshot when one refresh returns an empty list', async () => {
+    let sessionsListCalls = 0;
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        sessionsListCalls += 1;
+        return {
+          sessions: sessionsListCalls === 1
+            ? [
+                { sessionKey: 'agent:main:main', label: 'Main' },
+                { sessionKey: 'agent:designer:main', label: 'Designer' },
+              ]
+            : [],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionRefreshProbe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Designer')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+
+    await act(async () => {
+      screen.getByTestId('refresh').click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Designer')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('session-count').textContent).toBe('2');
+    expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+    expect(sessionsListCalls).toBe(2);
   });
 
   it('deletes every loaded session except the protected main root and resets the current session to blank', async () => {

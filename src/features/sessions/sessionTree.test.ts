@@ -149,6 +149,24 @@ describe('buildSessionTree', () => {
     ]);
   });
 
+  it('orders root families by the newest descendant and keeps each family contiguous', () => {
+    const sessions = [
+      session('agent:older:main', { updatedAt: 1_000 }),
+      session('agent:older:subagent:alpha', { updatedAt: 1_100 }),
+      session('agent:newer:main', { updatedAt: 900 }),
+      session('agent:newer:subagent:beta', { updatedAt: 2_000 }),
+    ];
+
+    const tree = buildSessionTree(sessions);
+
+    expect(flattenTree(tree, {}).map((node) => node.key)).toEqual([
+      'agent:newer:main',
+      'agent:newer:subagent:beta',
+      'agent:older:main',
+      'agent:older:subagent:alpha',
+    ]);
+  });
+
   it('sorts siblings by most recent activity first', () => {
     const sessions = [
       session('agent:main:main'),

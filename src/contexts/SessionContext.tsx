@@ -116,6 +116,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const delayedRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshSessionsInFlightRef = useRef(false);
   const listAuthoritativeSessionsInFlightRef = useRef<Promise<Session[]> | null>(null);
+  const emptySnapshotSeenRef = useRef(false);
 
   // Derive busyState from agentStatus for backward compatibility
   const busyState = useMemo(() => {
@@ -519,6 +520,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     refreshSessionsInFlightRef.current = true;
     try {
       const newSessions = await listAuthoritativeSessions();
+      const hasLiveSnapshot = sessionsRef.current.length > 0;
+      if (newSessions.length === 0 && hasLiveSnapshot) {
+        if (!emptySnapshotSeenRef.current) {
+          // A single empty poll during gateway degradation should not wipe a
+          // previously valid live snapshot. Keep the last known state and try
+          // again on the next poll.
+          emptySnapshotSeenRef.current = true;
+          return;
+        }
+      }
+      emptySnapshotSeenRef.current = false;
       const nextCurrentSession = pickDefaultSessionKey(newSessions, currentSessionRef.current);
       
       // Smart diffing: preserve object references for unchanged sessions.

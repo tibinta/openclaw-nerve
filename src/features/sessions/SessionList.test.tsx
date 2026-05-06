@@ -55,24 +55,30 @@ describe('SessionList live tree', () => {
     expect(screen.getByText('STREAMING')).toBeInTheDocument();
   });
 
-  it('shows configured agents even when there are no live sessions', () => {
+  it('shows configured agents in a fallback section when there are no live sessions', () => {
     const agents: GatewayAgentRegistration[] = [
       { id: 'jane', name: 'Jane' },
-      { id: 'main', name: 'Main Controller' },
+      { id: 'support', name: 'Support' },
     ];
 
     renderSessionList({ agents });
 
+    expect(screen.getByText('No active sessions')).toBeInTheDocument();
+    expect(screen.getByText('Configured agents')).toBeInTheDocument();
     expect(screen.getByText('Jane')).toBeInTheDocument();
-    expect(screen.queryByText('No active sessions')).not.toBeInTheDocument();
+    expect(screen.getByText('Support')).toBeInTheDocument();
   });
 
-  it('opens a confirmation dialog for deleting all sessions', async () => {
+  it('opens a confirmation dialog for deleting all sessions without counting fallback rows', async () => {
     const onDeleteAllSessions = vi.fn().mockResolvedValue(undefined);
 
     renderSessionList({
       sessions: [
-        { sessionKey: 'agent:jane:main', label: 'Jane' },
+        { sessionKey: 'agent:designer:main', label: 'Designer' },
+      ],
+      agents: [
+        { id: 'designer', name: 'Designer' },
+        { id: 'reviewer', name: 'Reviewer' },
       ],
       onDeleteAllSessions,
     });
@@ -81,6 +87,9 @@ describe('SessionList live tree', () => {
 
     expect(screen.getByText(/delete all sessions/i)).toBeInTheDocument();
     expect(screen.getByText(/delete every loaded session and transcript/i)).toBeInTheDocument();
+    expect(screen.getByTestId('loaded-session-count')).toHaveTextContent('1');
+    expect(screen.getByText('Configured agents')).toBeInTheDocument();
+    expect(screen.getByText('Reviewer')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^delete all$/i }));
 

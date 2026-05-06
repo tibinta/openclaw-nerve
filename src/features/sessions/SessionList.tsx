@@ -3,7 +3,7 @@ import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 import type { SpawnSessionOpts, GatewayAgentRegistration } from '@/contexts/SessionContext';
 import { SessionSkeletonGroup } from '@/components/skeletons';
-import { buildSessionTree, flattenTree, getSessionType } from './sessionTree';
+import { buildSessionTree, flattenTree, getSessionType, type TreeNode } from './sessionTree';
 import { getSessionDisplayLabel, isTopLevelAgentSessionKey } from './sessionKeys';
 import { SessionNode } from './SessionNode';
 import type { GranularAgentState } from '@/types';
@@ -64,6 +64,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
+  const liveSessionCount = sessions.length;
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget || !onDelete) return;
@@ -79,7 +80,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   }, [deleteTarget, onDelete]);
 
   const handleDeleteAll = useCallback(async () => {
-    if (!onDeleteAllSessions) return;
+    if (!onDeleteAllSessions || liveSessionCount === 0) return;
     setDeletingAll(true);
     try {
       await onDeleteAllSessions();
@@ -89,7 +90,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
       setDeletingAll(false);
       setDeleteAllOpen(false);
     }
-  }, [onDeleteAllSessions]);
+  }, [liveSessionCount, onDeleteAllSessions]);
 
   const startRename = useCallback((sessionKey: string, currentLabel: string) => {
     setRenamingKey(sessionKey);
@@ -120,6 +121,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
 
   const prevPercentsRef = useRef<Record<string, number>>({});
   const prevTokensRef = useRef<Record<string, number>>({});
+  const liveSessionKeys = useMemo(() => new Set(sessions.map((session) => getSessionKey(session))), [sessions]);
 
   // Calculate which sessions are growing (compare to previous render via ref)
   const growingSessions = useMemo(() => {
@@ -149,61 +151,109 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     });
   }, [sessions]);
 
-  const configuredAgentSessions = useMemo<Session[]>(() => agents.flatMap((agent) => {
+  const configuredFallbackSessions = useMemo<Session[]>(() => agents.flatMap((agent) => {
     const id = agent.id.trim();
     if (!id || id === 'main') return [];
+
+    const sessionKey = `agent:${id}:main`;
+    if (liveSessionKeys.has(sessionKey)) return [];
+
     return [{
-      sessionKey: `agent:${id}:main`,
+      sessionKey,
       label: agent.name?.trim() || agent.label?.trim() || `Agent ${id}`,
       displayName: agent.identityName?.trim() || agent.name?.trim() || agent.label?.trim() || undefined,
       state: 'idle',
       agentState: 'idle',
       status: 'idle',
     } as Session];
-  }), [agents]);
+  }), [agents, liveSessionKeys]);
 
-  const displaySessions = useMemo<Session[]>(() => {
-    if (configuredAgentSessions.length === 0) return sessions;
-
-    const liveSessionsByKey = new Map(sessions.map((session) => [getSessionKey(session), session] as const));
-
-    const mergedConfigured = configuredAgentSessions.map((configuredSession): Session => {
-      const key = getSessionKey(configuredSession);
-      const liveSession = liveSessionsByKey.get(key);
-      if (!liveSession) return configuredSession;
-
-      return {
-        ...configuredSession,
-        ...liveSession,
-        label: liveSession.label?.trim() || configuredSession.label,
-        displayName: liveSession.displayName?.trim() || configuredSession.displayName,
-      };
-    });
-
-    const seen = new Set(mergedConfigured.map((session) => getSessionKey(session)));
-    const merged: Session[] = [...mergedConfigured];
-    for (const session of sessions) {
-      const key = getSessionKey(session);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      merged.push(session);
-    }
-    return merged;
-  }, [configuredAgentSessions, sessions]);
-
-  // Build tree and flatten for rendering
-  const tree = useMemo(() => buildSessionTree(displaySessions), [displaySessions]);
-  const flatNodes = useMemo(() => flattenTree(tree, expandedState), [tree, expandedState]);
+  // Build separate trees for live gateway sessions and configured fallbacks.
+  const liveTree = useMemo(() => buildSessionTree(sessions), [sessions]);
+  const liveFlatNodes = useMemo(() => flattenTree(liveTree, expandedState), [liveTree, expandedState]);
+  const fallbackTree = useMemo(() => buildSessionTree(configuredFallbackSessions), [configuredFallbackSessions]);
+  const fallbackFlatNodes = useMemo(() => flattenTree(fallbackTree, expandedState), [fallbackTree, expandedState]);
 
   const handleSetDeleteTarget = useCallback((key: string, label: string) => {
-    const targetNode = findNodeByKey(tree, key);
+    const targetNode = findNodeByKey(liveTree, key);
     setDeleteTarget({
       key,
       label,
       descendantCount: targetNode ? countDescendants(targetNode) : 0,
       isRootAgent: isTopLevelAgentSessionKey(key),
     });
-  }, [tree]);
+  }, [liveTree]);
+
+  const renderSessionNode = useCallback((node: TreeNode, allowActions: boolean) => {
+    const sessionKey = node.key;
+    const sessionType = getSessionType(sessionKey);
+    const isSubagent = sessionType === 'subagent';
+    const isCron = sessionType === 'cron';
+    const isCronRun = sessionType === 'cron-run';
+    const isRootAgent = isTopLevelAgentSessionKey(sessionKey);
+    const label = getSessionDisplayLabel(node.session, agentName);
+    const isGrowing = growingSessions[sessionKey] ?? false;
+    const running = busyState[sessionKey] || node.session.state === 'running' || node.session.agentState === 'running' || node.session.busy || node.session.processing || node.session.status === 'running' || node.session.status === 'busy' || (isGrowing && isSubagent);
+    const isActive = sessionKey === currentSession;
+    const currentTokens = node.session.totalTokens || 0;
+    const prevTokens = prevTokensRef.current[sessionKey] || 0;
+    const displayTokens = Math.max(currentTokens, prevTokens);
+    const isExpanded = expandedState[sessionKey] ?? !isCron;
+
+    return (
+      <SessionNode
+        key={sessionKey}
+        node={node}
+        isActive={isActive}
+        isGrowing={isGrowing}
+        running={running}
+        displayTokens={displayTokens}
+        label={label}
+        isExpanded={isExpanded}
+        hasChildren={node.children.length > 0}
+        isRootAgent={isRootAgent}
+        isSubagent={isSubagent}
+        isCron={isCron}
+        isCronRun={isCronRun}
+        isUnread={unreadSessions?.[sessionKey] ?? false}
+        isRenaming={allowActions && renamingKey === sessionKey}
+        renameValue={renameValue}
+        renameInputRef={renameInputRef}
+        granularStatus={allowActions ? agentStatus?.[sessionKey] : undefined}
+        onSelect={onSelect}
+        onToggleExpand={handleToggleExpand}
+        onDelete={allowActions && onDelete ? handleSetDeleteTarget : undefined}
+        onStartRename={allowActions && onRename ? startRename : undefined}
+        onAbort={allowActions ? onAbort : undefined}
+        onRenameChange={handleRenameChange}
+        onRenameCommit={commitRename}
+        onRenameCancel={cancelRename}
+        compact={compact}
+      />
+    );
+  }, [
+    agentName,
+    agentStatus,
+    busyState,
+    cancelRename,
+    commitRename,
+    compact,
+    currentSession,
+    expandedState,
+    handleRenameChange,
+    handleSetDeleteTarget,
+    handleToggleExpand,
+    growingSessions,
+    onAbort,
+    onDelete,
+    onRename,
+    onSelect,
+    renameInputRef,
+    renameValue,
+    renamingKey,
+    unreadSessions,
+    startRename,
+  ]);
 
   return (
     <div className={compact ? 'flex flex-col max-h-[65vh]' : 'h-full flex flex-col min-h-0'}>
@@ -250,58 +300,24 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
         </div>
       </div>
       <div className={compact ? 'overflow-y-auto' : 'flex-1 overflow-y-auto'}>
-        {isLoading && flatNodes.length === 0 ? (
+        {isLoading && liveFlatNodes.length === 0 ? (
           <SessionSkeletonGroup count={4} />
-        ) : flatNodes.length === 0 ? (
-          <div className="text-muted-foreground px-3 py-2 text-[0.733rem]">No active sessions</div>
-        ) : flatNodes.map((node) => {
-          const sessionKey = node.key;
-          const sessionType = getSessionType(sessionKey);
-          const isSubagent = sessionType === 'subagent';
-          const isCron = sessionType === 'cron';
-          const isCronRun = sessionType === 'cron-run';
-          const isRootAgent = isTopLevelAgentSessionKey(sessionKey);
-          const label = getSessionDisplayLabel(node.session, agentName);
-          const isGrowing = growingSessions[sessionKey] ?? false;
-          const running = busyState[sessionKey] || node.session.state === 'running' || node.session.agentState === 'running' || node.session.busy || node.session.processing || node.session.status === 'running' || node.session.status === 'busy' || (isGrowing && isSubagent);
-          const isActive = sessionKey === currentSession;
-          const currentTokens = node.session.totalTokens || 0;
-          const prevTokens = prevTokensRef.current[sessionKey] || 0;
-          const displayTokens = Math.max(currentTokens, prevTokens);
-          const isExpanded = expandedState[sessionKey] ?? !isCron;
+        ) : (
+          <>
+            {liveFlatNodes.length === 0 ? (
+              <div className="text-muted-foreground px-3 py-2 text-[0.733rem]">No active sessions</div>
+            ) : liveFlatNodes.map((node) => renderSessionNode(node, true))}
 
-          return (
-            <SessionNode
-              key={sessionKey}
-              node={node}
-              isActive={isActive}
-              isGrowing={isGrowing}
-              running={running}
-              displayTokens={displayTokens}
-              label={label}
-              isExpanded={isExpanded}
-              hasChildren={node.children.length > 0}
-              isRootAgent={isRootAgent}
-              isSubagent={isSubagent}
-              isCron={isCron}
-              isCronRun={isCronRun}
-              isUnread={unreadSessions?.[sessionKey] ?? false}
-              isRenaming={renamingKey === sessionKey}
-              renameValue={renameValue}
-              renameInputRef={renameInputRef}
-              granularStatus={agentStatus?.[sessionKey]}
-              onSelect={onSelect}
-              onToggleExpand={handleToggleExpand}
-              onDelete={onDelete ? handleSetDeleteTarget : undefined}
-              onStartRename={onRename ? startRename : undefined}
-              onAbort={onAbort}
-              onRenameChange={handleRenameChange}
-              onRenameCommit={commitRename}
-              onRenameCancel={cancelRename}
-              compact={compact}
-            />
-          );
-        })}
+            {fallbackFlatNodes.length > 0 && (
+              <section className="mt-3 border-t border-border/40 pt-3">
+                <div className="px-3 pb-2 text-[0.667rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
+                  Configured agents
+                </div>
+                {fallbackFlatNodes.map((node) => renderSessionNode(node, false))}
+              </section>
+            )}
+          </>
+        )}
       </div>
 
       {/* Bulk delete confirmation dialog */}
@@ -319,7 +335,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
           <div className="py-4">
             <div className="bg-background border border-border/60 px-3 py-2">
               <p className="text-[0.733rem] text-muted-foreground uppercase tracking-wider mb-1">Loaded sessions:</p>
-              <p className="text-[0.8rem] text-foreground font-mono">{sessions.length}</p>
+              <p data-testid="loaded-session-count" className="text-[0.8rem] text-foreground font-mono">{liveSessionCount}</p>
             </div>
           </div>
           <DialogFooter className="gap-2">
@@ -335,7 +351,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
             <Button
               type="button"
               onClick={handleDeleteAll}
-              disabled={deletingAll}
+              disabled={deletingAll || liveSessionCount === 0}
               className="font-mono text-xs bg-red text-foreground hover:bg-red/90"
             >
               {deletingAll ? 'Deleting...' : 'Delete All'}

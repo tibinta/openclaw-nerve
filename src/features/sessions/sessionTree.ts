@@ -73,9 +73,11 @@ function buildTreeNodes(
 ): TreeNode[] {
   if (renderSessions.length === 0) return [];
 
+  const sessionsByKey = new Map<string, Session>();
   const childrenOf = new Map<string | null, Session[]>();
   for (const session of renderSessions) {
     const sessionKey = getSessionKey(session);
+    sessionsByKey.set(sessionKey, session);
     const parentKey = parentMap.get(sessionKey) ?? null;
     const list = childrenOf.get(parentKey);
     if (list) {
@@ -86,7 +88,8 @@ function buildTreeNodes(
   }
 
   const typeOrder = { main: 0, subagent: 1, cron: 2, 'cron-run': 3 };
-  const getSessionSortTime = (session: Session): number => {
+  const getSessionSortTime = (session: Session | undefined): number => {
+    if (!session) return 0;
     const candidates = [session.updatedAt, session.lastActivity];
     for (const value of candidates) {
       if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -97,6 +100,26 @@ function buildTreeNodes(
     }
     return 0;
   };
+  const familySortTimeMemo = new Map<string, number>();
+  const familySortTimeStack = new Set<string>();
+
+  const getFamilySortTime = (sessionKey: string): number => {
+    const cached = familySortTimeMemo.get(sessionKey);
+    if (cached !== undefined) return cached;
+    if (familySortTimeStack.has(sessionKey)) {
+      return getSessionSortTime(sessionsByKey.get(sessionKey));
+    }
+
+    familySortTimeStack.add(sessionKey);
+    let maxTime = getSessionSortTime(sessionsByKey.get(sessionKey));
+    const children = childrenOf.get(sessionKey) ?? [];
+    for (const child of children) {
+      maxTime = Math.max(maxTime, getFamilySortTime(getSessionKey(child)));
+    }
+    familySortTimeStack.delete(sessionKey);
+    familySortTimeMemo.set(sessionKey, maxTime);
+    return maxTime;
+  };
 
   function buildNodes(parentKey: string | null, depth: number): TreeNode[] {
     const children = childrenOf.get(parentKey);
@@ -105,6 +128,12 @@ function buildTreeNodes(
     const sorted = [...children].sort((a, b) => {
       const keyA = getSessionKey(a);
       const keyB = getSessionKey(b);
+
+      if (parentKey === null) {
+        const familyTimeA = getFamilySortTime(keyA);
+        const familyTimeB = getFamilySortTime(keyB);
+        if (familyTimeA !== familyTimeB) return familyTimeB - familyTimeA;
+      }
 
       const timeA = getSessionSortTime(a);
       const timeB = getSessionSortTime(b);
