@@ -64,33 +64,6 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
-  const liveSessionCount = sessions.length;
-
-  const handleDelete = useCallback(async () => {
-    if (!deleteTarget || !onDelete) return;
-    setDeleting(true);
-    try {
-      await onDelete(deleteTarget.key);
-    } catch (err) {
-      console.error('Failed to delete session:', err);
-    } finally {
-      setDeleting(false);
-      setDeleteTarget(null);
-    }
-  }, [deleteTarget, onDelete]);
-
-  const handleDeleteAll = useCallback(async () => {
-    if (!onDeleteAllSessions || liveSessionCount === 0) return;
-    setDeletingAll(true);
-    try {
-      await onDeleteAllSessions();
-    } catch (err) {
-      console.error('Failed to delete all sessions:', err);
-    } finally {
-      setDeletingAll(false);
-      setDeleteAllOpen(false);
-    }
-  }, [liveSessionCount, onDeleteAllSessions]);
 
   const startRename = useCallback((sessionKey: string, currentLabel: string) => {
     setRenamingKey(sessionKey);
@@ -173,6 +146,35 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   const liveFlatNodes = useMemo(() => flattenTree(liveTree, expandedState), [liveTree, expandedState]);
   const fallbackTree = useMemo(() => buildAgentSidebarTree(configuredFallbackSessions), [configuredFallbackSessions]);
   const fallbackFlatNodes = useMemo(() => flattenTree(fallbackTree, expandedState), [fallbackTree, expandedState]);
+  // Count the visible live agent rows, not the raw gateway payload, so the
+  // bulk-delete confirmation matches what the user actually sees.
+  const liveSessionCount = liveFlatNodes.length;
+
+  const handleDelete = useCallback(async () => {
+    if (!deleteTarget || !onDelete) return;
+    setDeleting(true);
+    try {
+      await onDelete(deleteTarget.key);
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  }, [deleteTarget, onDelete]);
+
+  const handleDeleteAll = useCallback(async () => {
+    if (!onDeleteAllSessions || liveSessionCount === 0) return;
+    setDeletingAll(true);
+    try {
+      await onDeleteAllSessions();
+    } catch (err) {
+      console.error('Failed to delete all sessions:', err);
+    } finally {
+      setDeletingAll(false);
+      setDeleteAllOpen(false);
+    }
+  }, [liveSessionCount, onDeleteAllSessions]);
 
   const handleSetDeleteTarget = useCallback((key: string, label: string) => {
     const targetNode = findNodeByKey(liveTree, key);
@@ -334,7 +336,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
           </DialogHeader>
           <div className="py-4">
             <div className="bg-background border border-border/60 px-3 py-2">
-              <p className="text-[0.733rem] text-muted-foreground uppercase tracking-wider mb-1">Loaded sessions:</p>
+              <p className="text-[0.733rem] text-muted-foreground uppercase tracking-wider mb-1">Visible agent sessions:</p>
               <p data-testid="loaded-session-count" className="text-[0.8rem] text-foreground font-mono">{liveSessionCount}</p>
             </div>
           </div>

@@ -75,6 +75,7 @@ describe('SessionList live tree', () => {
     renderSessionList({
       sessions: [
         { sessionKey: 'agent:designer:main', label: 'Designer' },
+        { sessionKey: 'heartbeat-dispatch-2026-05-06', label: 'Dispatch Run' },
       ],
       agents: [
         { id: 'designer', name: 'Designer' },
@@ -88,6 +89,7 @@ describe('SessionList live tree', () => {
     expect(screen.getByText(/delete all sessions/i)).toBeInTheDocument();
     expect(screen.getByText(/delete every loaded session and transcript/i)).toBeInTheDocument();
     expect(screen.getByTestId('loaded-session-count')).toHaveTextContent('1');
+    expect(screen.getByText(/visible agent sessions/i)).toBeInTheDocument();
     expect(screen.getByText('Configured agents')).toBeInTheDocument();
     expect(screen.getByText('Reviewer')).toBeInTheDocument();
 
