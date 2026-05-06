@@ -24,6 +24,7 @@ import {
   isRootChildSession,
   isSubagentSessionKey,
   isTopLevelAgentSessionKey,
+  pickDefaultSessionKey,
 } from '@/features/sessions/sessionKeys';
 import {
   loadChatHistory,
@@ -132,7 +133,7 @@ function dedupeReplayMessages(messages: ChatMsg[]): ChatMsg[] {
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { connectionState, rpc, subscribe } = useGateway();
-  const { currentSession, sessions } = useSessionContext();
+  const { currentSession, sessions, setCurrentSession } = useSessionContext();
   const { soundEnabled, speak } = useSettings();
 
   // ─── Shared state ─────────────────────────────────────────────────────────
@@ -596,6 +597,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const handleSend = useCallback(async (text: string, images?: ImageAttachment[], uploadPayload?: OutgoingUploadPayload) => {
     ttsHook.trackVoiceMessage(text);
 
+    const effectiveSessionKey = currentSessionRef.current.trim()
+      || pickDefaultSessionKey(sessions, currentSessionRef.current);
+
+    if (!effectiveSessionKey) {
+      setIsGenerating(false);
+      const errMsgBubble: ChatMsg = {
+        msgId: generateMsgId(),
+        role: 'system',
+        html: 'Send error: No active session available yet.',
+        rawText: '',
+        timestamp: new Date(),
+      };
+      msgHook.setAllMessages(prev => [...prev, errMsgBubble]);
+      msgHook.setMessages((prev: ChatMsg[]) => [...prev, errMsgBubble]);
+      return;
+    }
+
+    if (effectiveSessionKey !== currentSessionRef.current) {
+      currentSessionRef.current = effectiveSessionKey;
+      setCurrentSession(effectiveSessionKey);
+    }
+
     const { msg: userMsg, tempId } = buildUserMessage({ text, images, uploadPayload });
 
     recoveryHook.incrementGeneration();
@@ -611,7 +634,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       const ack = await sendChatMessage({
         rpc,
-        sessionKey: currentSessionRef.current,
+        sessionKey: effectiveSessionKey,
         text,
         images,
         uploadPayload,
@@ -619,7 +642,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
 
       if (ack.runId) {
-        const run = getOrCreateRunState(runsRef.current, ack.runId, currentSessionRef.current);
+        const run = getOrCreateRunState(runsRef.current, ack.runId, effectiveSessionKey);
         run.status = ack.status;
         run.finalized = false;
         activeRunIdRef.current = ack.runId;
@@ -648,7 +671,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       msgHook.setMessages((prev: ChatMsg[]) => [...prev, errMsgBubble]);
       setIsGenerating(false);
     }
-  }, [rpc, msgHook, streamHook, ttsHook, recoveryHook]);
+  }, [currentSessionRef, msgHook, recoveryHook, rpc, sessions, setCurrentSession, streamHook, ttsHook]);
 
   // ─── Abort / Reset ────────────────────────────────────────────────────────
   const handleAbort = useCallback(async () => {
