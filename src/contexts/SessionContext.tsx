@@ -852,8 +852,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const remaining = sessionsRef.current.filter(s => !keysToDelete.includes(getSessionKey(s)));
     const nextCurrentSession = shouldReplaceCurrent ? pickDefaultSessionKey(remaining) : currentSessionRef.current;
 
-    for (const key of keysToDelete) {
-      await rpc('sessions.delete', { key, deleteTranscript: true });
+    try {
+      const res = await fetch('/api/sessions/delete-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: keysToDelete }),
+      });
+      const data = await res.json() as { ok?: boolean; failed?: string[]; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Delete failed');
+      }
+    } catch (err) {
+      console.debug('[SessionContext] Failed to delete session(s):', err);
+      throw err;
     }
 
     setSessions(prev => prev.filter(s => !keysToDelete.includes(getSessionKey(s))));
@@ -866,7 +877,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (shouldReplaceCurrent) {
       setCurrentSession(nextCurrentSession);
     }
-  }, [findDescendantSessionKeys, listAuthoritativeSessions, rpc, setCurrentSession]);
+  }, [findDescendantSessionKeys, listAuthoritativeSessions, setCurrentSession]);
 
   // Bulk reset stays on the canonical delete RPC so backend transcript cleanup remains consistent.
   const deleteAllSessions = useCallback(async () => {

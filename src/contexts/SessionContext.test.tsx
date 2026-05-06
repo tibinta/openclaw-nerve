@@ -76,6 +76,19 @@ function SessionDeleteAllProbe() {
   );
 }
 
+function SessionDeleteSingleProbe() {
+  const { currentSession, deleteSession } = useSessionContext();
+
+  return (
+    <div>
+      <div data-testid="current-session">{currentSession}</div>
+      <button data-testid="delete-single" onClick={() => void deleteSession('agent:designer:main')}>
+        Delete single
+      </button>
+    </div>
+  );
+}
+
 function SessionAutoCompactProbe() {
   const { currentSession, refreshSessions } = useSessionContext();
 
@@ -542,6 +555,48 @@ describe('SessionContext', () => {
         headers: { 'Content-Type': 'application/json' },
       }),
     );
+  });
+
+  it('deletes a single session and its descendants through the HTTP delete-all route', async () => {
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { sessionKey: 'agent:main:main', label: 'Main' },
+            { sessionKey: 'agent:designer:main', label: 'Designer' },
+            { sessionKey: 'agent:designer:subagent:child', label: 'Designer child' },
+          ],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionDeleteSingleProbe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+    });
+
+    await act(async () => {
+      screen.getByTestId('delete-single').click();
+    });
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/sessions/delete-all',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            keys: ['agent:designer:subagent:child', 'agent:designer:main'],
+          }),
+        }),
+      );
+    });
   });
 
   it('auto-compacts the current session once when context usage crosses 90 percent', async () => {
