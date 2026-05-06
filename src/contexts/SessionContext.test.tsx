@@ -196,6 +196,21 @@ describe('SessionContext', () => {
     });
   });
 
+  it('seeds Jane direct as the usable default before the first sessions poll completes', async () => {
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    render(<SessionProvider><SessionLabels /></SessionProvider>);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
+    });
+  });
+
   it('subagent spawn calls /api/sessions/spawn-subagent, refreshes sessions, and switches to the returned child', async () => {
     let sessionsListCalls = 0;
     rpcMock.mockImplementation(async (method: string) => {

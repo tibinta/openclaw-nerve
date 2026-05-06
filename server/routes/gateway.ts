@@ -2,6 +2,7 @@
  * Gateway API Routes
  *
  * GET  /api/gateway/models       — Returns configured models from the active OpenClaw config.
+ * GET  /api/gateway/agents       — Returns the configured agent registry from the active OpenClaw config.
  * GET  /api/gateway/session-info — Returns the current session's runtime info (model, thinking level).
  * POST /api/gateway/session-patch — Change model/effort for a session via HTTP (reliable fallback).
  * POST /api/gateway/restart      — Restart the OpenClaw gateway service via `openclaw gateway restart`.
@@ -75,7 +76,28 @@ interface OpenClawConfig {
       };
       models?: Record<string, OpenClawModelConfigEntry | undefined>;
     };
+    list?: Array<OpenClawAgentConfigEntry | undefined>;
   };
+}
+
+interface OpenClawAgentConfigEntry {
+  id?: string;
+  name?: string;
+  label?: string;
+  default?: boolean;
+  workspace?: string;
+  agentDir?: string;
+  identity?: { name?: string };
+}
+
+interface GatewayAgentRegistration {
+  id: string;
+  name?: string;
+  identityName?: string;
+  label?: string;
+  default?: boolean;
+  workspace?: string;
+  agentDir?: string;
 }
 
 /**
@@ -180,6 +202,41 @@ async function getModelCatalog(): Promise<{ models: GatewayModelInfo[]; error: s
 app.get('/api/gateway/models', rateLimitGeneral, async (c) => {
   const { models, error } = await getModelCatalog();
   return c.json({ models, error, source: 'config' });
+});
+
+async function getAgentRegistry(): Promise<{ agents: GatewayAgentRegistration[]; error: string | null }> {
+  const configPath = resolveOpenClawConfigPath();
+
+  try {
+    const raw = await readFile(configPath, 'utf8');
+    const configData = JSON5.parse(raw) as OpenClawConfig;
+    const list = configData.agents?.list ?? [];
+    const agents = list
+      .map((entry) => {
+        const id = entry?.id?.trim();
+        if (!id) return null;
+        return {
+          id,
+          name: entry?.name?.trim() || undefined,
+          identityName: entry?.identity?.name?.trim() || undefined,
+          label: entry?.label?.trim() || entry?.name?.trim() || entry?.identity?.name?.trim() || undefined,
+          default: entry?.default,
+          workspace: entry?.workspace?.trim() || undefined,
+          agentDir: entry?.agentDir?.trim() || undefined,
+        } satisfies GatewayAgentRegistration;
+      })
+      .filter((entry): entry is GatewayAgentRegistration => entry !== null);
+
+    return { agents, error: null };
+  } catch (err) {
+    console.warn('[gateway/agents] failed to read configured agents from config:', configPath, (err as Error).message);
+    return { agents: [], error: CONFIG_READ_ERROR };
+  }
+}
+
+app.get('/api/gateway/agents', rateLimitGeneral, async (c) => {
+  const { agents, error } = await getAgentRegistry();
+  return c.json({ agents, error, source: 'config' });
 });
 
 /**

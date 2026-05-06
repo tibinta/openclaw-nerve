@@ -838,6 +838,65 @@ describe('gateway routes', () => {
       const json = await res.json() as { ok: boolean; output: string };
       expect(json.ok).toBe(false);
       expect(json.output).toMatch(/port not ready/);
+      });
     });
   });
-});
+
+  describe('GET /api/gateway/agents', () => {
+    it('returns the configured agent registry from openclaw.json', async () => {
+      execFileImpl = (_bin: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+        (cb as (err: null, stdout: string) => void)(null, '');
+      };
+      invokeGatewayImpl = () => ({});
+      process.env.OPENCLAW_CONFIG_PATH = '/tmp/openclaw.json';
+      readFileImpl = async (path: unknown) => {
+        expect(path).toBe('/tmp/openclaw.json');
+        return JSON.stringify({
+          agents: {
+            list: [
+              {
+                id: 'jane-whitmore---ceo',
+                name: 'Jane Whitmore - CEO',
+                identity: { name: 'Jane Whitmore - CEO' },
+                workspace: '/Users/alexnedelea/.openclaw/workspace-jane-whitmore-ceo',
+                default: true,
+              },
+              {
+                id: 'atlas-reed---fast-worker',
+                name: 'Atlas Reed - Fast Worker',
+                identity: { name: 'Atlas Reed - Fast Worker' },
+              },
+            ],
+          },
+        });
+      };
+
+      const app = buildApp();
+      const res = await app.request('/api/gateway/agents');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        agents: [
+          {
+            id: 'jane-whitmore---ceo',
+            name: 'Jane Whitmore - CEO',
+            identityName: 'Jane Whitmore - CEO',
+            label: 'Jane Whitmore - CEO',
+            default: true,
+            workspace: '/Users/alexnedelea/.openclaw/workspace-jane-whitmore-ceo',
+            agentDir: undefined,
+          },
+          {
+            id: 'atlas-reed---fast-worker',
+            name: 'Atlas Reed - Fast Worker',
+            identityName: 'Atlas Reed - Fast Worker',
+            label: 'Atlas Reed - Fast Worker',
+            default: undefined,
+            workspace: undefined,
+            agentDir: undefined,
+          },
+        ],
+        error: null,
+        source: 'config',
+      });
+    });
+  });

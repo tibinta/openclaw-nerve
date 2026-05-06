@@ -252,6 +252,14 @@ export function pickDefaultSessionKey(sessions: Session[], preferredKey?: string
 
       return getSessionKey(preferred);
     }
+
+    // If the live list is still empty, keep the caller's preferred key so the
+    // UI can stay on the last known good session instead of dropping to blank.
+    // This is especially important for the Jane direct thread during startup,
+    // where chat should remain usable even before the first sessions poll lands.
+    if (sessions.length === 0) {
+      return preferredKey;
+    }
   }
 
   if (janeDirectChatSession) {
@@ -269,7 +277,7 @@ export function pickDefaultSessionKey(sessions: Session[], preferredKey?: string
     return getSessionKey(sessions[0]);
   }
 
-  return '';
+  return JANE_DIRECT_CHAT_SESSION_KEY;
 }
 
 export function buildAgentRootSessionKey(

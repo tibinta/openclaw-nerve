@@ -127,6 +127,10 @@ describe('sessionKeys', () => {
     expect(pickDefaultSessionKey(sessions, 'agent:jane-whitmore---ceo:main')).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
   });
 
+  it('keeps the preferred session while the live list is still empty', () => {
+    expect(pickDefaultSessionKey([], JANE_DIRECT_CHAT_SESSION_KEY)).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
+  });
+
   it('deduplicates heartbeat aliases when choosing top-level agents', () => {
     const sessions = [
       session('agent:reviewer:main', { label: 'Reviewer' }),

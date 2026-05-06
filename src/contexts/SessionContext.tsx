@@ -11,6 +11,7 @@ import {
   buildAgentRootSessionKey,
   getAgentRegistrationName,
   LEGACY_MAIN_SESSION_KEY,
+  JANE_DIRECT_CHAT_SESSION_KEY,
   PRIMARY_AGENT_SESSION_KEY,
   getRootAgentSessionKey,
   getSessionDisplayLabel,
@@ -102,7 +103,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [agents, setAgents] = useState<GatewayAgentRegistration[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
-  const [currentSession, setCurrentSessionRaw] = useState('');
+  const [currentSession, setCurrentSessionRaw] = useState(JANE_DIRECT_CHAT_SESSION_KEY);
   const [agentLogEntries, setAgentLogEntries] = useState<AgentLogEntry[]>([]);
   const [eventEntries, setEventEntries] = useState<EventEntry[]>([]);
   const [agentStatus, setAgentStatus] = useState<Record<string, GranularAgentState>>({});
@@ -190,11 +191,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setAgentsLoading(true);
     try {
       const res = await fetch('/api/gateway/agents');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { agents?: GatewayAgentRegistration[] };
       setAgents(Array.isArray(data.agents) ? data.agents : []);
     } catch (err) {
-      console.debug('[SessionContext] Failed to load agents registry:', err);
-      setAgents([]);
+      console.debug('[SessionContext] Failed to load agents registry, deriving from live sessions:', err);
+      setAgents(getTopLevelAgentSessions(sessionsRef.current)
+        .filter((session) => {
+          const rootId = getRootAgentId(getSessionKey(session));
+          return Boolean(rootId && rootId !== 'main');
+        })
+        .map((session) => {
+          const rootId = getRootAgentId(getSessionKey(session)) || 'agent';
+          return {
+            id: rootId,
+            name: session.label?.trim() || session.displayName?.trim() || `Agent ${rootId}`,
+            identityName: session.displayName?.trim() || session.label?.trim() || undefined,
+            label: session.label?.trim() || session.displayName?.trim() || undefined,
+          };
+        }));
     } finally {
       setAgentsLoading(false);
     }
@@ -204,6 +219,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshAgents();
   }, [refreshAgents]);
+
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    if (currentSessionRef.current) return;
+    // Seed the operator chat lane immediately so the UI has a usable default
+    // before the first sessions poll finishes. The live session list will
+    // reconcile this once data arrives, but we never want to sit on a blank
+    // chat frame when Jane direct is available.
+    setCurrentSession(JANE_DIRECT_CHAT_SESSION_KEY);
+  }, [connectionState, setCurrentSession]);
 
   useEffect(() => {
     const controller = new AbortController();
