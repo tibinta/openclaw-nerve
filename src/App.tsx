@@ -24,7 +24,6 @@ import { getSessionKey } from '@/types';
 import { useConnectionManager } from '@/hooks/useConnectionManager';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { useGatewayRestart } from '@/hooks/useGatewayRestart';
-import { ConnectDialog } from '@/features/connect/ConnectDialog';
 import { TopBar } from '@/components/TopBar';
 import { StatusBar } from '@/components/StatusBar';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -93,7 +92,7 @@ function getInitialViewMode(canShowKanban: boolean): ViewMode {
 export default function App({ onLogout }: AppProps) {
   // Gateway state
   const {
-    connectionState, connectError, model, sparkline,
+    connectionState, model, sparkline,
   } = useGateway();
 
   // Session state
@@ -130,12 +129,9 @@ export default function App({ onLogout }: AppProps) {
 
   // Connection management (extracted hook)
   const {
-    dialogOpen,
     editableUrl, setEditableUrl,
-    officialUrl,
     editableToken, setEditableToken,
-    handleConnect, handleReconnect,
-    serverSideAuth,
+    handleReconnect,
   } = useConnectionManager();
 
   // Track file change events for tree refresh. Sequence keeps repeated same-path updates visible.
@@ -813,19 +809,10 @@ export default function App({ onLogout }: AppProps) {
       >
         Skip to chat
       </a>
-      <ConnectDialog
-        open={dialogOpen && connectionState !== 'connected' && connectionState !== 'reconnecting'}
-        onConnect={handleConnect}
-        error={connectError}
-        defaultUrl={editableUrl}
-        defaultToken={editableToken}
-        officialUrl={officialUrl}
-        serverSideAuth={serverSideAuth}
-      />
-
       {/*
        * Gateway state banners.
        * Kept compact and centered so they read as transient shell notices instead of old alarm strips.
+       * Startup connection stays silent; recovery lives in Settings so refresh never blocks on a modal.
        */}
       {connectionState === 'reconnecting' && !gatewayRestarting && (
         <div className="fixed left-1/2 top-12 z-50 flex max-w-[calc(100vw-1.067rem)] -translate-x-1/2 items-start gap-2 rounded-2xl border border-destructive/25 bg-card/94 px-4 py-2 text-xs font-medium text-foreground shadow-[0_20px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl">

@@ -26,6 +26,7 @@ const {
   reloadCalls,
   topBarRenderSnapshots,
   tabRenderSnapshots,
+  connectDialogRenderSnapshots,
   useOpenFilesMock,
 } = vi.hoisted(() => {
   const settingsContext = {
@@ -77,6 +78,7 @@ const {
     hasSaveToast: boolean;
     saveToastPath: string | null;
   }> = [];
+  const connectDialogRenderSnapshots: Array<{ open: boolean }> = [];
 
   const useOpenFilesMock = vi.fn((agentId: string) => ({
     openFiles: [{ path: 'shared.md', name: 'shared.md', content: 'draft', savedContent: 'draft', dirty: dirtyStateByAgent[agentId] ?? false }],
@@ -108,6 +110,7 @@ const {
     reloadCalls,
     topBarRenderSnapshots,
     tabRenderSnapshots,
+    connectDialogRenderSnapshots,
     useOpenFilesMock,
   };
 });
@@ -254,7 +257,10 @@ vi.mock('@/features/file-browser', () => ({
 }));
 
 vi.mock('@/features/connect/ConnectDialog', () => ({
-  ConnectDialog: () => null,
+  ConnectDialog: (props: { open: boolean }) => {
+    connectDialogRenderSnapshots.push({ open: props.open });
+    return null;
+  },
 }));
 
 vi.mock('@/components/TopBar', () => ({
@@ -355,6 +361,23 @@ vi.mock('@/features/kanban/KanbanPanel', () => ({
   KanbanPanel: () => null,
 }));
 
+beforeEach(() => {
+  connectDialogRenderSnapshots.length = 0;
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+});
+
 describe('App save toast workspace scoping', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -370,21 +393,8 @@ describe('App save toast workspace scoping', () => {
     reloadCalls.length = 0;
     topBarRenderSnapshots.length = 0;
     tabRenderSnapshots.length = 0;
+    connectDialogRenderSnapshots.length = 0;
     useOpenFilesMock.mockClear();
-
-    Object.defineProperty(window, 'matchMedia', {
-      writable: true,
-      value: vi.fn().mockImplementation((query: string) => ({
-        matches: false,
-        media: query,
-        onchange: null,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      })),
-    });
   });
 
   it('drops a late save conflict toast after switching workspaces before the save resolves', async () => {
@@ -623,5 +633,11 @@ describe('App kanban visibility gating', () => {
     render(<App />);
 
     expect(screen.getByTestId('topbar-view-mode')).toHaveTextContent('chat');
+  });
+
+  it('does not surface the startup connect dialog when disconnected', () => {
+    render(<App />);
+
+    expect(connectDialogRenderSnapshots).toHaveLength(0);
   });
 });
