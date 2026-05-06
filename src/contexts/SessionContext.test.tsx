@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { SessionProvider, useSessionContext } from './SessionContext';
 import { getSessionKey, type GatewayEvent } from '@/types';
+import { JANE_DIRECT_CHAT_SESSION_KEY } from '@/features/sessions/sessionKeys';
 
 const mockUseGateway = vi.fn();
 const mockUseSettings = vi.fn();
@@ -422,6 +423,31 @@ describe('SessionContext', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('current-session').textContent).toBe('agent:jane-whitmore---ceo:main');
+    });
+  });
+
+  it('defaults to the Jane direct chat thread when it is available', async () => {
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { sessionKey: 'agent:main:main', label: 'Main' },
+            { sessionKey: JANE_DIRECT_CHAT_SESSION_KEY, label: 'Jane Direct' },
+            { sessionKey: 'agent:reviewer:main', label: 'Reviewer' },
+          ],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionLabels />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
   });
 

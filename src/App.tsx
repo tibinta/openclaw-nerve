@@ -41,7 +41,7 @@ import { SpawnAgentDialog } from '@/features/sessions/SpawnAgentDialog';
 import { DEFAULT_CHAT_PATH_LINKS_CONFIG, parseChatPathLinksConfig } from '@/features/chat/chatPathLinks';
 import { FileTreePanel, TabbedContentArea, useOpenFiles, type FileTreeChangeEvent } from '@/features/file-browser';
 import { isImageFile } from '@/features/file-browser/utils/fileTypes';
-import { buildAgentRootSessionKey, getSessionDisplayLabel } from '@/features/sessions/sessionKeys';
+import { buildAgentRootSessionKey, getSessionDisplayLabel, JANE_DIRECT_CHAT_SESSION_KEY } from '@/features/sessions/sessionKeys';
 import { shouldGuardWorkspaceSwitch } from '@/features/workspace/workspaceSwitchGuard';
 import { getWorkspaceAgentId, getWorkspaceRootSessionKey } from '@/features/workspace/workspaceScope';
 
@@ -93,7 +93,7 @@ function getInitialViewMode(canShowKanban: boolean): ViewMode {
 export default function App({ onLogout }: AppProps) {
   // Gateway state
   const {
-    connectionState, connectError, reconnectAttempt, model, sparkline,
+    connectionState, connectError, model, sparkline,
   } = useGateway();
 
   // Session state
@@ -570,6 +570,11 @@ export default function App({ onLogout }: AppProps) {
     });
   }, [getWorkspaceSwitchLabel, requestWorkspaceTransition, setCurrentSession]);
 
+  const handleOpenJaneChat = useCallback(() => {
+    setViewMode('chat');
+    handleSessionChange(JANE_DIRECT_CHAT_SESSION_KEY);
+  }, [handleSessionChange, setViewMode]);
+
   const handleSpawnSession = useCallback((opts: SpawnSessionOpts) => {
     const targetSessionKey = opts.kind === 'root'
       ? buildAgentRootSessionKey(opts.agentName?.trim() || 'agent', sessions.map(getSessionKey))
@@ -824,9 +829,7 @@ export default function App({ onLogout }: AppProps) {
           <span className="inline-flex size-7 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
             <AlertTriangle size={14} aria-hidden="true" />
           </span>
-          <span className="min-w-0 text-left leading-5">
-            Signal lost. Reconnecting{reconnectAttempt > 1 ? `, attempt ${reconnectAttempt}` : ''}.
-          </span>
+          <span className="min-w-0 text-left leading-5">Gateway reconnecting…</span>
           <span className="size-2 rounded-full bg-destructive animate-pulse" aria-hidden="true" />
         </div>
       )}
@@ -873,6 +876,7 @@ export default function App({ onLogout }: AppProps) {
           workspacePanel={compactWorkspacePanel}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
+          onOpenJaneChat={handleOpenJaneChat}
           showKanbanView={kanbanVisible}
           onOpenAccountability={() => setAccountabilityOpen((open) => !open)}
           accountabilityOpen={accountabilityOpen}

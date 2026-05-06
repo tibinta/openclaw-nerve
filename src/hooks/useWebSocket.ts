@@ -22,6 +22,10 @@ interface UseWebSocketReturn {
 // keep hammering the handshake path while the server is already saturated.
 const RECONNECT_BASE_DELAY = 5000;
 const RECONNECT_MAX_DELAY = 120000;
+// Local loopback should recover faster so the UI does not sit in a noisy
+// reconnect banner while the gateway is bouncing on the same machine.
+const LOCALHOST_RECONNECT_BASE_DELAY = 1000;
+const LOCALHOST_RECONNECT_MAX_DELAY = 15000;
 const INSTANCE_ID_STORAGE_KEY = 'oc-webchat-instance-id';
 
 function generateInstanceId(): string {
@@ -40,6 +44,18 @@ function getOrCreateInstanceId(): string {
     return fallback;
   } catch {
     return fallback;
+  }
+}
+
+function isLoopbackGatewayUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'localhost'
+      || parsed.hostname === '127.0.0.1'
+      || parsed.hostname === '::1'
+      || parsed.hostname.startsWith('127.');
+  } catch {
+    return false;
   }
 }
 
@@ -75,6 +91,10 @@ export function useWebSocket(): UseWebSocketReturn {
   const doConnectRef = useRef<((url: string, token: string, isReconnect: boolean) => Promise<void>) | null>(null);
   const instanceIdRef = useRef(getOrCreateInstanceId());
   const connectionGenRef = useRef(0);
+  const reconnectDelayProfileRef = useRef({
+    base: RECONNECT_BASE_DELAY,
+    max: RECONNECT_MAX_DELAY,
+  });
 
   const rejectPending = useCallback((reason: Error) => {
     const pending = pendingRef.current;
@@ -117,6 +137,9 @@ export function useWebSocket(): UseWebSocketReturn {
   const doConnect = useCallback((url: string, token: string, isReconnect: boolean): Promise<void> => {
     return new Promise((resolve, reject) => {
       const gen = ++connectionGenRef.current;
+      reconnectDelayProfileRef.current = isLoopbackGatewayUrl(url)
+        ? { base: LOCALHOST_RECONNECT_BASE_DELAY, max: LOCALHOST_RECONNECT_MAX_DELAY }
+        : { base: RECONNECT_BASE_DELAY, max: RECONNECT_MAX_DELAY };
       if (!isReconnect) {
         setConnectError('');
       }
@@ -260,9 +283,10 @@ export function useWebSocket(): UseWebSocketReturn {
         setReconnectAttempt(attempt);
 
         // Exponential backoff with jitter
+        const { base, max } = reconnectDelayProfileRef.current;
         const delay = Math.min(
-          RECONNECT_BASE_DELAY * Math.pow(1.5, attempt - 1) + Math.random() * 500,
-          RECONNECT_MAX_DELAY
+          base * Math.pow(1.5, attempt - 1) + Math.random() * 500,
+          max,
         );
 
         console.debug(`[WS] Reconnecting in ${Math.round(delay)}ms (attempt ${attempt})`);

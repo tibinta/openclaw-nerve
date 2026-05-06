@@ -2,6 +2,7 @@ import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 
 export const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
+export const JANE_DIRECT_CHAT_SESSION_KEY = 'agent:jane-whitmore---ceo:imessage:direct:+447494722196';
 export const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
 const HEARTBEAT_SUFFIX = ':heartbeat';
 
@@ -84,6 +85,11 @@ export function getRootAgentId(sessionKey: string): string | null {
 export function getRootAgentSessionKey(sessionKey: string): string | null {
   const rootId = getRootAgentId(sessionKey);
   return rootId ? `agent:${rootId}:main` : null;
+}
+
+function findSessionByFamilyKey(sessions: Session[], targetKey: string): Session | undefined {
+  const normalizedTarget = normalizeSessionKey(targetKey);
+  return sessions.find((session) => normalizeSessionKey(getSessionKey(session)) === normalizedTarget);
 }
 
 export function inferParentSessionKey(sessionKey: string): string | null {
@@ -224,8 +230,16 @@ export function getSessionDisplayLabel(session: Session, agentName = 'Agent'): s
 }
 
 export function pickDefaultSessionKey(sessions: Session[], preferredKey?: string): string {
-  if (preferredKey && sessions.some((session) => getSessionKey(session) === preferredKey)) {
-    return preferredKey;
+  if (preferredKey) {
+    const preferred = findSessionByFamilyKey(sessions, preferredKey);
+    if (preferred) return getSessionKey(preferred);
+  }
+
+  const janeDirectChatSession = findSessionByFamilyKey(sessions, JANE_DIRECT_CHAT_SESSION_KEY);
+  if (janeDirectChatSession) {
+    // Jane is the operator-facing default chat thread, so prefer it before
+    // falling back to the broader agent root list.
+    return getSessionKey(janeDirectChatSession);
   }
 
   const topLevelAgents = getTopLevelAgentSessions(sessions);

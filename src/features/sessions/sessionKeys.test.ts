@@ -9,6 +9,7 @@ import {
   getSessionDisplayLabel,
   getTopLevelAgentSessions,
   inferParentSessionKey,
+  JANE_DIRECT_CHAT_SESSION_KEY,
   isRootChildSession,
   isTopLevelAgentSessionKey,
   pickDefaultSessionKey,
@@ -104,6 +105,16 @@ describe('sessionKeys', () => {
       'agent:reviewer:main',
     ]);
     expect(pickDefaultSessionKey(sessions)).toBe('agent:jane-whitmore---ceo:main');
+  });
+
+  it('prefers the Jane direct chat thread when it is available', () => {
+    const sessions = [
+      session('agent:reviewer:main', { label: 'Reviewer' }),
+      session(JANE_DIRECT_CHAT_SESSION_KEY, { label: 'Jane Direct' }),
+      session('agent:main:main', { label: 'Main' }),
+    ];
+
+    expect(pickDefaultSessionKey(sessions)).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
   });
 
   it('deduplicates heartbeat aliases when choosing top-level agents', () => {

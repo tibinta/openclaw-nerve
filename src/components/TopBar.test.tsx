@@ -65,4 +65,15 @@ describe('TopBar', () => {
     await user.click(targets);
     expect(onOpenAccountability).toHaveBeenCalledTimes(1);
   });
+
+  it('uses the Jane shortcut when the chat button is opened with a direct session handler', async () => {
+    const user = userEvent.setup();
+    const onOpenJaneChat = vi.fn();
+    renderTopBar({ onOpenJaneChat });
+
+    const chat = screen.getByRole('button', { name: /open jane direct chat/i });
+    await user.click(chat);
+
+    expect(onOpenJaneChat).toHaveBeenCalledTimes(1);
+  });
 });

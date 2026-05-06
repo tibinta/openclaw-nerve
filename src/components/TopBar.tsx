@@ -110,6 +110,8 @@ interface TopBarProps {
   viewMode?: ViewMode;
   /** Callback to change the view mode. */
   onViewModeChange?: (mode: ViewMode) => void;
+  /** Shortcut that opens the operator-facing Jane direct chat thread. */
+  onOpenJaneChat?: () => void;
   /** Whether the Tasks/Kanban view toggle should be shown. */
   showKanbanView?: boolean;
   /** Optional cockpit accountability control. */
@@ -138,6 +140,7 @@ export function TopBar({
   workspacePanel,
   viewMode = "chat",
   onViewModeChange,
+  onOpenJaneChat,
   showKanbanView = true,
   onOpenAccountability,
   accountabilityOpen = false,
@@ -267,9 +270,15 @@ export function TopBar({
         {onViewModeChange && (
           <div className="order-3 flex w-full items-center gap-2 max-[371px]:gap-1 sm:order-none sm:ml-2 sm:w-auto">
             <button
-              onClick={() => onViewModeChange("chat")}
-              title="Chat View"
-              aria-label="Switch to chat view"
+              onClick={() => {
+                if (onOpenJaneChat) {
+                  onOpenJaneChat();
+                  return;
+                }
+                onViewModeChange("chat");
+              }}
+              title={onOpenJaneChat ? "Open Jane chat" : "Chat View"}
+              aria-label={onOpenJaneChat ? "Open Jane direct chat" : "Switch to chat view"}
               aria-pressed={viewMode === "chat"}
               data-active={viewMode === "chat"}
               className="shell-chip min-h-11 flex-1 justify-center text-[0.733rem] uppercase tracking-[0.14em] max-[371px]:min-h-[38px] max-[371px]:gap-1 max-[371px]:px-2 max-[371px]:text-[0.667rem] max-[371px]:tracking-[0.08em] max-[371px]:[&_svg]:size-3 sm:min-h-10 sm:flex-none"

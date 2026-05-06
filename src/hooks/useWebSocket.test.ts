@@ -406,7 +406,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(4_999);
+        await vi.advanceTimersByTimeAsync(999);
       });
 
       expect(wsInstances.length).toBe(1);
