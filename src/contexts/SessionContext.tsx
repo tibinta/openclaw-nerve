@@ -853,9 +853,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [findDescendantSessionKeys, listAuthoritativeSessions, rpc, setCurrentSession]);
 
   // Bulk reset stays on the canonical delete RPC so backend transcript cleanup remains consistent.
+  // Use the already-loaded session snapshot and small batches here; a fresh 200-row
+  // gateway list plus 200 sequential deletes can stall long enough to look broken.
   const deleteAllSessions = useCallback(async () => {
-    const authoritativeSessions = await listAuthoritativeSessions();
-    const keysToDelete = authoritativeSessions
+    const keysToDelete = sessionsRef.current
       .map((session) => getSessionKey(session))
       .filter((sessionKey): sessionKey is string => Boolean(sessionKey))
       .filter((sessionKey) => !isProtectedRootSessionKey(sessionKey))
@@ -869,13 +870,34 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    for (const key of keysToDelete) {
-      await rpc('sessions.delete', { key, deleteTranscript: true });
-      const timeout = doneTimeoutsRef.current[key];
-      if (timeout) {
-        clearTimeout(timeout);
-        delete doneTimeoutsRef.current[key];
-      }
+    const batchSize = 8;
+    const failedKeys: string[] = [];
+
+    for (let i = 0; i < keysToDelete.length; i += batchSize) {
+      const batch = keysToDelete.slice(i, i + batchSize);
+      const results = await Promise.allSettled(
+        batch.map(async (key) => {
+          await rpc('sessions.delete', { key, deleteTranscript: true });
+          const timeout = doneTimeoutsRef.current[key];
+          if (timeout) {
+            clearTimeout(timeout);
+            delete doneTimeoutsRef.current[key];
+          }
+        }),
+      );
+
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          failedKeys.push(batch[index]);
+          console.error('[SessionContext] Failed to delete session during bulk reset:', batch[index], result.reason);
+        }
+      });
+    }
+
+    if (failedKeys.length > 0) {
+      // Re-sync from the gateway so the UI does not lie about what still exists.
+      await refreshSessions();
+      return;
     }
 
     setSessions([]);
@@ -885,7 +907,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setUnreadSessionKeys(new Set<string>());
     }
     setCurrentSession('');
-  }, [listAuthoritativeSessions, rpc, setCurrentSession]);
+  }, [refreshSessions, rpc, setCurrentSession]);
 
   const spawnSession = useCallback(async (opts: SpawnSessionOpts) => {
     const authoritativeSessions = await listAuthoritativeSessions();
