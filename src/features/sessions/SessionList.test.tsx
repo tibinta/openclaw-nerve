@@ -100,9 +100,9 @@ describe('SessionList live tree', () => {
     });
   });
 
-  it('prefers the live session row while keeping the registry label as fallback', () => {
+  it('uses the registry name for top-level agent roots and keeps the live session underneath', () => {
     const sessions: Session[] = [
-      { sessionKey: 'agent:jane:main', label: 'Live Jane', lastActivity: Date.now() - 5 * 60_000, updatedAt: Date.now() - 5 * 60_000, state: 'running', processing: true },
+      { sessionKey: 'agent:jane:main', label: 'heartbeat-jane', displayName: 'Jane Live', lastActivity: Date.now() - 5 * 60_000, updatedAt: Date.now() - 5 * 60_000, state: 'running', processing: true },
     ];
     const agents: GatewayAgentRegistration[] = [
       { id: 'jane', name: 'Jane Registry' },
@@ -110,8 +110,8 @@ describe('SessionList live tree', () => {
 
     renderSessionList({ sessions, agents });
 
-    expect(screen.getByText('Live Jane')).toBeInTheDocument();
-    expect(screen.queryByText('Jane Registry')).not.toBeInTheDocument();
+    expect(screen.getByText('Jane Registry')).toBeInTheDocument();
+    expect(screen.queryByText('Jane Live')).not.toBeInTheDocument();
     expect(screen.getByText(/Working · 5m ago/i)).toBeInTheDocument();
   });
 
@@ -126,9 +126,9 @@ describe('SessionList live tree', () => {
 
     renderSessionList({ sessions, agents });
 
-    expect(screen.getByText('Agent henry')).toBeInTheDocument();
+    expect(screen.getByText('Henry Registry')).toBeInTheDocument();
     expect(screen.getByText('Evidence audit')).toBeInTheDocument();
-    expect(screen.queryByText('Henry Registry')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent henry')).not.toBeInTheDocument();
   });
 
   it('hides non-agent root sessions from the AGENTS panel', () => {

@@ -4,7 +4,7 @@ import { getSessionKey } from '@/types';
 import type { SpawnSessionOpts, GatewayAgentRegistration } from '@/contexts/SessionContext';
 import { SessionSkeletonGroup } from '@/components/skeletons';
 import { buildAgentSidebarTree, flattenTree, getSessionType, type TreeNode } from './sessionTree';
-import { getSessionDisplayLabel, isTopLevelAgentSessionKey, normalizeSessionKey } from './sessionKeys';
+import { getRootAgentId, getSessionDisplayLabel, isTopLevelAgentSessionKey, normalizeSessionKey } from './sessionKeys';
 import { SessionNode } from './SessionNode';
 import type { GranularAgentState } from '@/types';
 import {
@@ -51,6 +51,31 @@ function findNodeByKey(nodes: TreeNode[], key: string): TreeNode | null {
     queue.push(...node.children);
   }
   return null;
+}
+
+function resolveRootAgentLabel(
+  session: Session,
+  agentName: string,
+  agents: GatewayAgentRegistration[],
+): string {
+  const sessionKey = normalizeSessionKey(getSessionKey(session));
+  if (!isTopLevelAgentSessionKey(sessionKey)) {
+    return getSessionDisplayLabel(session, agentName);
+  }
+
+  const rootId = getRootAgentId(sessionKey);
+  if (rootId === 'main') {
+    return getSessionDisplayLabel(session, agentName);
+  }
+
+  const registryEntry = agents.find((agent) => agent.id.trim() === rootId);
+  const registryLabel = registryEntry?.identityName?.trim() || registryEntry?.name?.trim() || registryEntry?.label?.trim();
+  if (registryLabel) return registryLabel;
+
+  if (session.displayName?.trim()) return session.displayName.trim();
+  if (session.label?.trim()) return session.label.trim();
+
+  return getSessionDisplayLabel(session, agentName);
 }
 
 /** Sidebar list of agent sessions with tree structure and context menus. */
@@ -193,7 +218,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     const isCron = sessionType === 'cron';
     const isCronRun = sessionType === 'cron-run';
     const isRootAgent = isTopLevelAgentSessionKey(sessionKey);
-    const label = getSessionDisplayLabel(node.session, agentName);
+    const label = resolveRootAgentLabel(node.session, agentName, agents);
     const isGrowing = growingSessions[sessionKey] ?? false;
     const running = busyState[sessionKey] || node.session.state === 'running' || node.session.agentState === 'running' || node.session.busy || node.session.processing || node.session.status === 'running' || node.session.status === 'busy' || (isGrowing && isSubagent);
     const isActive = normalizeSessionKey(sessionKey) === normalizeSessionKey(currentSession);

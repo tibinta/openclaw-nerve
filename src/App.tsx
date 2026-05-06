@@ -102,6 +102,7 @@ export default function App({ onLogout }: AppProps) {
     busyState, agentStatus, unreadSessions, refreshSessions, deleteSession, deleteAllSessions, abortSession, spawnSession, renameSession,
     agentLogEntries, eventEntries,
     agentName,
+    agents,
   } = useSessionContext();
 
   // Chat state
@@ -738,6 +739,7 @@ export default function App({ onLogout }: AppProps) {
               onAbort={abortSession}
               isLoading={sessionsLoading}
               agentName={agentName}
+              agents={agents}
             />
           </PanelErrorBoundary>
         </div>
@@ -776,6 +778,7 @@ export default function App({ onLogout }: AppProps) {
           onAbort={abortSession}
           isLoading={sessionsLoading}
           agentName={agentName}
+          agents={agents}
           compact
         />
       </PanelErrorBoundary>
