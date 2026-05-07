@@ -7,6 +7,7 @@
  */
 
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 /**
  * Read and parse a JSON file. Returns `fallback` on any error.
@@ -28,7 +29,16 @@ export async function readJSON<T>(filePath: string, fallback: T): Promise<T> {
  * Write JSON to a file (pretty-printed).
  */
 export async function writeJSON(filePath: string, data: unknown): Promise<void> {
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, { recursive: true });
+
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2));
+    await fs.rename(tmpPath, filePath);
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {});
+  }
 }
 
 /**

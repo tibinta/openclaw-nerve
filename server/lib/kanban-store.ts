@@ -770,6 +770,7 @@ export class KanbanStore {
         path.join(projectRoot, 'server', 'data', 'kanban', 'tasks.json'),
       ];
     } else {
+      if (!filePath) throw new Error('Expected filePath in explicit mode');
       this.filePath = filePath;
       this.archivePath = path.join(path.dirname(this.filePath), 'done-archive.json');
       this.auditPath = path.join(path.dirname(this.filePath), 'audit.log');
@@ -1017,6 +1018,15 @@ export class KanbanStore {
     return files;
   }
 
+  private async readTaskJsonFile(file: string, context: 'split tree' | 'archive tree'): Promise<KanbanTask | null> {
+    try {
+      return JSON.parse(await fs.promises.readFile(file, 'utf-8')) as KanbanTask;
+    } catch (err) {
+      console.warn(`[kanban-store] failed to read ${context} task file ${file}:`, err);
+      return null;
+    }
+  }
+
   private async readSplitTreeRaw(baseDir: string): Promise<StoreData | null> {
     const manifestPath = path.join(baseDir, '.manifest.json');
     const manifest = await this.readJsonFile<TreeManifest>(manifestPath);
@@ -1033,19 +1043,13 @@ export class KanbanStore {
       const statusDir = path.join(baseDir, entry.name);
       const jsonFiles = await this.collectJsonFiles(statusDir);
       for (const file of jsonFiles) {
-        try {
-          const task = JSON.parse(await fs.promises.readFile(file, 'utf-8')) as KanbanTask;
-          tasks.push(task);
-        } catch (err) {
-          console.warn(`[kanban-store] failed to read task file ${file}:`, err);
-          return null;
-        }
+        const task = await this.readTaskJsonFile(file, 'split tree');
+        if (task) tasks.push(task);
       }
     }
 
     if (tasks.length !== manifest.taskCount) {
       console.warn(`[kanban-store] split tree count mismatch: expected ${manifest.taskCount}, got ${tasks.length}`);
-      return null;
     }
 
     return {
@@ -1129,17 +1133,12 @@ export class KanbanStore {
     const jsonFiles = await this.collectJsonFiles(this.archiveTreeDir);
     const tasks: KanbanTask[] = [];
     for (const file of jsonFiles) {
-      try {
-        tasks.push(JSON.parse(await fs.promises.readFile(file, 'utf-8')) as KanbanTask);
-      } catch (err) {
-        console.warn(`[kanban-store] failed to read archived task file ${file}:`, err);
-        return null;
-      }
+      const task = await this.readTaskJsonFile(file, 'archive tree');
+      if (task) tasks.push(task);
     }
 
     if (tasks.length !== manifest.taskCount) {
       console.warn(`[kanban-store] archive tree count mismatch: expected ${manifest.taskCount}, got ${tasks.length}`);
-      return null;
     }
 
     return {

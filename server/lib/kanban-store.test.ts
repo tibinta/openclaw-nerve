@@ -1904,6 +1904,19 @@ describe('migration', () => {
     const result = await store.listTasks();
     expect(result.total).toBe(0);
   });
+
+  it('skips malformed split-tree task files instead of failing the whole store', async () => {
+    const parent = await createSampleTask({ title: 'Parent task', status: 'todo' });
+    const child = await createSampleTask({ title: 'Child task', status: 'todo', parentTaskId: parent.id });
+
+    const childFile = path.join(tmpDir, 'tasks', parent.status, parent.id, `${child.id}.json`);
+    fs.writeFileSync(childFile, '{ this is not valid json');
+
+    const result = await store.listTasks();
+    expect(result.total).toBe(1);
+    expect(result.items.some((task) => task.id === parent.id)).toBe(true);
+    expect(result.items.some((task) => task.id === child.id)).toBe(false);
+  });
 });
 
 describe('default path and legacy migration', () => {
