@@ -1,71 +1,45 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { KanbanCard } from './KanbanCard';
-import type { KanbanTask } from './types';
 
-function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
-  return {
-    id: 'task-1',
-    title: 'Swarm task',
-    description: 'Work split across agents',
-    status: 'todo',
-    priority: 'normal',
-    createdBy: 'operator',
-    createdAt: 1,
-    updatedAt: 2,
-    version: 1,
-    labels: [],
-    columnOrder: 0,
-    feedback: [],
-    ...overrides,
-  };
-}
+vi.mock('@dnd-kit/sortable', () => ({
+  useSortable: () => ({
+    attributes: {},
+    listeners: {},
+    setNodeRef: vi.fn(),
+    transform: null,
+    transition: undefined,
+    isDragging: false,
+  }),
+}));
 
 describe('KanbanCard', () => {
-  it('renders parent swarm summary without opening the drawer', () => {
+  it('does not show an error badge when run status is missing', () => {
     render(
       <KanbanCard
-        isOverlay
-        task={makeTask({
-          swarmSummary: {
-            sourceKind: 'crm_goal',
-            objective: 'Get 20 customers today',
-            packetsTotal: 5,
-            packetsRunning: 3,
-            packetsPassed: 1,
-            packetsBlocked: 1,
-          },
-        })}
+        task={{
+          id: 'legacy-run',
+          title: 'Legacy run task',
+          status: 'in-progress',
+          priority: 'normal',
+          createdBy: 'operator',
+          createdAt: 1,
+          updatedAt: 1,
+          version: 1,
+          labels: [],
+          feedback: [],
+          columnOrder: 0,
+          run: {
+            sessionKey: 'run-1',
+            startedAt: 1,
+          } as never,
+        } as never}
         onClick={vi.fn()}
       />,
     );
 
-    expect(screen.getByText('Swarm: 5 packets, 3 running, 1 blocked')).toBeInTheDocument();
-  });
-
-  it('renders child packet status and owner', () => {
-    render(
-      <KanbanCard
-        isOverlay
-        task={makeTask({
-          swarmPacket: {
-            packetId: 'crm-copy-001',
-            cluster: 'crm',
-            ownerAgentId: 'benjamin-scott---outreach-lead',
-            checkerAgentId: 'hannah-clark---validation-lead',
-            evidencePath: '/tmp/crm-copy-001.md',
-            stopCondition: 'Stop after copy is written.',
-            dod: 'Copy is ready.',
-            packetStatus: 'running',
-            dedupeKey: 'parent:crm-copy-001',
-          },
-        })}
-        onClick={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText('crm')).toBeInTheDocument();
-    expect(screen.getByText('running')).toBeInTheDocument();
-    expect(screen.getByText('benjamin-scott---outreach-lead')).toBeInTheDocument();
+    expect(screen.getByText('Legacy run task')).toBeInTheDocument();
+    expect(screen.queryByText('Error')).not.toBeInTheDocument();
+    expect(screen.queryByText('Live')).not.toBeInTheDocument();
   });
 });

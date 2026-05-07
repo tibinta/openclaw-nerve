@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
-  X, Play, CheckCircle2, XCircle, Trash2, Save, Loader2,
+  X, Plus, Play, CheckCircle2, XCircle, Trash2, Save, Loader2,
   Clock, User, Tag, AlertTriangle, MessageSquare, StopCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -74,13 +74,30 @@ interface TaskDetailDrawerProps {
   onClose: () => void;
   onUpdate: (id: string, payload: UpdateTaskPayload) => Promise<KanbanTask>;
   onDelete: (id: string) => Promise<void>;
+  parentTask?: KanbanTask | null;
+  subtasks?: KanbanTask[];
+  onOpenRelatedTask?: (task: KanbanTask) => void;
+  onCreateSubtask?: () => void;
   onExecute?: (id: string, options?: { model?: string; thinking?: string }) => Promise<KanbanTask>;
   onApprove?: (id: string, note?: string) => Promise<KanbanTask>;
   onReject?: (id: string, note: string) => Promise<KanbanTask>;
   onAbort?: (id: string, note?: string) => Promise<KanbanTask>;
 }
 
-export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute, onApprove, onReject, onAbort }: TaskDetailDrawerProps) {
+export function TaskDetailDrawer({
+  task,
+  onClose,
+  onUpdate,
+  onDelete,
+  parentTask = null,
+  subtasks = [],
+  onOpenRelatedTask,
+  onCreateSubtask,
+  onExecute,
+  onApprove,
+  onReject,
+  onAbort,
+}: TaskDetailDrawerProps) {
   const { sessions, agentName } = useSessionContext();
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -269,6 +286,7 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
     && swarmSummary.packetsPassed === swarmSummary.packetsTotal
     && swarmSummary.packetsBlocked === 0,
   );
+  const runTone = task?.run?.status ? getTaskRunTone(task.run.status) : null;
 
   const canApprove = task?.status === 'review' && readyToClose;
 
@@ -559,6 +577,22 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
               <div className="cockpit-note space-y-2">
                 <h4 className="cockpit-field-label">Metadata</h4>
                 <div className="space-y-1 text-[0.733rem] text-muted-foreground">
+                  {parentTask && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenRelatedTask?.(parentTask)}
+                      className="flex w-full items-center gap-1.5 rounded-xl border border-transparent px-0 py-0 text-left text-[0.733rem] text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <span className="shrink-0">Parent:</span>
+                      <span className="truncate font-medium text-foreground/80">{parentTask.title}</span>
+                    </button>
+                  )}
+                  {task.parentTaskId && !parentTask && (
+                    <div className="flex items-center gap-1.5">
+                      <span>Parent:</span>
+                      <code className="cockpit-kbd text-[0.667rem]">{task.parentTaskId}</code>
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5">
                     <Clock size={10} />
                     Created: {formatDateTime(task.createdAt)}
@@ -572,6 +606,51 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                     By: {task.createdBy === 'operator' ? 'Operator' : task.createdBy}
                   </div>
                 </div>
+              </div>
+
+              <div className="cockpit-note space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="cockpit-field-label">Subtasks</h4>
+                  {onCreateSubtask && (
+                    <Button size="xs" variant="outline" onClick={onCreateSubtask}>
+                      <Plus size={11} />
+                      Add
+                    </Button>
+                  )}
+                </div>
+                {subtasks.length === 0 ? (
+                  <p className="text-[0.733rem] text-muted-foreground">
+                    No subtasks yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {subtasks.map((subtask) => {
+                      const statusTone = getTaskStatusTone(subtask.status);
+                      return (
+                        <button
+                          key={subtask.id}
+                          type="button"
+                          onClick={() => onOpenRelatedTask?.(subtask)}
+                          className="group flex w-full items-start justify-between gap-3 rounded-2xl border border-border/60 bg-background/45 px-3 py-2 text-left transition-colors hover:border-primary/24 hover:bg-primary/[0.04]"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[0.8rem] font-medium text-foreground group-hover:text-foreground">
+                              {subtask.title}
+                            </div>
+                            {subtask.description && (
+                              <p className="mt-0.5 line-clamp-1 text-[0.667rem] text-muted-foreground">
+                                {subtask.description}
+                              </p>
+                            )}
+                          </div>
+                          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[0.667rem] font-semibold ${statusTone.badgeClass}`}>
+                            {COLUMN_LABELS[subtask.status as keyof typeof COLUMN_LABELS] ?? subtask.status}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {(swarmSummary || swarmPacket) && (
@@ -648,10 +727,16 @@ export function TaskDetailDrawer({ task, onClose, onUpdate, onDelete, onExecute,
                   <h4 className="cockpit-field-label">Agent Run</h4>
                   <div className="space-y-1.5 text-[0.733rem] text-muted-foreground">
                     <div className="flex items-center gap-2">
-                      <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[0.667rem] font-semibold ${getTaskRunTone(task.run.status).badgeClass}`}>
-                        {task.run.status === 'running' && <Loader2 size={9} className="animate-spin" />}
-                        {task.run.status.charAt(0).toUpperCase() + task.run.status.slice(1)}
-                      </span>
+                      {task.run.status && runTone ? (
+                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[0.667rem] font-semibold ${runTone.badgeClass}`}>
+                          {task.run.status === 'running' && <Loader2 size={9} className="animate-spin" />}
+                          {task.run.status.charAt(0).toUpperCase() + task.run.status.slice(1)}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[0.667rem] font-semibold border-border/60 bg-background/55 text-muted-foreground">
+                          Run metadata
+                        </span>
+                      )}
                       {task.run.status === 'running' && task.run.startedAt && (
                         <RunElapsed startedAt={task.run.startedAt} />
                       )}

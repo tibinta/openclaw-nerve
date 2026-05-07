@@ -2,7 +2,7 @@ import type { TaskPriority, TaskRunLink, TaskStatus } from './types';
 
 const FALLBACK_STATUS: TaskStatus = 'backlog';
 const FALLBACK_PRIORITY: TaskPriority = 'normal';
-const FALLBACK_RUN_STATUS: TaskRunLink['status'] = 'error';
+const FALLBACK_RUN_STATUS: TaskRunLink['status'] | null = null;
 
 export const TASK_STATUS_TONE: Record<
   string,
@@ -118,11 +118,12 @@ export function getTaskPriorityLabel(value: string | null | undefined) {
   return TASK_PRIORITY_LABEL[getTaskPriority(value)];
 }
 
-export function getTaskRunStatus(value: string | null | undefined): TaskRunLink['status'] {
+export function getTaskRunStatus(value: string | null | undefined): TaskRunLink['status'] | null {
   if (value && value in TASK_RUN_TONE) return value as TaskRunLink['status'];
   return FALLBACK_RUN_STATUS;
 }
 
 export function getTaskRunTone(value: string | null | undefined) {
-  return TASK_RUN_TONE[getTaskRunStatus(value)];
+  const status = getTaskRunStatus(value);
+  return status ? TASK_RUN_TONE[status] : null;
 }

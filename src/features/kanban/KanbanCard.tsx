@@ -10,6 +10,8 @@ function RunBadge({ status }: { status: string }) {
   const safeStatus = getTaskRunStatus(status);
   const tone = getTaskRunTone(safeStatus);
 
+  if (!safeStatus || !tone) return null;
+
   switch (safeStatus) {
     case 'running':
       return (
@@ -188,7 +190,7 @@ function CardContent({
           </span>
         )}
 
-        {task.run && <RunBadge status={task.run.status} />}
+        {task.run?.status && <RunBadge status={task.run.status} />}
 
         {task.run?.status === 'running' && task.run.startedAt && (
           <span className="inline-flex items-center gap-0.5 text-[0.667rem] text-info/80">
