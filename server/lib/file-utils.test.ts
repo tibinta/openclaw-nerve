@@ -108,6 +108,22 @@ describe('file-utils', () => {
       const resolved = await resolveWorkspacePath(candidate, { allowNonExistent: true });
       expect(resolved).toBe(path.resolve(fsRoot, candidate));
     });
+
+    it('normalizes symlinked workspace roots before validating children', async () => {
+      const realRoot = await fs.mkdtemp(path.join(tmpDir, 'workspace-real-'));
+      const aliasRoot = path.join(tmpDir, 'workspace-alias');
+      await fs.symlink(realRoot, aliasRoot);
+      await fs.mkdir(path.join(realRoot, 'docs'), { recursive: true });
+      await fs.writeFile(path.join(realRoot, 'docs', 'note.md'), '# note');
+
+      process.env.FILE_BROWSER_ROOT = aliasRoot;
+      vi.resetModules();
+
+      const { resolveWorkspacePathForRoot } = await import('./file-utils.js');
+      const resolved = await resolveWorkspacePathForRoot(aliasRoot, 'docs/note.md');
+
+      expect(resolved).toBe(await fs.realpath(path.join(realRoot, 'docs', 'note.md')));
+    });
   });
 
   describe('isBinary', () => {

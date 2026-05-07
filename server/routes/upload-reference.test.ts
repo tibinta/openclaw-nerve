@@ -10,6 +10,7 @@ async function importRoute() {
 }
 
 const originalHome = process.env.HOME;
+const originalMemoryPath = process.env.MEMORY_PATH;
 const originalFileBrowserRoot = process.env.FILE_BROWSER_ROOT;
 const originalUploadStagingTempDir = process.env.NERVE_UPLOAD_STAGING_TEMP_DIR;
 const tempDirs = new Set<string>();
@@ -20,6 +21,7 @@ async function makeHomeWorkspace(): Promise<{ homeDir: string; workspaceRoot: st
   const workspaceRoot = path.join(homeDir, '.openclaw', 'workspace');
   await fs.mkdir(workspaceRoot, { recursive: true });
   process.env.HOME = homeDir;
+  process.env.MEMORY_PATH = path.join(workspaceRoot, 'MEMORY.md');
   delete process.env.FILE_BROWSER_ROOT;
   delete process.env.NERVE_UPLOAD_STAGING_TEMP_DIR;
   return { homeDir, workspaceRoot };
@@ -30,6 +32,12 @@ afterEach(async () => {
     delete process.env.HOME;
   } else {
     process.env.HOME = originalHome;
+  }
+
+  if (originalMemoryPath == null) {
+    delete process.env.MEMORY_PATH;
+  } else {
+    process.env.MEMORY_PATH = originalMemoryPath;
   }
 
   if (originalFileBrowserRoot == null) {
@@ -56,6 +64,7 @@ describe('POST /api/upload-reference/resolve', () => {
     const targetPath = path.join(workspaceRoot, 'docs', 'note.md');
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, '# hi\n', 'utf8');
+    const realTargetPath = await fs.realpath(targetPath);
 
     const { default: app } = await importRoute();
     const res = await app.request('/api/upload-reference/resolve', {
@@ -82,7 +91,7 @@ describe('POST /api/upload-reference/resolve', () => {
     expect(json.items[0]).toEqual(expect.objectContaining({
       kind: 'direct_workspace_reference',
       canonicalPath: 'docs/note.md',
-      absolutePath: targetPath,
+      absolutePath: realTargetPath,
       mimeType: 'text/markdown',
       sizeBytes: 5,
       originalName: 'note.md',
@@ -122,7 +131,7 @@ describe('POST /api/upload-reference/resolve', () => {
       originalName: 'proof.txt',
     }));
     expect(json.items[0].canonicalPath).toMatch(/^\.temp\/nerve-uploads\/\d{4}\/\d{2}\/\d{2}\/proof-[a-f0-9]{8}\.txt$/);
-    expect(json.items[0].absolutePath).toBe(path.join(workspaceRoot, json.items[0].canonicalPath));
+    expect(json.items[0].absolutePath).toBe(await fs.realpath(path.join(workspaceRoot, json.items[0].canonicalPath)));
     await expect(fs.readFile(json.items[0].absolutePath, 'utf8')).resolves.toBe('hello upload');
   });
 

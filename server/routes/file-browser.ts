@@ -160,6 +160,10 @@ function handleFileOpError(c: Context, err: unknown) {
   return c.json({ ok: false, error: message }, 500);
 }
 
+async function getRealWorkspaceRoot(workspaceRoot: string): Promise<string> {
+  return fs.realpath(workspaceRoot).catch(() => workspaceRoot);
+}
+
 /** Convert gateway file list to TreeEntry format for the UI. */
 function gatewayFilesToTree(files: Awaited<ReturnType<typeof gatewayFilesList>>): TreeEntry[] {
   return files
@@ -331,7 +335,8 @@ app.get('/api/files/resolve', async (c) => {
     return c.json({ ok: false, error: 'Path not found' }, 404);
   }
 
-  const relative = path.relative(workspace.workspaceRoot, resolved).split(path.sep).join('/');
+  const rootForRelative = await getRealWorkspaceRoot(workspace.workspaceRoot);
+  const relative = path.relative(rootForRelative, resolved).split(path.sep).join('/');
   if (!relative || relative === '.') {
     return c.json({ ok: false, error: 'Path not found' }, 404);
   }
@@ -572,8 +577,9 @@ app.post('/api/files/rename', async (c) => {
   }
 
   try {
+    const rootForOps = await getRealWorkspaceRoot(workspace.workspaceRoot);
     const result = await renameEntry({
-      workspaceRoot: workspace.workspaceRoot,
+      workspaceRoot: rootForOps,
       sourceAbs,
       newName: body.newName,
     });
@@ -623,8 +629,9 @@ app.post('/api/files/move', async (c) => {
   }
 
   try {
+    const rootForOps = await getRealWorkspaceRoot(workspace.workspaceRoot);
     const result = await moveEntry({
-      workspaceRoot: workspace.workspaceRoot,
+      workspaceRoot: rootForOps,
       sourceAbs,
       targetDirAbs,
     });
@@ -659,6 +666,7 @@ app.post('/api/files/trash', async (c) => {
   if (remoteBlock) return remoteBlock;
 
   try {
+    const rootForOps = await getRealWorkspaceRoot(workspace.workspaceRoot);
     // Custom directory browser root uses permanent deletion (no trash)
     if (workspace.isCustomWorkspace) {
       const requestedPath = body.path.trim();
@@ -666,13 +674,12 @@ app.post('/api/files/trash', async (c) => {
         return c.json({ ok: false, error: 'Deleting workspace root is not allowed' }, 400);
       }
 
-      const resolved = await resolveWorkspacePathForRoot(workspace.workspaceRoot, requestedPath);
+      const resolved = await resolveWorkspacePathForRoot(rootForOps, requestedPath);
       if (!resolved) {
         return c.json({ ok: false, error: 'Invalid or excluded path' }, 403);
       }
 
-      const rootRealPath = await fs.realpath(workspace.workspaceRoot).catch(() => workspace.workspaceRoot);
-      if (resolved === rootRealPath) {
+      if (resolved === rootForOps) {
         return c.json({ ok: false, error: 'Deleting workspace root is not allowed' }, 400);
       }
 
@@ -680,13 +687,13 @@ app.post('/api/files/trash', async (c) => {
       return c.json({ ok: true, from: body.path, to: '' });
     }
 
-    const sourceAbs = await resolveWorkspacePathForRoot(workspace.workspaceRoot, body.path);
+    const sourceAbs = await resolveWorkspacePathForRoot(rootForOps, body.path);
     if (!sourceAbs) {
       return c.json({ ok: false, error: 'Invalid or excluded path' }, 403);
     }
 
     const result = await trashEntry({
-      workspaceRoot: workspace.workspaceRoot,
+      workspaceRoot: rootForOps,
       sourceAbs,
     });
     return c.json({ ok: true, ...result });
@@ -725,8 +732,9 @@ app.post('/api/files/restore', async (c) => {
   }
 
   try {
+    const rootForOps = await getRealWorkspaceRoot(workspace.workspaceRoot);
     const result = await restoreEntry({
-      workspaceRoot: workspace.workspaceRoot,
+      workspaceRoot: rootForOps,
       sourceAbs,
     });
     return c.json({ ok: true, ...result });
