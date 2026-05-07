@@ -1583,6 +1583,11 @@ function hasActiveOrPendingSwarmChild(parentTaskId: string, tasks: KanbanTask[])
   ));
 }
 
+function isTerminalBlockedSwarmChild(task: KanbanTask): boolean {
+  return task.swarmPacket !== undefined
+    && ['blocked', 'failed'].includes(task.swarmPacket.packetStatus);
+}
+
 async function markSwarmSpawnFailure(
   store: KanbanStoreInstance,
   taskId: string,
@@ -1695,12 +1700,12 @@ app.post('/api/kanban/tasks/:id/swarm-dispatch', rateLimitGeneral, async (c) => 
     for (const task of existingTasks) {
       if (task.parentTaskId !== parentTaskId || !task.swarmPacket) continue;
       existingByDedupeKey.set(task.swarmPacket.dedupeKey, task);
-      existingByDedupeKey.set(`${parentTaskId}:${task.swarmPacket.packetId}`, task);
     }
     const hasActiveOrPendingChild = hasActiveOrPendingSwarmChild(parentTaskId, existingTasks);
 
     let created = 0;
     let deduped = 0;
+    const blocked: string[] = [];
     const candidates: KanbanTask[] = [];
 
     for (const packet of dispatchInput.packets) {
@@ -1708,7 +1713,13 @@ app.post('/api/kanban/tasks/:id/swarm-dispatch', rateLimitGeneral, async (c) => 
       const existing = existingByDedupeKey.get(dedupeKey);
       if (existing) {
         deduped += 1;
-        if (existing.swarmPacket?.packetStatus === 'queued') candidates.push(existing);
+        if (isTerminalBlockedSwarmChild(existing)) {
+          // A stable blocked packet is evidence, not fresh work. Re-dispatching it
+          // only burns sessions unless the caller changes the typed packet id.
+          blocked.push(`${packet.packetId}: existing ${existing.swarmPacket?.packetStatus} packet must receive new typed proof or a new packet id before relaunch`);
+        } else if (existing.swarmPacket?.packetStatus === 'queued') {
+          candidates.push(existing);
+        }
         continue;
       }
 
@@ -1740,9 +1751,8 @@ app.post('/api/kanban/tasks/:id/swarm-dispatch', rateLimitGeneral, async (c) => 
     }
 
     let dispatched = 0;
-    const blocked: string[] = [];
     if (dispatchInput.execute) {
-      const launchWaveLimit = hasActiveOrPendingChild ? 1 : dispatchInput.waveLimit;
+      const launchWaveLimit = hasActiveOrPendingChild ? 0 : dispatchInput.waveLimit;
       const launchWave = candidates.slice(0, launchWaveLimit);
       for (const child of launchWave) {
         const packet = dispatchInput.packets.find((item) => buildSwarmPacketDedupeKey(parentTaskId, item) === child.swarmPacket?.dedupeKey);

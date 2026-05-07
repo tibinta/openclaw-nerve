@@ -867,6 +867,45 @@ describe('POST /api/kanban/tasks/:id/swarm-dispatch', () => {
     expect(list.items.filter((task) => task.parentTaskId === parent.id)).toHaveLength(2);
   });
 
+  it('does not launch another packet while the parent already has active swarm work', async () => {
+    const invokeGatewayToolMock = vi.fn(async (_tool: string, args?: Record<string, unknown>) => ({
+      sessionKey: `agent:${String(args?.agentId)}:subagent:${String(args?.label)}`,
+      runId: `run-${String(args?.agentId)}`,
+    }));
+    const app = await buildApp({ invokeGatewayToolMock });
+    const parent = await createTask(app, { title: 'One active packet at a time' });
+
+    const first = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json({
+      objective: 'Launch first packet only',
+      sourceKind: 'manual',
+      waveLimit: 1,
+      execute: true,
+      packets: [swarmPacket()],
+    }));
+
+    expect(first.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const second = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json({
+      objective: 'Queue second packet without launching it',
+      sourceKind: 'manual',
+      waveLimit: 1,
+      execute: true,
+      packets: [swarmPacket({
+        packetId: 'crm-copy-001',
+        ownerAgentId: 'benjamin-scott---outreach-lead',
+        title: 'Write outreach copy',
+        task: 'Write channel-specific outreach copy.',
+        evidencePath: '/Users/alexnedelea/.openclaw/workspace/docs/evidence/crm-copy-001.md',
+      })],
+    }));
+
+    expect(second.status).toBe(200);
+    const body = await second.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ created: 1, deduped: 0, dispatched: 0, queued: 1 });
+    expect(invokeGatewayToolMock).toHaveBeenCalledTimes(1);
+  });
+
   it('marks spawn failures as blocked packet state instead of repeating chat', async () => {
     const invokeGatewayToolMock = vi.fn(async () => {
       throw new Error('429 provider rate limit');
@@ -891,6 +930,34 @@ describe('POST /api/kanban/tasks/:id/swarm-dispatch', () => {
     expect(child?.swarmPacket?.packetStatus).toBe('blocked');
     expect(child?.swarmPacket?.error).toContain('429 provider rate limit');
     expect(child?.run?.status).toBe('error');
+  });
+
+  it('does not relaunch a stable blocked packet without a new typed packet id', async () => {
+    const invokeGatewayToolMock = vi.fn(async () => {
+      throw new Error('429 provider rate limit');
+    });
+    const app = await buildApp({ invokeGatewayToolMock });
+    const parent = await createTask(app, { title: 'Blocked packet stays blocked' });
+    const payload = {
+      objective: 'Handle rate limit',
+      sourceKind: 'manual',
+      waveLimit: 1,
+      execute: true,
+      packets: [swarmPacket()],
+    };
+
+    const first = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json(payload));
+    expect(first.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const second = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json(payload));
+    expect(second.status).toBe(200);
+    const body = await second.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ created: 0, deduped: 1, dispatched: 0, queued: 0 });
+    expect(body.blocked).toEqual([
+      expect.stringContaining('existing blocked packet must receive new typed proof or a new packet id before relaunch'),
+    ]);
+    expect(invokeGatewayToolMock).toHaveBeenCalledTimes(1);
   });
 });
 
