@@ -1567,6 +1567,22 @@ async function syncParentSwarmSummary(
   }, 'operator');
 }
 
+function buildSwarmPacketDedupeKey(parentTaskId: string, packet: SwarmDispatchPacketInput): string {
+  return `${parentTaskId}:${packet.packetId}:${packet.ownerAgentId}`;
+}
+
+function buildSwarmPacketLaunchLabel(parentTaskId: string, packet: SwarmDispatchPacketInput): string {
+  return `swarm-${parentTaskId}-${packet.packetId}-${packet.ownerAgentId}`;
+}
+
+function hasActiveOrPendingSwarmChild(parentTaskId: string, tasks: KanbanTask[]): boolean {
+  return tasks.some((task) => (
+    task.parentTaskId === parentTaskId
+    && task.swarmPacket !== undefined
+    && ['queued', 'dispatched', 'running', 'review'].includes(task.swarmPacket.packetStatus)
+  ));
+}
+
 async function markSwarmSpawnFailure(
   store: KanbanStoreInstance,
   taskId: string,
@@ -1592,7 +1608,7 @@ async function launchSwarmPacket(
   objective: string,
   sourceKind: SwarmSourceKind,
 ): Promise<KanbanTask> {
-  const label = `swarm-${parent.id}-${packet.packetId}`;
+  const label = buildSwarmPacketLaunchLabel(parent.id, packet);
   const running = await store.executeTask(child.id, { sessionKey: label }, 'operator');
   const dispatched = await updateSwarmPacketState(store, running.id, {
     packetStatus: 'dispatched',
@@ -1675,18 +1691,20 @@ app.post('/api/kanban/tasks/:id/swarm-dispatch', rateLimitGeneral, async (c) => 
   try {
     const parent = await store.getTask(parentTaskId);
     const existingTasks = (await store.listTasks({ limit: 200 })).items;
-    const existingByDedupeKey = new Map(
-      existingTasks
-        .filter((task) => task.parentTaskId === parentTaskId && task.swarmPacket)
-        .map((task) => [task.swarmPacket!.dedupeKey, task] as const),
-    );
+    const existingByDedupeKey = new Map<string, KanbanTask>();
+    for (const task of existingTasks) {
+      if (task.parentTaskId !== parentTaskId || !task.swarmPacket) continue;
+      existingByDedupeKey.set(task.swarmPacket.dedupeKey, task);
+      existingByDedupeKey.set(`${parentTaskId}:${task.swarmPacket.packetId}`, task);
+    }
+    const hasActiveOrPendingChild = hasActiveOrPendingSwarmChild(parentTaskId, existingTasks);
 
     let created = 0;
     let deduped = 0;
     const candidates: KanbanTask[] = [];
 
     for (const packet of dispatchInput.packets) {
-      const dedupeKey = `${parentTaskId}:${packet.packetId}`;
+      const dedupeKey = buildSwarmPacketDedupeKey(parentTaskId, packet);
       const existing = existingByDedupeKey.get(dedupeKey);
       if (existing) {
         deduped += 1;
@@ -1724,9 +1742,10 @@ app.post('/api/kanban/tasks/:id/swarm-dispatch', rateLimitGeneral, async (c) => 
     let dispatched = 0;
     const blocked: string[] = [];
     if (dispatchInput.execute) {
-      const launchWave = candidates.slice(0, dispatchInput.waveLimit);
+      const launchWaveLimit = hasActiveOrPendingChild ? 1 : dispatchInput.waveLimit;
+      const launchWave = candidates.slice(0, launchWaveLimit);
       for (const child of launchWave) {
-        const packet = dispatchInput.packets.find((item) => `${parentTaskId}:${item.packetId}` === child.swarmPacket?.dedupeKey);
+        const packet = dispatchInput.packets.find((item) => buildSwarmPacketDedupeKey(parentTaskId, item) === child.swarmPacket?.dedupeKey);
         if (!packet) continue;
         try {
           await launchSwarmPacket(store, parent, child, packet, dispatchInput.objective, dispatchInput.sourceKind);

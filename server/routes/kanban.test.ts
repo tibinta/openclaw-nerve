@@ -841,6 +841,32 @@ describe('POST /api/kanban/tasks/:id/swarm-dispatch', () => {
     expect(list.items.filter((task) => task.parentTaskId === parent.id)).toHaveLength(1);
   });
 
+  it('keeps packets distinct when only the owner agent changes', async () => {
+    const app = await buildApp();
+    const parent = await createTask(app, { title: 'Owner-specific swarm' });
+
+    const res = await app.request(`/api/kanban/tasks/${parent.id}/swarm-dispatch`, json({
+      objective: 'Keep owner-specific work separate',
+      sourceKind: 'manual',
+      execute: false,
+      packets: [
+        swarmPacket(),
+        swarmPacket({
+          ownerAgentId: 'benjamin-scott---outreach-lead',
+          checkerAgentId: 'ruby-young---qa',
+        }),
+      ],
+    }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ created: 2, deduped: 0, dispatched: 0, queued: 2 });
+
+    const listRes = await app.request('/api/kanban/tasks?limit=20');
+    const list = await listRes.json() as { items: KanbanTask[] };
+    expect(list.items.filter((task) => task.parentTaskId === parent.id)).toHaveLength(2);
+  });
+
   it('marks spawn failures as blocked packet state instead of repeating chat', async () => {
     const invokeGatewayToolMock = vi.fn(async () => {
       throw new Error('429 provider rate limit');

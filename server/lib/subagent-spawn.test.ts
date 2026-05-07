@@ -147,6 +147,44 @@ describe('subagent-spawn helper', () => {
     }));
   });
 
+  it('reuses an existing child session when the requested label is already in use', async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+    vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockImplementation(async (method, params) => {
+      calls.push({ method, params });
+
+      if (method === 'sessions.create') {
+        throw new Error('label already in use');
+      }
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { sessionKey: 'agent:reviewer:main' },
+            {
+              sessionKey: 'agent:reviewer:subagent:existing',
+              label: 'audit-auth-flow',
+            },
+          ],
+        };
+      }
+      if (method === 'sessions.send') return { runId: 'run-existing' };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await spawnSubagent({
+      parentSessionKey: 'agent:reviewer:main',
+      task: 'Reply with exactly: OK',
+      label: 'audit-auth-flow',
+    });
+
+    expect(result.sessionKey).toBe('agent:reviewer:subagent:existing');
+    expect(calls.filter((call) => call.method === 'sessions.create')).toHaveLength(1);
+    expect(calls.find((call) => call.method === 'sessions.send')?.params).toEqual(expect.objectContaining({
+      key: 'agent:reviewer:subagent:existing',
+      idempotencyKey: 'subagent-spawn:agent:reviewer:main:audit-auth-flow',
+    }));
+  });
+
   it('rejects identical worker and checker lanes before spawning', async () => {
     const rpcMock = vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockResolvedValue({});
 

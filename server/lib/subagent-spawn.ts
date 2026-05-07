@@ -33,6 +33,7 @@ export interface SpawnSubagentResult {
 interface GatewaySessionSummary {
   key?: string;
   sessionKey?: string;
+  label?: string;
   status?: string;
   error?: string;
   agentState?: string;
@@ -45,6 +46,13 @@ interface GatewaySessionSummary {
   lastActivity?: number | string;
   pinned?: boolean;
   waiting?: boolean;
+  pendingFinalDelivery?: boolean;
+  pendingFinalDeliveryText?: string | null;
+  pendingFinalDeliveryCreatedAt?: number;
+  pendingFinalDeliveryLastAttemptAt?: number;
+  pendingFinalDeliveryAttemptCount?: number;
+  pendingFinalDeliveryLastError?: string | null;
+  lastAnnounceDeliveryError?: string | null;
 }
 
 interface LaunchMessage {
@@ -70,7 +78,7 @@ const POLL_SESSIONS_ACTIVE_MINUTES = 24 * 60;
 const POLL_SESSIONS_LIMIT = 200;
 const MONITOR_INITIAL_DELAY_MS = 3_000;
 const MONITOR_POLL_INTERVAL_MS = 5_000;
-const MONITOR_MAX_ATTEMPTS = 720;
+const MONITOR_MAX_ATTEMPTS = 36;
 const MARKER_DISCOVERY_TIMEOUT_MS = 60_000;
 const MARKER_DISCOVERY_POLL_MS = 1_000;
 const SESSION_RESULT_FETCH_TIMEOUT_MS = 3_000;
@@ -136,6 +144,35 @@ function getSessionKey(session: GatewaySessionSummary): string | null {
   if (typeof session.sessionKey === 'string' && session.sessionKey.trim()) return session.sessionKey;
   if (typeof session.key === 'string' && session.key.trim()) return session.key;
   return null;
+}
+
+function getSessionLabel(session: GatewaySessionSummary): string | null {
+  if (typeof session.label === 'string' && session.label.trim()) return session.label.trim();
+  return null;
+}
+
+function isLabelAlreadyInUseError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes('label already in use');
+}
+
+export async function findExistingSpawnedChildSessionKey(params: {
+  parentSessionKey: string;
+  label?: string;
+  requestedKey?: string;
+}): Promise<string | null> {
+  const listResponse = await gatewayRpcCall('sessions.list', {
+    activeMinutes: POLL_SESSIONS_ACTIVE_MINUTES,
+    limit: POLL_SESSIONS_LIMIT,
+  }) as { sessions?: GatewaySessionSummary[] };
+  const sessions = Array.isArray(listResponse.sessions) ? listResponse.sessions : [];
+  const match = sessions.find((session) => {
+    const sessionKey = getSessionKey(session);
+    if (!sessionKey || !isRootChildSession(sessionKey, params.parentSessionKey)) return false;
+    if (params.label && getSessionLabel(session) === params.label) return true;
+    return params.requestedKey ? sessionKey === params.requestedKey : false;
+  });
+  return match ? getSessionKey(match) : null;
 }
 
 function isBusySession(session: GatewaySessionSummary): boolean {
@@ -508,10 +545,26 @@ async function launchDirect(params: SpawnSubagentParams): Promise<SpawnSubagentR
   }
 
   const requestedKey = buildRequestedChildSessionKey(params.parentSessionKey);
-  const createResponse = await gatewayRpcCall('sessions.create', buildSpawnPayload({
-    ...params,
-    key: requestedKey,
-  })) as { key?: string; sessionKey?: string };
+  let createResponse: { key?: string; sessionKey?: string };
+  try {
+    createResponse = await gatewayRpcCall('sessions.create', buildSpawnPayload({
+      ...params,
+      key: requestedKey,
+    })) as { key?: string; sessionKey?: string };
+  } catch (error) {
+    if (!isLabelAlreadyInUseError(error)) {
+      throw error;
+    }
+    const existingSessionKey = await findExistingSpawnedChildSessionKey({
+      parentSessionKey: params.parentSessionKey,
+      label: params.label,
+      requestedKey,
+    });
+    if (!existingSessionKey) {
+      throw error;
+    }
+    createResponse = { key: existingSessionKey };
+  }
 
   const sessionKey = typeof createResponse.key === 'string' && createResponse.key.trim()
     ? createResponse.key
@@ -520,12 +573,13 @@ async function launchDirect(params: SpawnSubagentParams): Promise<SpawnSubagentR
       : requestedKey;
 
   const launchTimestamp = Date.now();
+  const idempotencyKey = `subagent-spawn:${params.parentSessionKey}:${params.label ?? sessionKey}`;
 
   const sendResponse = await gatewayRpcCall('sessions.send', {
     key: sessionKey,
     message: params.task,
     ...(params.thinking ? { thinking: params.thinking } : {}),
-    idempotencyKey: `subagent-spawn:${Date.now()}:${randomUUID().slice(0, 8)}`,
+    idempotencyKey,
   }) as { runId?: string };
 
   startCompletionMonitor({

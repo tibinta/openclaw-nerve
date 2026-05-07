@@ -112,6 +112,44 @@ describe('launchKanbanFallbackSubagentViaRpc', () => {
     expect(String(sendCall?.params.message)).not.toContain('[spawn-subagent]');
   });
 
+  it('reuses an existing child session when the label is already in use', async () => {
+    vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockImplementation(async (method, params) => {
+      calls.push({ method, params });
+
+      if (method === 'sessions.create') {
+        throw new Error('label already in use');
+      }
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { sessionKey: 'agent:reviewer:main' },
+            {
+              sessionKey: 'agent:reviewer:subagent:existing',
+              label: 'test-kanban-run',
+            },
+          ],
+        };
+      }
+      if (method === 'sessions.send') {
+        return { ok: true, runId: 'mock-run-id-12345' };
+      }
+      return {};
+    });
+
+    const result = await launchKanbanFallbackSubagentViaRpc({
+      label: 'test-kanban-run',
+      task: 'Execute kanban task',
+      parentSessionKey: 'agent:reviewer:main',
+    });
+
+    expect(result.childSessionKey).toBe('agent:reviewer:subagent:existing');
+    expect(calls.filter((call) => call.method === 'sessions.create')).toHaveLength(1);
+    expect(calls.find((call) => call.method === 'sessions.send')?.params).toEqual(expect.objectContaining({
+      key: 'agent:reviewer:subagent:existing',
+      idempotencyKey: 'kanban-subagent:agent:reviewer:main:test-kanban-run:agent:reviewer:subagent:existing',
+    }));
+  });
+
   it('deletes the created child session when sessions.send fails after sessions.create', async () => {
     vi.spyOn(gatewayRpc, 'gatewayRpcCall').mockImplementation(async (method, params) => {
       calls.push({ method, params });
@@ -178,9 +216,9 @@ describe('launchKanbanFallbackSubagentViaRpc', () => {
     });
 
     const sendCall = calls.find((c) => c.method === 'sessions.send');
-    expect(sendCall?.params.idempotencyKey).toBeDefined();
-    expect(typeof sendCall?.params.idempotencyKey).toBe('string');
-    expect((sendCall?.params.idempotencyKey as string).length).toBeGreaterThan(0);
+    expect(String(sendCall?.params.idempotencyKey ?? '')).toMatch(
+      /^kanban-subagent:agent:reviewer:main:test-kanban-run:agent:reviewer:subagent:/,
+    );
   });
 });
 
@@ -200,9 +238,9 @@ describe('resolveKanbanFallbackParentSessionKey', () => {
     expect(resolveKanbanFallbackParentSessionKey('agent:reviewer:subagent:child')).toBe('agent:reviewer:main');
   });
 
-  it('rejects operator, unset, and @main assignees for macOS fallback execution', () => {
+  it('rejects operator and unset assignees for macOS fallback execution', () => {
     expect(resolveKanbanFallbackParentSessionKey('operator')).toBeNull();
     expect(resolveKanbanFallbackParentSessionKey(undefined)).toBeNull();
-    expect(resolveKanbanFallbackParentSessionKey('agent:main')).toBeNull();
+    expect(resolveKanbanFallbackParentSessionKey('agent:main')).toBe('agent:main:main');
   });
 });
