@@ -180,8 +180,19 @@ app.get('/api/workspace', rateLimitGeneral, async (c) => {
       files.push({ key, filename, exists });
     }
   } else {
-    // Gateway fallback
+    // Remote workspaces can make OpenClaw scan agent files through the gateway.
+    // That scan has been observed taking 30-50s and blocking chat reconnects, so
+    // default startup reads return a cheap "unknown/missing" shape. Callers that
+    // truly need remote file existence can opt in with `remoteScan=1`.
     isRemote = true;
+    const allowRemoteScan = c.req.query('remoteScan') === '1';
+    if (!allowRemoteScan) {
+      for (const [key, filename] of Object.entries(FILE_MAP)) {
+        files.push({ key, filename, exists: false });
+      }
+      return c.json({ ok: true, files, remoteWorkspace: true, remoteScanSkipped: true });
+    }
+
     try {
       const remoteFiles = await gatewayFilesList(workspace.agentId);
       const remoteByName = new Map(remoteFiles.map((f) => [f.name, f]));

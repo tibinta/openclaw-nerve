@@ -258,6 +258,25 @@ app.get('/api/files/tree', async (c) => {
     });
   }
 
+  const allowRemoteScan = c.req.query('remoteScan') === '1';
+  if (!allowRemoteScan) {
+    // Keep the first paint on chat. Remote file listing goes through
+    // `agents.files.list`, which can block gateway handshakes under load.
+    // The file browser can request `remoteScan=1` later when the user actually
+    // opens a remote workspace tree.
+    return c.json({
+      ok: true,
+      root: '.',
+      entries: [],
+      remoteWorkspace: true,
+      remoteScanSkipped: true,
+      workspaceInfo: {
+        isCustomWorkspace: workspace.isCustomWorkspace,
+        rootPath: root,
+      },
+    });
+  }
+
   try {
     const remoteFiles = await gatewayFilesList(workspace.agentId);
     const entries = gatewayFilesToTree(remoteFiles);

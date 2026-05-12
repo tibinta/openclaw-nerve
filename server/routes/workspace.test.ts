@@ -316,14 +316,32 @@ describe('workspace routes', () => {
       expect(json.ok).toBe(false);
     });
 
-    it('GET /api/workspace lists files via gateway when workspace is remote', async () => {
+    it('GET /api/workspace skips remote gateway file scan by default', async () => {
+      const app = await buildRemoteApp();
+      const res = await app.request('/api/workspace');
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        ok: boolean;
+        files: Array<{ key: string; exists: boolean }>;
+        remoteWorkspace?: boolean;
+        remoteScanSkipped?: boolean;
+      };
+      expect(json.ok).toBe(true);
+      expect(json.remoteWorkspace).toBe(true);
+      expect(json.remoteScanSkipped).toBe(true);
+      expect(gatewayFilesListMock).not.toHaveBeenCalled();
+      expect(json.files.every((f) => f.exists === false)).toBe(true);
+    });
+
+    it('GET /api/workspace lists files via gateway when remoteScan is explicit', async () => {
       gatewayFilesListMock.mockResolvedValue([
         { name: 'SOUL.md', missing: false, size: 100, updatedAtMs: 1000 },
         { name: 'TOOLS.md', missing: true, size: 0, updatedAtMs: 0 },
       ]);
 
       const app = await buildRemoteApp();
-      const res = await app.request('/api/workspace');
+      const res = await app.request('/api/workspace?remoteScan=1');
 
       expect(res.status).toBe(200);
       const json = (await res.json()) as {

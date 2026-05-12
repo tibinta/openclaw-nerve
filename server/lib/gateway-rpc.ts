@@ -33,6 +33,7 @@ export interface GatewayFileWithContent extends GatewayFileEntry {
 // ── Persistent connection ────────────────────────────────────────────
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const CONNECT_TIMEOUT_MS = 6_000;
 const RECONNECT_DELAY_MS = 3_000;
 const METHOD_CACHE_TTLS_MS: Record<string, number> = {
   'sessions.list': 5_000,
@@ -71,6 +72,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connectPromise: Promise<void> | null = null;
 let connectResolve: (() => void) | null = null;
 let connectReject: ((err: Error) => void) | null = null;
+let connectTimer: ReturnType<typeof setTimeout> | null = null;
 const inFlightCalls = new Map<string, Promise<unknown>>();
 const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
 
@@ -197,6 +199,10 @@ function rejectAllPending(reason: string): void {
 
 /** Reject and clear the in-flight connect promise. */
 function rejectConnect(reason: string): void {
+  if (connectTimer) {
+    clearTimeout(connectTimer);
+    connectTimer = null;
+  }
   if (connectReject) {
     connectReject(new Error(reason));
   }
@@ -221,6 +227,13 @@ function ensureConnection(): void {
     headers: { Origin: getGatewayRequestOrigin() },
   });
 
+  connectTimer = setTimeout(() => {
+    if (connected || ws === socket) return;
+    console.warn(`[gateway-rpc] Gateway connect timeout after ${CONNECT_TIMEOUT_MS}ms`);
+    rejectConnect(`Gateway connect timeout after ${CONNECT_TIMEOUT_MS}ms`);
+    socket.terminate();
+  }, CONNECT_TIMEOUT_MS);
+
   socket.on('open', () => {
     // Wait for connect.challenge
   });
@@ -244,6 +257,10 @@ function ensureConnection(): void {
       if (msg.type === 'res' && msg.id === '__connect__') {
         connecting = false;
         if (msg.ok) {
+          if (connectTimer) {
+            clearTimeout(connectTimer);
+            connectTimer = null;
+          }
           ws = socket;
           connected = true;
           if (connectResolve) {
@@ -294,6 +311,10 @@ function ensureConnection(): void {
     if (!wasConnected && wasConnecting) {
       rejectConnect('Gateway connection closed before connect completed');
     } else {
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
       connectPromise = null;
       connectResolve = null;
       connectReject = null;

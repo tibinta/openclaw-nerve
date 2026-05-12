@@ -275,7 +275,7 @@ describe('SessionContext', () => {
     render(<SessionProvider><SpawnSubagent /></SessionProvider>);
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:reviewer:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
 
     await act(async () => {
@@ -417,7 +417,7 @@ describe('SessionContext', () => {
     expect(spawnRouteCalled).toBe(false);
   });
 
-  it('prefers the Jane root over legacy main when both are available', async () => {
+  it('keeps Jane direct selected even when only the Jane root and legacy main are in the first tiny snapshot', async () => {
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'sessions.list') {
         return {
@@ -437,7 +437,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:jane-whitmore---ceo:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
   });
 
@@ -487,7 +487,7 @@ describe('SessionContext', () => {
     }
 
     render(<SessionProvider><Spawn /></SessionProvider>);
-    await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 }));
+    await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 3 }));
     screen.getByTestId('spawn-duplicate').click();
     await waitFor(() => {
       expect(rpcMock).toHaveBeenCalledWith('agents.create', expect.objectContaining({
@@ -512,7 +512,7 @@ describe('SessionContext', () => {
       expect(screen.getByText('Cron: Daily Digest')).toBeInTheDocument();
     });
 
-    expect(rpcMock).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 });
+    expect(rpcMock).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 3 });
   });
 
   it('keeps the last live snapshot when one refresh returns an empty list', async () => {
@@ -541,7 +541,7 @@ describe('SessionContext', () => {
     await waitFor(() => {
       expect(screen.getByText('Designer')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+    expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
 
     await act(async () => {
       screen.getByTestId('refresh').click();
@@ -552,7 +552,7 @@ describe('SessionContext', () => {
     });
 
     expect(screen.getByTestId('session-count').textContent).toBe('2');
-    expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+    expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     expect(sessionsListCalls).toBe(2);
   });
 
@@ -619,7 +619,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
 
     await act(async () => {
@@ -660,7 +660,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
 
     await act(async () => {
@@ -689,8 +689,8 @@ describe('SessionContext', () => {
         return {
           sessions: [
             {
-              sessionKey: 'agent:main:main',
-              label: 'Main',
+              sessionKey: JANE_DIRECT_CHAT_SESSION_KEY,
+              label: 'Jane Direct',
               totalTokens: 91_000,
               contextTokens: 100_000,
             },
@@ -710,11 +710,11 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
 
     await waitFor(() => {
-      expect(rpcMock).toHaveBeenCalledWith('sessions.compact', { sessionKey: 'agent:main:main' });
+      expect(rpcMock).toHaveBeenCalledWith('sessions.compact', { sessionKey: JANE_DIRECT_CHAT_SESSION_KEY });
     });
 
     const compactCallsBeforeRefresh = rpcMock.mock.calls.filter(([method]) => method === 'sessions.compact').length;
@@ -751,7 +751,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
 
     act(() => {
@@ -805,7 +805,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
 
     act(() => {
@@ -853,7 +853,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
+      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
 
     act(() => {
@@ -953,7 +953,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 });
+      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 3 });
     });
 
     vi.useFakeTimers();
@@ -1013,7 +1013,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 });
+      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 3 });
     });
 
     vi.useFakeTimers();

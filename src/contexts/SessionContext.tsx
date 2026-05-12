@@ -30,7 +30,8 @@ const SESSION_BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'streami
 
 // Keep the sidebar list broad enough for older roots, but avoid dragging the
 // gateway with a 1000-row fetch on every refresh cycle.
-const FULL_SESSIONS_LIMIT = 200;
+const INITIAL_SESSIONS_LIMIT = 3;
+const FULL_SESSIONS_LIMIT = 50;
 // Nerve should not ask the gateway for the full historical store on every
 // startup/poll. A bounded recent window keeps the sidebar useful while avoiding
 // multi-minute sessions.list calls when old heartbeat/subagent ledgers are huge.
@@ -38,6 +39,7 @@ const SESSION_REFRESH_ACTIVE_MINUTES = 7 * 24 * 60;
 // When the gateway is already slow, backing off the fallback polling keeps the
 // session list from piling on top of live event-driven refreshes.
 const SESSION_REFRESH_POLL_INTERVAL_MS = 120_000;
+const FULL_SESSION_REFRESH_DELAY_MS = 20_000;
 const DELAYED_SESSION_REFRESH_MS = 5_000;
 
 export interface GatewayAgentRegistration {
@@ -121,9 +123,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const toolSeenRef = useRef<Map<string, number>>(new Map());
   const doneTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const delayedRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fullRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshSessionsInFlightRef = useRef(false);
   const listAuthoritativeSessionsInFlightRef = useRef<Promise<Session[]> | null>(null);
   const emptySnapshotSeenRef = useRef(false);
+  const initialSessionSnapshotLoadedRef = useRef(false);
 
   // Derive busyState from agentStatus for backward compatibility
   const busyState = useMemo(() => {
@@ -309,7 +313,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return descendants;
   }, []);
 
-  const listAuthoritativeSessions = useCallback(async () => {
+  const listAuthoritativeSessions = useCallback(async (mode: 'initial' | 'full' = 'full') => {
     if (connectionState !== 'connected') return sessionsRef.current;
     if (listAuthoritativeSessionsInFlightRef.current) {
       return listAuthoritativeSessionsInFlightRef.current;
@@ -317,10 +321,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     const inFlight = (async () => {
       try {
-        const [res, hiddenCronSessions] = await Promise.all([
-          rpc('sessions.list', { activeMinutes: SESSION_REFRESH_ACTIVE_MINUTES, limit: FULL_SESSIONS_LIMIT }) as Promise<SessionsListResponse>,
-          fetchHiddenCronSessions(24 * 60, FULL_SESSIONS_LIMIT),
-        ]);
+        const limit = mode === 'initial' ? INITIAL_SESSIONS_LIMIT : FULL_SESSIONS_LIMIT;
+        const res = await rpc('sessions.list', { activeMinutes: SESSION_REFRESH_ACTIVE_MINUTES, limit }) as SessionsListResponse;
+        if (mode === 'initial') {
+          return res?.sessions ?? [];
+        }
+
+        const hiddenCronSessions = await fetchHiddenCronSessions(24 * 60, FULL_SESSIONS_LIMIT);
         return mergeSessionLists(res?.sessions ?? [], hiddenCronSessions);
       } catch (err) {
         console.debug('[SessionContext] Failed to fetch authoritative session list:', err);
@@ -543,12 +550,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [addAgentLogEntry, friendlyName, shouldLogTool]);
 
-  const refreshSessions = useCallback(async () => {
+  const refreshSessions = useCallback(async (mode: 'initial' | 'full' = 'full') => {
     if (connectionState !== 'connected') return;
     if (refreshSessionsInFlightRef.current) return;
     refreshSessionsInFlightRef.current = true;
     try {
-      const newSessions = await listAuthoritativeSessions();
+      const newSessions = await listAuthoritativeSessions(mode);
       const hasLiveSnapshot = sessionsRef.current.length > 0;
       if (newSessions.length === 0 && hasLiveSnapshot) {
         if (!emptySnapshotSeenRef.current) {
@@ -608,6 +615,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return hasChanges ? merged : prev;
       });
       setCurrentSession(nextCurrentSession);
+      if (mode === 'initial') {
+        initialSessionSnapshotLoadedRef.current = true;
+      }
     } catch (err) {
       console.debug('[SessionContext] Failed to refresh sessions:', err);
     } finally {
@@ -859,13 +869,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // Poll sessions when connected (reduced to 30s - WebSocket events provide real-time updates)
   useEffect(() => {
     if (connectionState !== 'connected') return;
-    refreshSessions();
+    refreshSessions(initialSessionSnapshotLoadedRef.current ? 'full' : 'initial');
+    fullRefreshTimeoutRef.current = setTimeout(() => {
+      fullRefreshTimeoutRef.current = null;
+      void refreshSessionsRef.current('full');
+    }, FULL_SESSION_REFRESH_DELAY_MS);
+
     // Polling is now just a fallback for catching missed updates
     const iv = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void refreshSessions();
+      void refreshSessionsRef.current('full');
     }, SESSION_REFRESH_POLL_INTERVAL_MS);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      if (fullRefreshTimeoutRef.current) {
+        clearTimeout(fullRefreshTimeoutRef.current);
+        fullRefreshTimeoutRef.current = null;
+      }
+    };
   }, [connectionState, refreshSessions]);
 
   // Load agent log on mount
