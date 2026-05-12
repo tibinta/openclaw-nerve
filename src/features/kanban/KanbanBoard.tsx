@@ -1,12 +1,14 @@
-import { memo, useState, useCallback, useMemo, useRef } from 'react';
-import { LayoutGrid } from 'lucide-react';
+import { memo, useCallback, useMemo, useState, useRef } from 'react';
+import { Archive, LayoutGrid, RotateCcw } from 'lucide-react';
 import { DndContext, DragOverlay } from '@dnd-kit/core';
+import { useDroppable } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { Button } from '@/components/ui/button';
 import type { KanbanTask, TaskStatus } from './types';
-import { COLUMNS } from './types';
-import { KanbanColumn } from './KanbanColumn';
+import { COLUMN_LABELS, WORKFLOW_VISIBLE_STATUSES } from './types';
 import { KanbanCard } from './KanbanCard';
 import { useKanbanDragDrop } from './hooks/useKanbanDragDrop';
+import { TASK_STATUS_TONE } from './tone';
 
 interface KanbanBoardProps {
   tasksByStatus: (status: TaskStatus) => KanbanTask[];
@@ -17,26 +19,125 @@ interface KanbanBoardProps {
   hasAnyTasks: boolean;
   onCreateTask: () => void;
   reorderTask: (id: string, version: number, targetStatus: TaskStatus, targetIndex: number) => Promise<KanbanTask>;
-  /** Visible columns in display order — derived from board config. Falls back to COLUMNS. */
+  archivedTasks?: KanbanTask[];
+  archiveLoaded?: boolean;
+  onLoadArchive?: () => Promise<void>;
+  onRestoreArchivedTask?: (id: string) => Promise<KanbanTask>;
+  onArchiveDone?: () => void;
+  currentActiveTask?: KanbanTask | null;
+  /** Back-compat prop; the board now defaults to the split-lane workflow statuses. */
   boardColumns?: TaskStatus[];
 }
 
 /* ── Loading skeleton ── */
-function SkeletonColumn() {
+function SkeletonLane({ title }: { title: string }) {
   return (
-    <div className="flex flex-col min-w-[280px] w-[320px] max-w-[360px] h-full shrink-0 bg-background/50 rounded-lg border border-border/40">
-      <div className="h-10 px-3 flex items-center border-b border-border/40">
-        <div className="h-3 w-16 bg-muted rounded animate-pulse" />
+    <div className="shell-panel flex min-h-[420px] flex-col overflow-hidden rounded-[28px] border border-border/60 bg-background/55">
+      <div className="border-b border-border/50 px-4 py-3">
+        <div className="h-3 w-20 rounded bg-muted animate-pulse" />
+        <div className="mt-2 h-2 w-32 rounded bg-muted/80 animate-pulse" />
       </div>
-      <div className="p-2 flex flex-col gap-2">
-        {[86, 62, 110].map((h, i) => (
-          <div
-            key={i}
-            className="rounded-[10px] bg-muted/50 animate-pulse"
-            style={{ height: `${h}px` }}
-          />
+      <div className="px-4 py-3 space-y-3">
+        <div className="text-[0.667rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{title}</div>
+        {[72, 88, 64].map((h, i) => (
+          <div key={i} className="rounded-[18px] border border-border/50 bg-muted/35 animate-pulse" style={{ height: `${h}px` }} />
         ))}
       </div>
+    </div>
+  );
+}
+
+function labelFromKey(key: string): string {
+  return key.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function sectionTone(status: TaskStatus) {
+  return TASK_STATUS_TONE[status] ?? TASK_STATUS_TONE.todo;
+}
+
+function TaskStack({
+  status,
+  tasks,
+  onCardClick,
+  featuredTaskId,
+}: {
+  status: TaskStatus;
+  tasks: KanbanTask[];
+  onCardClick: (task: KanbanTask) => void;
+  featuredTaskId?: string | null;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: status });
+  const taskIds = useMemo(() => tasks.map((task) => task.id), [tasks]);
+  const tone = sectionTone(status);
+  const displayLabel = COLUMN_LABELS[status] ?? labelFromKey(status);
+
+  return (
+    <section className={`rounded-[22px] border transition-colors ${isOver ? 'border-primary/45 bg-primary/[0.05]' : 'border-border/60 bg-background/35'}`}>
+      <div className="flex items-center justify-between gap-3 border-b border-border/40 px-3 py-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`text-[0.667rem] font-semibold uppercase tracking-[0.16em] ${tone.textClass}`}>
+            {displayLabel}
+          </span>
+          {featuredTaskId && featuredTaskId && status === 'in-progress' && (
+            <span className="cockpit-badge" data-tone="primary">Current</span>
+          )}
+        </div>
+        <span className={`inline-flex min-w-[28px] items-center justify-center rounded-full border px-2 py-0.5 text-[0.667rem] font-semibold tabular-nums ${tone.badgeClass}`}>
+          {tasks.length}
+        </span>
+      </div>
+
+      <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+        <div ref={setNodeRef} className="flex min-h-[92px] flex-col gap-2 p-2.5">
+          {tasks.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center rounded-[18px] border border-dashed border-border/40 px-4 py-5 text-center text-[0.733rem] text-muted-foreground/65 select-none">
+              No tasks
+            </div>
+          ) : tasks.map((task) => {
+            const featured = task.id === featuredTaskId;
+            return (
+              <div
+                key={task.id}
+                className={featured ? 'rounded-[22px] border border-primary/40 bg-primary/[0.06] p-1 shadow-[0_14px_28px_rgba(0,0,0,0.18)]' : ''}
+              >
+                {featured && (
+                  <div className="px-2 pb-1 text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-primary">
+                    Current active task
+                  </div>
+                )}
+                <KanbanCard task={task} onClick={onCardClick} />
+              </div>
+            );
+          })}
+        </div>
+      </SortableContext>
+    </section>
+  );
+}
+
+function ArchiveRow({
+  task,
+  onRestore,
+}: {
+  task: KanbanTask;
+  onRestore?: (id: string) => Promise<KanbanTask>;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-[18px] border border-border/55 bg-background/55 px-3 py-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="cockpit-badge" data-tone="success">Archived</span>
+          <span className="text-[0.667rem] text-muted-foreground">{new Date(task.updatedAt).toLocaleDateString()}</span>
+        </div>
+        <div className="mt-1 truncate text-sm font-medium text-foreground">{task.title}</div>
+        <div className="mt-0.5 text-[0.733rem] text-muted-foreground truncate">{task.result || task.description || 'No extra details'}</div>
+      </div>
+      {onRestore && (
+        <Button variant="outline" size="sm" onClick={() => { void onRestore(task.id); }}>
+          <RotateCcw size={14} />
+          Restore
+        </Button>
+      )}
     </div>
   );
 }
@@ -50,11 +151,19 @@ export const KanbanBoard = memo(function KanbanBoard({
   hasAnyTasks,
   onCreateTask,
   reorderTask,
+  archivedTasks = [],
+  archiveLoaded = false,
+  onLoadArchive,
+  onRestoreArchivedTask,
+  onArchiveDone,
+  currentActiveTask = null,
   boardColumns: boardColumnsProp,
 }: KanbanBoardProps) {
-  const activeColumns = boardColumnsProp ?? COLUMNS;
+  const activeColumns = useMemo(() => {
+    const source = boardColumnsProp ?? WORKFLOW_VISIBLE_STATUSES;
+    return source.filter((status) => status !== 'done');
+  }, [boardColumnsProp]);
 
-  /* ── Build flat task list from the tasksByStatus prop ── */
   const propTasks = useMemo(() => {
     const all: KanbanTask[] = [];
     for (const col of activeColumns) {
@@ -63,14 +172,15 @@ export const KanbanBoard = memo(function KanbanBoard({
     return all;
   }, [tasksByStatus, activeColumns]);
 
-  /* ── Drag override: non-null only during an active drag ── */
+  const pendingArchiveTasks = useMemo(() => tasksByStatus('done'), [tasksByStatus]);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+
   const [dragOverride, setDragOverride] = useState<KanbanTask[] | null>(null);
   const isDraggingRef = useRef(false);
 
-  // During drag use optimistic state; otherwise use server data directly
   const localTasks = dragOverride ?? propTasks;
 
-  /* Wrap setTasks for drag hook — operates on the override */
   const setTasksWithDragTracking = useCallback(
     (updater: (prev: KanbanTask[]) => KanbanTask[]) => {
       setDragOverride(prev => updater(prev ?? propTasks));
@@ -78,24 +188,21 @@ export const KanbanBoard = memo(function KanbanBoard({
     [propTasks],
   );
 
-  /* ── DnD hook ── */
   const { sensors, collisionDetection, activeTask, onDragStart, onDragOver, onDragEnd, onDragCancel } = useKanbanDragDrop({
     tasks: localTasks,
     setTasksOptimistic: setTasksWithDragTracking,
     reorderTask,
     activeColumns,
     onError: (msg) => {
-      // Clear override to fall back to prop data
       setDragOverride(null);
       console.warn('[Kanban DnD]', msg);
     },
   });
 
-  /* Track drag state so we don't clobber optimistic updates with prop sync */
   const handleDragStart = useCallback(
     (event: Parameters<typeof onDragStart>[0]) => {
       isDraggingRef.current = true;
-      setDragOverride(propTasks); // snapshot current state
+      setDragOverride(propTasks);
       onDragStart(event);
     },
     [onDragStart, propTasks],
@@ -104,7 +211,6 @@ export const KanbanBoard = memo(function KanbanBoard({
   const handleDragEnd = useCallback(
     async (event: Parameters<typeof onDragEnd>[0]) => {
       await onDragEnd(event);
-      // Small delay to let API respond before clearing override
       setTimeout(() => {
         isDraggingRef.current = false;
         setDragOverride(null);
@@ -119,14 +225,19 @@ export const KanbanBoard = memo(function KanbanBoard({
     setDragOverride(null);
   }, [onDragCancel]);
 
-  /* ── Derived tasksByStatus from local state ── */
-  const localTasksByStatus = useCallback(
-    (status: TaskStatus): KanbanTask[] =>
-      localTasks.filter(t => t.status === status).sort((a, b) => a.columnOrder - b.columnOrder),
-    [localTasks],
-  );
+  const handleToggleArchive = useCallback(async () => {
+    const nextOpen = !archiveOpen;
+    setArchiveOpen(nextOpen);
+    if (nextOpen && !archiveLoaded && onLoadArchive) {
+      setArchiveLoading(true);
+      try {
+        await onLoadArchive();
+      } finally {
+        setArchiveLoading(false);
+      }
+    }
+  }, [archiveLoaded, archiveOpen, onLoadArchive]);
 
-  /* ── Error state ── */
   if (error) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -141,18 +252,18 @@ export const KanbanBoard = memo(function KanbanBoard({
     );
   }
 
-  /* ── Loading skeleton ── */
   if (loading) {
     return (
-      <div className="h-full overflow-x-auto">
-        <div className="flex gap-3 p-0 min-w-min h-full">
-          {activeColumns.map(s => <SkeletonColumn key={s} />)}
+      <div className="h-full overflow-hidden">
+        <div className="grid h-full gap-3 xl:grid-cols-3">
+          <SkeletonLane title="Queue" />
+          <SkeletonLane title="Active" />
+          <SkeletonLane title="Archive" />
         </div>
       </div>
     );
   }
 
-  /* ── Empty board (§18.1) ── */
   if (!hasAnyTasks) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -170,7 +281,6 @@ export const KanbanBoard = memo(function KanbanBoard({
     );
   }
 
-  /* ── Board with columns ── */
   return (
     <DndContext
       sensors={sensors}
@@ -180,16 +290,104 @@ export const KanbanBoard = memo(function KanbanBoard({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="h-full overflow-x-auto">
-        <div className="flex gap-3 p-0 min-w-min h-full">
-          {activeColumns.map(status => (
-            <KanbanColumn
-              key={status}
-              status={status}
-              tasks={localTasksByStatus(status)}
-              onCardClick={onCardClick}
-            />
-          ))}
+      <div className="h-full overflow-hidden">
+        <div className="grid h-full gap-3 xl:grid-cols-[1.35fr_1.65fr]">
+          <section className="shell-panel flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-border/60 bg-background/55">
+            <div className="border-b border-border/50 px-4 py-3">
+              <div className="cockpit-kicker text-[0.6rem]">
+                <span className="text-primary">◆</span>
+                Queue
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">Ready list first. Backlog below.</div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
+              <TaskStack status="todo" tasks={tasksByStatus('todo')} onCardClick={onCardClick} />
+              <TaskStack status="backlog" tasks={tasksByStatus('backlog')} onCardClick={onCardClick} />
+            </div>
+          </section>
+
+          <section className="shell-panel flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-border/60 bg-background/55">
+            <div className="border-b border-border/50 px-4 py-3">
+              <div className="cockpit-kicker text-[0.6rem]">
+                <span className="text-primary">◆</span>
+                Active
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">Live work surface. Review stays here until it is done.</div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
+              {currentActiveTask ? (
+                <div className="rounded-[22px] border border-primary/30 bg-primary/[0.05] p-3 shadow-[0_14px_28px_rgba(0,0,0,0.15)]">
+                  <div className="cockpit-kicker text-[0.6rem]">
+                    <span className="text-primary">◆</span>
+                    Current active task
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onCardClick(currentActiveTask)}
+                    className="mt-2 block w-full text-left text-sm font-semibold text-foreground underline-offset-4 hover:underline"
+                  >
+                    {currentActiveTask.title}
+                  </button>
+                  <div className="mt-1 text-[0.733rem] text-muted-foreground">
+                    {currentActiveTask.description || 'This task is the one the board should keep in view.'}
+                  </div>
+                </div>
+              ) : null}
+              <TaskStack
+                status="in-progress"
+                tasks={tasksByStatus('in-progress')}
+                onCardClick={onCardClick}
+                featuredTaskId={currentActiveTask?.id ?? null}
+              />
+              <TaskStack status="review" tasks={tasksByStatus('review')} onCardClick={onCardClick} />
+            </div>
+          </section>
+
+          <div className="xl:col-span-2">
+            <div className="mt-3 rounded-[18px] border border-border/55 bg-background/45 px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => { void handleToggleArchive(); }}
+                  className="inline-flex items-center gap-2 text-[0.733rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+                >
+                  <Archive size={14} />
+                  Archive
+                  <span className="cockpit-badge">{pendingArchiveTasks.length + (archiveLoaded ? archivedTasks.length : 0)}</span>
+                </button>
+                {onArchiveDone && pendingArchiveTasks.length > 0 && (
+                  <Button variant="outline" size="sm" onClick={onArchiveDone} title="Move done tasks into archive">
+                    <Archive size={14} />
+                    Archive Done
+                  </Button>
+                )}
+              </div>
+              {archiveOpen && (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {pendingArchiveTasks.length > 0 && (
+                    <div className="space-y-2 rounded-[14px] border border-dashed border-border/50 bg-background/35 p-3">
+                      <div className="cockpit-kicker text-[0.6rem]">Ready</div>
+                      {pendingArchiveTasks.map((task) => (
+                        <ArchiveRow key={task.id} task={task} />
+                      ))}
+                    </div>
+                  )}
+                  <div className="space-y-2 rounded-[14px] border border-border/50 bg-background/35 p-3">
+                    <div className="cockpit-kicker text-[0.6rem]">Saved</div>
+                    {archiveLoading ? (
+                      <div className="py-4 text-center text-[0.733rem] text-muted-foreground">Loading…</div>
+                    ) : archivedTasks.length === 0 ? (
+                      <div className="py-4 text-center text-[0.733rem] text-muted-foreground">No archived tasks.</div>
+                    ) : (
+                      archivedTasks.map((task) => (
+                        <ArchiveRow key={task.id} task={task} onRestore={onRestoreArchivedTask} />
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 

@@ -46,6 +46,8 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
     rejectTask,
     abortTask,
     archivedTasks,
+    archiveLoaded,
+    fetchArchive,
     archiveDoneTasks,
     restoreArchivedTask,
   } = useKanban();
@@ -266,6 +268,8 @@ export function KanbanPanel({ initialTaskId, onInitialTaskConsumed }: KanbanPane
           onCreateTask={openCreateDialog}
           reorderTask={reorderTask}
           archivedTasks={archivedTasks}
+          archiveLoaded={archiveLoaded}
+          onLoadArchive={fetchArchive}
           onRestoreArchivedTask={restoreArchivedTask}
           onArchiveDone={handleArchive}
           currentActiveTask={currentActiveTask}

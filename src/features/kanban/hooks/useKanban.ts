@@ -25,6 +25,7 @@ export interface KanbanFilters {
 }
 
 const EMPTY_FILTERS: KanbanFilters = { q: '', priority: [], assignee: '', labels: [] };
+const BOARD_LOAD_ORDER: TaskStatus[] = ['in-progress', 'review', 'todo', 'backlog'];
 
 /** Error with attached latest task from a 409 response */
 export interface VersionConflictError extends Error {
@@ -84,6 +85,16 @@ function buildQuery(filters: KanbanFilters): string {
   return p.toString();
 }
 
+function hasActiveFilters(filters: KanbanFilters): boolean {
+  return Boolean(filters.q || filters.priority.length > 0 || filters.assignee || filters.labels.length > 0);
+}
+
+function mergeById(existing: KanbanTask[], incoming: KanbanTask[]): KanbanTask[] {
+  const map = new Map(existing.map((task) => [task.id, task] as const));
+  for (const task of incoming) map.set(task.id, task);
+  return [...map.values()];
+}
+
 /* ── Board config ── */
 export interface BoardColumnConfig {
   key: string;
@@ -110,6 +121,7 @@ export function useKanban() {
   const [filters, setFilters] = useState<KanbanFilters>(EMPTY_FILTERS);
   const [boardConfig, setBoardConfig] = useState<BoardConfig | null>(null);
   const [archivedTasks, setArchivedTasks] = useState<KanbanTask[]>([]);
+  const [archiveLoaded, setArchiveLoaded] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const refreshInFlightRef = useRef(false);
 
@@ -146,12 +158,48 @@ export function useKanban() {
       setError(null);
     }
     try {
-      const qs = buildQuery(f ?? filters);
-      const res = await fetch(`/api/kanban/tasks?${qs}`, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: TasksResponse = await res.json();
-      setTasks(data.items);
-      setTotal(data.total);
+      const effectiveFilters = f ?? filters;
+      if (!hasActiveFilters(effectiveFilters)) {
+        let merged: KanbanTask[] = [];
+        let totalLoaded = 0;
+        let firstUsefulPaintDone = false;
+
+        // Load the work surface first. This gives the UI useful tasks before
+        // backlog/archive work can slow down first paint.
+        for (const status of BOARD_LOAD_ORDER) {
+          const qs = new URLSearchParams();
+          qs.set('status', status);
+          qs.set('limit', '200');
+          const res = await fetch(`/api/kanban/tasks?${qs.toString()}`, { signal: controller.signal });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data: TasksResponse = await res.json();
+          merged = mergeById(merged, data.items);
+          totalLoaded += data.total;
+          if (!silent) {
+            setTasks(merged);
+            setTotal(totalLoaded);
+            // Keep the skeleton until there is something real to show, so an
+            // empty in-progress lane never looks like the whole board vanished.
+            if (!firstUsefulPaintDone && (merged.length > 0 || status === BOARD_LOAD_ORDER.at(-1))) {
+              setLoading(false);
+              firstUsefulPaintDone = true;
+            }
+          }
+        }
+        if (silent) {
+          // Background refreshes update once after the ordered fetch completes.
+          // This prevents lower-priority lanes briefly disappearing every poll.
+          setTasks(merged);
+          setTotal(totalLoaded);
+        }
+      } else {
+        const qs = buildQuery(effectiveFilters);
+        const res = await fetch(`/api/kanban/tasks?${qs}`, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: TasksResponse = await res.json();
+        setTasks(data.items);
+        setTotal(data.total);
+      }
       if (!silent) setError(null);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -169,14 +217,14 @@ export function useKanban() {
     if (!res.ok) return;
     const data: ArchiveResponse = await res.json();
     setArchivedTasks(data.items);
+    setArchiveLoaded(true);
   }, []);
 
   /* Initial fetch + refetch on filter change */
   useEffect(() => {
     fetchTasks(filters);
-    void fetchArchive();
     return () => abortRef.current?.abort();
-  }, [filters, fetchArchive, fetchTasks]);
+  }, [filters, fetchTasks]);
 
   /* Auto-refresh every 5s so board stays current (silent — no loading flash) */
   useEffect(() => {
@@ -396,6 +444,7 @@ export function useKanban() {
     boardColumns,
     boardConfig,
     archivedTasks,
+    archiveLoaded,
     fetchArchive,
     archiveDoneTasks,
     restoreArchivedTask,
