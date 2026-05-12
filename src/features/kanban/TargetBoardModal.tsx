@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import { X, Target, TrendingUp, Users, CircleCheckBig, ChevronRight, ShieldCheck } from 'lucide-react';
+import { X, Target, TrendingUp, Users, CircleCheckBig, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { KanbanTask } from './types';
 
@@ -10,10 +10,14 @@ interface TargetBoardModalProps {
   taskCount: number;
 }
 
-const TARGET_NOTE_PATH = 'target-board-live-note.md';
-const TARGET_NOTE_URL = `/api/files/read?${new URLSearchParams({ path: TARGET_NOTE_PATH, agentId: 'main' }).toString()}`;
+const TARGET_INDEX_PATH = 'target-board/index.md';
+const TARGET_LEGACY_PATH = 'target-board-live-note.md';
+const AGENT_ID = 'main';
 
-const targetSource = `# Target Board Live Note
+const TARGET_NOTE_URL = (path: string) => `/api/files/read?${new URLSearchParams({ path, agentId: AGENT_ID }).toString()}`;
+const SPLIT_LOADING_MESSAGE = 'loading target sections';
+
+const targetSourceFallback = `# Target Board Live Note
 
 ## Revenue Model
 - Lead universe: 50,000 leads
@@ -37,51 +41,174 @@ const targetSource = `# Target Board Live Note
 3. Add live actuals beside each target.
 `;
 
-const targetFallbacks: Record<string, string> = {
-  '50,000 leads': 'Total pipeline target',
-  '250/day': 'Daily throughput',
-  '1,600 reachouts/day': 'Outreach motion',
-  '200 new leads processed/day': 'Intake motion',
-  '8-step conversion': 'Funnel depth',
-  '11% conversion': 'Primary rate',
-  '£75 software': 'Operating input',
-  '£300,000 revenue target': 'Revenue goal',
-  '4,000 clients monthly recurring': 'Scale target',
-};
-
-const metrics = [
-  { icon: TrendingUp, label: 'Growth', value: 'live' },
-  { icon: Users, label: 'Activity', value: 'tracked' },
-  { icon: CircleCheckBig, label: 'Proof', value: 'ready' },
+const METRICS_LABELS = [
+  { icon: TrendingUp, label: 'Targets', value: 'loading' },
+  { icon: Users, label: 'Sections', value: 'loading' },
+  { icon: CircleCheckBig, label: 'Coach', value: 'loading' },
 ];
 
-const targetKeys = Object.keys(targetFallbacks);
-
-function extractTargetLine(source: string, key: string): string | null {
-  const match = source.split('\n').map((line) => line.trim().replace(/^[-*]\s+/, '')).find((line) => line.includes(key));
-  if (!match) return null;
-  const [, value] = match.split(':', 2);
-  return value?.trim() || match;
+interface CategoryNotes {
+  title: string;
+  metrics: string[];
+  autoCoachRules: string[];
+  nextActions: string[];
+  extras: string[];
+  sourcePath: string;
 }
 
-function extractSectionBullets(source: string, heading: string, maxItems = 4): string[] {
-  const lines = source.split('\n');
-  const startIndex = lines.findIndex((line) => line.trim().toLowerCase() === `## ${heading}`.toLowerCase());
-  if (startIndex === -1) return [];
-  const items: string[] = [];
-  for (const line of lines.slice(startIndex + 1)) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('## ')) break;
-    const bullet = trimmed.match(/^(?:[-*]|\d+\.)\s+(.+)/)?.[1]?.trim();
-    if (bullet) items.push(bullet);
-    if (items.length >= maxItems) break;
+interface TargetLoadState {
+  mode: 'loading' | 'live' | 'partial' | 'fallback';
+  source: string;
+}
+
+const metricsState = (state: TargetLoadState): string => {
+  switch (state.mode) {
+    case 'live':
+      return 'live';
+    case 'partial':
+      return 'partial';
+    case 'loading':
+      return 'loading';
+    default:
+      return 'fallback';
   }
-  return items;
+};
+
+function parseListItem(line: string): string | null {
+  return line.match(/^\s*(?:[-*+]|(?:\d+\.)|\[[ xX]\])\s+(.*)$/)?.[1]?.trim() ?? null;
+}
+
+function normalizedHeading(line: string): string {
+  return line.trim().toLowerCase();
+}
+
+function isCoachHeading(heading: string): boolean {
+  return /auto-?coach|coach rules|coach/.test(heading);
+}
+
+function isNextActionsHeading(heading: string): boolean {
+  return /\bnext action\b/.test(heading);
+}
+
+function isMetricsHeading(heading: string): boolean {
+  return /^(metrics|targets?|revenue|financial|monthly|debt|pipeline|cash|mrr|wellness|action|target)/.test(heading);
+}
+
+function parseCategoryFile(source: string, path: string): CategoryNotes {
+  const titleCandidate = source.match(/^#\s+(.*)$/m)?.[1]?.trim();
+  const lines = source.split('\n');
+
+  let heading = '';
+  const category: CategoryNotes = {
+    title: titleCandidate || path.replace('.md', ''),
+    metrics: [],
+    autoCoachRules: [],
+    nextActions: [],
+    extras: [],
+    sourcePath: path,
+  };
+
+  const metricValues = new Set<string>();
+  const coachValues = new Set<string>();
+  const actionValues = new Set<string>();
+  const extraValues = new Set<string>();
+
+  for (const raw of lines) {
+    const headingMatch = raw.match(/^#{1,6}\s+(.*)$/);
+    if (headingMatch) {
+      heading = normalizedHeading(headingMatch[1]);
+      continue;
+    }
+
+    const item = parseListItem(raw);
+    if (!item) continue;
+    if (isCoachHeading(heading)) {
+      coachValues.add(item);
+      continue;
+    }
+
+    if (isNextActionsHeading(heading)) {
+      actionValues.add(item);
+      continue;
+    }
+
+    if (isMetricsHeading(heading) || /:/.test(item)) {
+      metricValues.add(item);
+      continue;
+    }
+
+    if (item) {
+      extraValues.add(item);
+    }
+  }
+
+  category.metrics = [...metricValues];
+  category.autoCoachRules = [...coachValues];
+  category.nextActions = [...actionValues];
+  category.extras = [...extraValues];
+
+  return category;
+}
+
+function extractSectionList(source: string): string[] {
+  const lines = source.split('\n');
+  const pathList: string[] = [];
+  const indexDir = TARGET_INDEX_PATH.replace(/\/[^/]+$/, '');
+  let inSections = false;
+
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s+(.*)$/)?.[1]?.toLowerCase();
+    if (heading) {
+      inSections = heading === 'sections' || heading === 'files';
+      continue;
+    }
+
+    const item = parseListItem(line);
+    if (!item) continue;
+    if (!inSections) continue;
+    if (!item.toLowerCase().endsWith('.md')) continue;
+
+    const cleaned = item.replace(/^\s*\//, '').trim();
+    if (!cleaned) continue;
+    if (cleaned.includes('/')) {
+      pathList.push(cleaned);
+    } else {
+      pathList.push(`${indexDir}/${cleaned}`);
+    }
+  }
+
+  return pathList;
+}
+
+function splitMetricLine(line: string): { label: string; value: string } {
+  const [label = '', ...rest] = line.split(':');
+  if (line.includes(':') && rest.length >= 1) {
+    return {
+      label: label.trim(),
+      value: rest.join(':').trim(),
+    };
+  }
+
+  return {
+    label: line,
+    value: 'set',
+  };
+}
+
+function dedupeLines(items: string[]): string[] {
+  return [...new Set(items)];
+}
+
+function fallbackCategory(): CategoryNotes[] {
+  return [parseCategoryFile(targetSourceFallback, TARGET_LEGACY_PATH)];
 }
 
 export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, currentActiveTask, taskCount }: TargetBoardModalProps) {
-  const [source, setSource] = useState(targetSource);
-  const [sourceState, setSourceState] = useState<'loading' | 'live' | 'fallback'>('fallback');
+  const [categories, setCategories] = useState<CategoryNotes[]>(fallbackCategory);
+  const [sourceState, setSourceState] = useState<TargetLoadState>({
+    mode: 'fallback',
+    source: TARGET_LEGACY_PATH,
+  });
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -92,32 +219,81 @@ export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, 
 
   useEffect(() => {
     if (!open) return;
+    let ignore = false;
     const controller = new AbortController();
-    setSourceState('loading');
-    void fetch(TARGET_NOTE_URL, { signal: controller.signal })
-      .then(async (res) => {
-        if (!res.ok) throw new Error('target note unavailable');
-        const data = await res.json() as { ok?: boolean; content?: string };
-        if (!data.ok || !data.content) throw new Error('target note empty');
-        setSource(data.content);
-        setSourceState('live');
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setSource(targetSource);
-          setSourceState('fallback');
+    const loadFromSplit = async () => {
+      setSourceState({ mode: 'loading', source: TARGET_INDEX_PATH });
+      try {
+        const indexResponse = await fetch(TARGET_NOTE_URL(TARGET_INDEX_PATH), { signal: controller.signal });
+        if (!indexResponse.ok) throw new Error('index unavailable');
+
+        const indexData = await indexResponse.json() as { ok?: boolean; content?: string };
+        if (!indexData.ok || !indexData.content) throw new Error('index empty');
+
+        const sectionPaths = dedupeLines(extractSectionList(indexData.content));
+        if (sectionPaths.length === 0) {
+          throw new Error('no section files listed');
         }
-      });
-    return () => controller.abort();
+
+        const resolvedSections = await Promise.allSettled(sectionPaths.map(async (sectionPath) => {
+          const response = await fetch(TARGET_NOTE_URL(sectionPath), { signal: controller.signal });
+          if (!response.ok) throw new Error(`section unavailable: ${sectionPath}`);
+          const data = await response.json() as { ok?: boolean; content?: string };
+          if (!data.ok || !data.content) throw new Error(`empty section: ${sectionPath}`);
+          return parseCategoryFile(data.content, sectionPath);
+        }));
+
+        const loadedSections = resolvedSections.flatMap((section) => (
+          section.status === 'fulfilled' ? [section.value] : []
+        ));
+
+        if (ignore) return;
+        if (loadedSections.length === 0) {
+          throw new Error('no section content loaded');
+        }
+
+        setCategories(loadedSections);
+        setSourceState({
+          mode: resolvedSections.every((section) => section.status === 'fulfilled') ? 'live' : 'partial',
+          source: TARGET_INDEX_PATH,
+        });
+      } catch {
+        if (!ignore && !controller.signal.aborted) {
+          setCategories(fallbackCategory());
+          setSourceState({ mode: 'fallback', source: TARGET_LEGACY_PATH });
+        }
+      }
+    };
+
+    void loadFromSplit();
+    return () => {
+      ignore = true;
+      controller.abort();
+    };
   }, [open]);
 
-  const targetRows = useMemo(() => targetKeys.map((key) => ({
-    label: key,
-    value: extractTargetLine(source, key) ?? targetFallbacks[key],
-  })), [source]);
+  const sectionRows = useMemo(() => (
+    categories.flatMap((category) => [...category.metrics, ...category.extras].map((metric) => ({
+      ...splitMetricLine(metric),
+      section: category.title,
+    })))
+  ), [categories]);
 
-  const coachRules = useMemo(() => extractSectionBullets(source, 'Auto-Coach Rules', 4), [source]);
-  const nextActions = useMemo(() => extractSectionBullets(source, 'Next Actions', 4), [source]);
+  const coachRules = useMemo(() => dedupeLines(categories.flatMap((category) => category.autoCoachRules)).slice(0, 6), [categories]);
+  const nextActions = useMemo(() => dedupeLines(categories.flatMap((category) => category.nextActions)).slice(0, 6), [categories]);
+  const activeMetrics = useMemo(() => [
+    { ...METRICS_LABELS[0], value: `${sectionRows.length} metrics` },
+    { ...METRICS_LABELS[1], value: `${categories.length} sections` },
+    { ...METRICS_LABELS[2], value: metricsState(sourceState) },
+  ], [categories.length, sectionRows.length]);
+
+  const sourceLine = sourceState.mode === 'loading'
+    ? SPLIT_LOADING_MESSAGE
+    : sourceState.mode === 'live'
+      ? sourceState.source
+      : sourceState.mode === 'partial'
+        ? `${sourceState.source} (partial)`
+        : 'safe fallback';
 
   if (!open) return null;
 
@@ -129,7 +305,7 @@ export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, 
             <div className="cockpit-kicker text-[0.6rem]"><span className="text-primary">◆</span> Targets</div>
             <h2 className="mt-1 text-lg font-semibold text-foreground">Coach the work</h2>
             <div className="mt-1 text-[0.733rem] text-muted-foreground">
-              Source: {sourceState === 'live' ? TARGET_NOTE_PATH : sourceState === 'loading' ? 'loading target note' : 'safe fallback'}
+              Source: {sourceLine}
             </div>
           </div>
           <Button variant="outline" size="icon-sm" onClick={onClose} aria-label="Close target board">
@@ -144,21 +320,30 @@ export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, 
               Real targets
             </div>
             <div className="mt-4 grid gap-2">
-              {targetRows.map((item) => (
-                <div key={item.label} className="flex items-center justify-between rounded-2xl border border-border/50 bg-secondary/25 px-3 py-2.5">
-                  <div>
+              {sectionRows.length > 0 ? (
+                sectionRows.map((item) => (
+                  <div
+                    key={`${item.section}:${item.label}:${item.value}`}
+                    className="rounded-2xl border border-border/50 bg-secondary/25 px-3 py-2.5"
+                  >
                     <div className="text-sm font-medium text-foreground">{item.label}</div>
-                    <div className="text-[0.733rem] text-muted-foreground">{item.value}</div>
+                    <div className="text-[0.733rem] text-muted-foreground">
+                      {item.value}
+                      <span className="ml-2 text-[0.65rem] text-muted-foreground/85">({item.section})</span>
+                    </div>
                   </div>
-                  <ChevronRight size={14} className="text-muted-foreground" />
+                ))
+              ) : (
+                <div className="rounded-2xl border border-border/50 bg-secondary/25 p-3 text-sm text-muted-foreground">
+                  No live targets loaded. Showing fallback targets.
                 </div>
-              ))}
+              )}
             </div>
           </section>
 
           <section className="space-y-4 rounded-[24px] border border-border/55 bg-background/70 p-4">
             <div className="grid grid-cols-3 gap-2">
-              {metrics.map(({ icon: Icon, label, value }) => (
+              {activeMetrics.map(({ icon: Icon, label, value }) => (
                 <div key={label} className="rounded-2xl border border-border/50 bg-secondary/25 p-3 text-center">
                   <Icon size={16} className="mx-auto text-primary" />
                   <div className="mt-2 text-[0.667rem] uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
@@ -181,7 +366,9 @@ export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, 
 
             <div className="rounded-2xl border border-border/50 bg-secondary/20 p-4">
               <div className="text-[0.667rem] uppercase tracking-[0.14em] text-muted-foreground">Next action</div>
-              <div className="mt-1 text-sm text-foreground">{nextActions[0] ?? 'Confirm live CRM source and stream endpoints.'}</div>
+              <div className="mt-1 text-sm text-foreground">
+                {nextActions.join('\n') || 'Confirm live CRM source and stream endpoints.'}
+              </div>
             </div>
 
             <div className="rounded-2xl border border-border/50 bg-secondary/20 p-4">

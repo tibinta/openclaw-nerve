@@ -8,30 +8,34 @@ describe('TargetBoardModal', () => {
     vi.restoreAllMocks();
   });
 
-  it('loads target and auto-coach context from the target board markdown note', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      content: `# Target Board Live Note
+  it('loads target metrics from split markdown sections', async () => {
+    const indexContent = `# Target Board Sections
 
-## Revenue Model
-- Lead universe: 50,000 leads
-- Daily throughput: 250/day
-- Outreach target: 1,600 reachouts/day
-- New leads processed: 200/day
-- Funnel: 8-step conversion
-- Conversion rate: 11%
-- Software value input: £75
-- Revenue target: £300,000
-- Monthly recurring scale target: 4,000 clients
+## Sections
+- cash-map.md
+- actions-dashboard.md
+`;
+    const cashContent = `# Cash Position
+
+## Today’s cash position
+- Cash available: ~£200
+- Car fund: £0
+`;
+    const actionsContent = `# Actions
 
 ## Auto-Coach Rules
 - If activity is below target, Jane creates a growth packet bundle.
-- If CRM data is missing, Jane creates a data-source blocker instead of guessing.
 
 ## Next Actions
 1. Confirm live CRM source and stream endpoints.
-`,
-    }), { status: 200 })));
+`;
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: indexContent }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: cashContent }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: actionsContent }), { status: 200 }));
+
+    vi.stubGlobal('fetch', fetchMock);
 
     render(
       <TargetBoardModal
@@ -45,13 +49,45 @@ describe('TargetBoardModal', () => {
     expect(screen.getByText('Coach the work')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText('Source: target-board-live-note.md')).toBeInTheDocument();
+      expect(screen.getByText('Source: target-board/index.md')).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText('50,000 leads').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Cash available').length).toBeGreaterThan(0);
+    expect(screen.getByText('~£200')).toBeInTheDocument();
     expect(screen.getByText('If activity is below target, Jane creates a growth packet bundle.')).toBeInTheDocument();
-    expect(screen.getByText('Confirm live CRM source and stream endpoints.')).toBeInTheDocument();
+    expect(screen.getAllByText('Confirm live CRM source and stream endpoints.').length).toBe(2);
     expect(screen.getByText('Active target task')).toBeInTheDocument();
     expect(screen.getByText('7 board items visible, reused from the existing task state.')).toBeInTheDocument();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/api/files/read?path=target-board%2Fcash-map.md&agentId=main'),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('/api/files/read?path=target-board%2Factions-dashboard.md&agentId=main'),
+      expect.any(Object),
+    );
+  });
+
+  it('falls back to legacy note if split target sections fail', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('not-json', { status: 500 })));
+
+    render(
+      <TargetBoardModal
+        open
+        onClose={vi.fn()}
+        currentActiveTask={null}
+        taskCount={2}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Source: safe fallback')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Lead universe')).toBeInTheDocument();
+    expect(screen.getByText('11%')).toBeInTheDocument();
   });
 });
