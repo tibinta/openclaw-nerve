@@ -29,6 +29,10 @@ const SESSION_BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'streami
 // Keep the sidebar list broad enough for older roots, but avoid dragging the
 // gateway with a 1000-row fetch on every refresh cycle.
 const FULL_SESSIONS_LIMIT = 200;
+// Nerve should not ask the gateway for the full historical store on every
+// startup/poll. A bounded recent window keeps the sidebar useful while avoiding
+// multi-minute sessions.list calls when old heartbeat/subagent ledgers are huge.
+const SESSION_REFRESH_ACTIVE_MINUTES = 7 * 24 * 60;
 // When the gateway is already slow, backing off the fallback polling keeps the
 // session list from piling on top of live event-driven refreshes.
 const SESSION_REFRESH_POLL_INTERVAL_MS = 120_000;
@@ -196,18 +200,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setAgents(Array.isArray(data.agents) ? data.agents : []);
     } catch (err) {
       console.debug('[SessionContext] Failed to load agents registry, deriving from live sessions:', err);
-      setAgents(buildAgentSidebarTree(sessionsRef.current)
-        .map((node) => {
-          const familyId = node.familyId || getRootAgentId(node.selectKey || node.key);
-          if (!familyId) return null;
-          return {
+      const derivedAgents: GatewayAgentRegistration[] = [];
+      for (const node of buildAgentSidebarTree(sessionsRef.current)) {
+        const familyId = node.familyId || getRootAgentId(node.selectKey || node.key);
+        if (!familyId) continue;
+        derivedAgents.push({
             id: familyId,
             name: node.displayLabel?.trim() || node.session.displayName?.trim() || node.session.label?.trim() || undefined,
             identityName: node.displayLabel?.trim() || node.session.displayName?.trim() || undefined,
             label: node.displayLabel?.trim() || node.session.displayName?.trim() || node.session.label?.trim() || undefined,
-          };
-        })
-        .filter((entry): entry is GatewayAgentRegistration => entry !== null));
+        });
+      }
+      setAgents(derivedAgents);
     } finally {
       setAgentsLoading(false);
     }
@@ -312,7 +316,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const inFlight = (async () => {
       try {
         const [res, hiddenCronSessions] = await Promise.all([
-          rpc('sessions.list', { limit: FULL_SESSIONS_LIMIT }) as Promise<SessionsListResponse>,
+          rpc('sessions.list', { activeMinutes: SESSION_REFRESH_ACTIVE_MINUTES, limit: FULL_SESSIONS_LIMIT }) as Promise<SessionsListResponse>,
           fetchHiddenCronSessions(24 * 60, FULL_SESSIONS_LIMIT),
         ]);
         return mergeSessionLists(res?.sessions ?? [], hiddenCronSessions);

@@ -487,7 +487,7 @@ describe('SessionContext', () => {
     }
 
     render(<SessionProvider><Spawn /></SessionProvider>);
-    await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 200 }));
+    await waitFor(() => expect(rpcMock).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 }));
     screen.getByTestId('spawn-duplicate').click();
     await waitFor(() => {
       expect(rpcMock).toHaveBeenCalledWith('agents.create', expect.objectContaining({
@@ -501,7 +501,7 @@ describe('SessionContext', () => {
     });
   });
 
-  it('uses the full gateway session list for sidebar refreshes so older agent chats stay visible', async () => {
+  it('uses a bounded recent gateway session list for sidebar refreshes so Nerve does not overload the gateway', async () => {
     render(
       <SessionProvider>
         <SessionLabels />
@@ -509,11 +509,10 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Designer')).toBeInTheDocument();
+      expect(screen.getByText('Cron: Daily Digest')).toBeInTheDocument();
     });
 
-    expect(rpcMock).toHaveBeenCalledWith('sessions.list', { limit: 200 });
-    expect(rpcMock).not.toHaveBeenCalledWith('sessions.list', expect.objectContaining({ activeMinutes: expect.any(Number) }));
+    expect(rpcMock).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 });
   });
 
   it('keeps the last live snapshot when one refresh returns an empty list', async () => {
@@ -912,7 +911,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { limit: 200 });
+      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 });
     });
 
     vi.useFakeTimers();
@@ -972,7 +971,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { limit: 200 });
+      expect(rpcBeforeReconnect).toHaveBeenCalledWith('sessions.list', { activeMinutes: 10080, limit: 200 });
     });
 
     vi.useFakeTimers();

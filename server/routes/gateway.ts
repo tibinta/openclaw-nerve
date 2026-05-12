@@ -211,11 +211,11 @@ async function getAgentRegistry(): Promise<{ agents: GatewayAgentRegistration[];
     const raw = await readFile(configPath, 'utf8');
     const configData = JSON5.parse(raw) as OpenClawConfig;
     const list = configData.agents?.list ?? [];
-    const agents = list
-      .map((entry) => {
-        const id = entry?.id?.trim();
-        if (!id) return null;
-        return {
+    const agents: GatewayAgentRegistration[] = [];
+    for (const entry of list) {
+      const id = entry?.id?.trim();
+      if (!id) continue;
+      agents.push({
           id,
           name: entry?.name?.trim() || undefined,
           identityName: entry?.identity?.name?.trim() || undefined,
@@ -223,9 +223,8 @@ async function getAgentRegistry(): Promise<{ agents: GatewayAgentRegistration[];
           default: entry?.default,
           workspace: entry?.workspace?.trim() || undefined,
           agentDir: entry?.agentDir?.trim() || undefined,
-        } satisfies GatewayAgentRegistration;
-      })
-      .filter((entry): entry is GatewayAgentRegistration => entry !== null);
+      });
+    }
 
     return { agents, error: null };
   } catch (err) {

@@ -40,6 +40,8 @@ const RESTRICTED_METHODS = new Set([
   'sessions.compact',
 ]);
 const CONTROL_UI_CLIENT_ID = 'openclaw-control-ui';
+const CONTROL_UI_SESSION_ACTIVE_MINUTES = 7 * 24 * 60;
+const CONTROL_UI_SESSION_LIMIT = 200;
 
 /**
  * Execute a gateway RPC call, bypassing webchat restrictions.
@@ -47,6 +49,55 @@ const CONTROL_UI_CLIENT_ID = 'openclaw-control-ui';
  */
 function gatewayCall(method: string, params: Record<string, unknown>): Promise<unknown> {
   return gatewayRpcCall(method, params);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function positiveNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return value;
+}
+
+/**
+ * Old browser tabs can keep running a cached bundle after the server is fixed.
+ * Clamp expensive control-ui requests at the proxy so a stale Nerve tab cannot
+ * make OpenClaw scan the full historical session store on startup or reconnect.
+ */
+function normalizeControlUiRequest(msg: Record<string, unknown>): Record<string, unknown> {
+  if (msg.type !== 'req' || msg.method !== 'sessions.list') return msg;
+
+  const params = isRecord(msg.params) ? msg.params : {};
+  const requestedActiveMinutes = positiveNumber(params.activeMinutes);
+  const requestedLimit = positiveNumber(params.limit);
+
+  return {
+    ...msg,
+    params: {
+      ...params,
+      activeMinutes: requestedActiveMinutes
+        ? Math.min(requestedActiveMinutes, CONTROL_UI_SESSION_ACTIVE_MINUTES)
+        : CONTROL_UI_SESSION_ACTIVE_MINUTES,
+      limit: requestedLimit
+        ? Math.min(requestedLimit, CONTROL_UI_SESSION_LIMIT)
+        : CONTROL_UI_SESSION_LIMIT,
+    },
+  };
+}
+
+function normalizeControlUiFrame(data: Buffer | string, isBinary: boolean, isControlUiClient: boolean): Buffer | string {
+  if (isBinary || !isControlUiClient) return data;
+
+  try {
+    const msg = JSON.parse(data.toString());
+    if (!isRecord(msg)) return data;
+
+    const normalized = normalizeControlUiRequest(msg);
+    return normalized === msg ? data : JSON.stringify(normalized);
+  } catch {
+    return data;
+  }
 }
 
 /** Active WSS instances — used for graceful shutdown */
@@ -392,7 +443,8 @@ function createGatewayRelay(
         } catch { /* pass through */ }
       }
 
-      if (!enqueuePending(data, isBinary)) {
+      const pendingData = normalizeControlUiFrame(data, isBinary, isControlUiClient);
+      if (!enqueuePending(pendingData, isBinary)) {
         clientWs.close(1008, 'Too many pending messages');
         return;
       }
@@ -419,13 +471,15 @@ function createGatewayRelay(
         } catch { /* pass through to pending queue */ }
       }
 
-      if (!enqueuePending(data, isBinary)) {
+      const pendingData = normalizeControlUiFrame(data, isBinary, isControlUiClient);
+      if (!enqueuePending(pendingData, isBinary)) {
         clientWs.close(1008, 'Too many pending messages');
       }
       return;
     }
 
     // Gateway is open — parse message for interception
+    let outboundData: Buffer | string = data;
     if (!isBinary) {
       try {
         const msg = JSON.parse(data.toString());
@@ -464,11 +518,15 @@ function createGatewayRelay(
             });
           return;
         }
+
+        if (isControlUiClient) {
+          outboundData = JSON.stringify(normalizeControlUiRequest(msg));
+        }
       } catch { /* pass through */ }
     }
 
     clientToGatewayCount++;
-    gwWs.send(isBinary ? data : data.toString());
+    gwWs.send(isBinary ? outboundData : outboundData.toString());
   });
 
   clientWs.on('close', (code, reason) => {

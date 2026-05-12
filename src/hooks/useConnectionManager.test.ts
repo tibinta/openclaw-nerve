@@ -22,8 +22,9 @@ describe('useConnectionManager', () => {
   beforeEach(() => {
     originalFetch = globalThis.fetch;
     vi.resetModules();
-    connectMock.mockClear();
-    disconnectMock.mockClear();
+    connectMock.mockReset();
+    connectMock.mockResolvedValue(undefined);
+    disconnectMock.mockReset();
   });
 
   afterEach(() => {
@@ -134,6 +135,33 @@ describe('useConnectionManager', () => {
     expect(saveConfig).toHaveBeenCalledWith('ws://127.0.0.1:18789/ws', '');
     expect(result.current.editableUrl).toBe('ws://127.0.0.1:18789/ws');
     expect(result.current.editableToken).toBe('');
+  });
+
+  it('does not schedule a second auto-connect loop after a failed handshake', async () => {
+    connectMock.mockRejectedValueOnce(new Error('Gateway connection closed before connect completed'));
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        wsUrl: 'ws://127.0.0.1:18789/ws',
+        token: null,
+        authEnabled: true,
+        serverSideAuth: true,
+      }),
+    });
+
+    const mod = await import('./useConnectionManager');
+    renderHook(() => mod.useConnectionManager());
+
+    await waitFor(() => {
+      expect(connectMock).toHaveBeenCalledTimes(1);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // useWebSocket owns retry/backoff. The connection manager must not add a
+    // second timer, or Nerve opens overlapping webchat connections under load.
+    expect(connectMock).toHaveBeenCalledTimes(1);
   });
 
   it('forces empty token on reconnect when serverSideAuth is active for official URL', async () => {

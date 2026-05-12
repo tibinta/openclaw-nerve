@@ -278,6 +278,57 @@ describe('ws-proxy', () => {
 
       ws.close();
     });
+
+    it('bounds control-ui sessions.list requests before forwarding to the gateway', async () => {
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(mockGw.url + '/ws')}`,
+      );
+
+      const challenge = await waitForMessage(ws);
+      expect(JSON.parse(challenge).event).toBe('connect.challenge');
+
+      ws.send(JSON.stringify({
+        type: 'req',
+        method: 'connect',
+        id: 'c-control-bounds',
+        params: { auth: { token: 'test-token' }, client: { id: 'openclaw-control-ui', mode: 'webchat' } },
+      }));
+
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('timeout waiting for connect response')), 5000);
+        ws.on('message', (data) => {
+          try {
+            const msg = JSON.parse(data.toString());
+            if (msg.type === 'res' && msg.id === 'c-control-bounds') {
+              clearTimeout(timer);
+              resolve();
+            }
+          } catch { /* ignore */ }
+        });
+      });
+
+      mockGw.clearReceived();
+      ws.send(JSON.stringify({
+        type: 'req',
+        method: 'sessions.list',
+        id: 'sessions-unbounded',
+        params: { limit: 10000 },
+      }));
+
+      await mockGw.expectMessages(1);
+      const sessionListMsg = mockGw.received.find((m) => {
+        const d = m.data as Record<string, unknown>;
+        return d.type === 'req' && d.method === 'sessions.list';
+      });
+
+      expect(sessionListMsg).toBeTruthy();
+      expect((sessionListMsg!.data as Record<string, unknown>).params).toEqual({
+        activeMinutes: 10080,
+        limit: 200,
+      });
+
+      ws.close();
+    });
   });
 
   describe('auth enforcement', () => {
