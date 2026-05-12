@@ -64,6 +64,71 @@ function matchesRunIdentifier(run: TaskRunLink, value: string): boolean {
     || value === run.runId;
 }
 
+function isValidRunStatus(value: unknown): value is TaskRunLink['status'] {
+  return value === 'running' || value === 'done' || value === 'error' || value === 'aborted';
+}
+
+function isValidTaskRunLink(value: unknown): value is TaskRunLink {
+  if (!value || typeof value !== 'object') return false;
+  const run = value as Partial<TaskRunLink>;
+  return typeof run.sessionKey === 'string'
+    && run.sessionKey.trim().length > 0
+    && typeof run.startedAt === 'number'
+    && Number.isFinite(run.startedAt)
+    && isValidRunStatus(run.status);
+}
+
+function legacyRunNote(run: Record<string, unknown>): string | null {
+  const parts = [
+    typeof run.blocker === 'string' && run.blocker.trim() ? `Blocker: ${run.blocker.trim()}` : '',
+    typeof run.humanTask === 'string' && run.humanTask.trim() ? `Human task: ${run.humanTask.trim()}` : '',
+    typeof run.agentTask === 'string' && run.agentTask.trim() ? `Agent task: ${run.agentTask.trim()}` : '',
+    typeof run.heartbeatNote === 'string' && run.heartbeatNote.trim() ? `Heartbeat note: ${run.heartbeatNote.trim()}` : '',
+    typeof run.breadcrumb === 'string' && run.breadcrumb.trim() ? `History: ${run.breadcrumb.trim()}` : '',
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join('\n') : null;
+}
+
+function normalizeTaskRun(task: KanbanTask): KanbanTask {
+  if (!task.run) return task;
+  if (isValidTaskRunLink(task.run)) {
+    const childSessionKey = task.run.childSessionKey ?? task.run.sessionId;
+    return {
+      ...task,
+      run: {
+        ...task.run,
+        childSessionKey,
+        sessionId: task.run.sessionId ?? childSessionKey,
+      },
+    };
+  }
+
+  const note = legacyRunNote(task.run as unknown as Record<string, unknown>);
+  if (!note) {
+    const { run: _run, ...rest } = task;
+    return rest;
+  }
+
+  const existingFeedback = Array.isArray(task.feedback) ? task.feedback : [];
+  const alreadyPreserved = existingFeedback.some((entry) => (
+    entry.by === 'operator' && typeof entry.note === 'string' && entry.note.includes('Recovered legacy run notes')
+  ));
+  const feedback = alreadyPreserved
+    ? existingFeedback
+    : [
+        ...existingFeedback,
+        {
+          at: Date.now(),
+          by: 'operator' as const,
+          note: `Recovered legacy run notes. This was not a live execution run.\n${note}`,
+        },
+      ];
+
+  const { run: _run, ...rest } = task;
+  return { ...rest, feedback };
+}
+
 function canonicalizeProposalPayloadAssignee(payload: Record<string, unknown>): Record<string, unknown> {
   if (!Object.prototype.hasOwnProperty.call(payload, 'assignee')) return payload;
   return {
@@ -977,6 +1042,53 @@ export class KanbanStore {
     await fs.promises.rename(tmp, filePath);
   }
 
+  private formatTaskMarkdown(task: KanbanTask): string {
+    const labels = task.labels.length > 0 ? task.labels.join(', ') : 'none';
+    const assignee = task.assignee ?? 'operator';
+    const description = task.description?.trim() || 'No description yet.';
+    const evidence = task.evidence_links?.length
+      ? task.evidence_links.map((link) => `- ${link}`).join('\n')
+      : '- none';
+    const feedback = task.feedback.length
+      ? task.feedback.map((entry) => `- ${entry.at} ${entry.by}: ${entry.note}`).join('\n')
+      : '- none';
+    const run = task.run
+      ? [
+          `- status: ${task.run.status}`,
+          `- session: ${task.run.sessionKey}`,
+          `- started: ${task.run.startedAt}`,
+          task.run.error ? `- error: ${task.run.error}` : '',
+        ].filter(Boolean).join('\n')
+      : '- none';
+
+    return [
+      '---',
+      `id: ${task.id}`,
+      `status: ${task.status}`,
+      `priority: ${task.priority}`,
+      `assignee: ${assignee}`,
+      `version: ${task.version}`,
+      `updatedAt: ${task.updatedAt}`,
+      `labels: ${labels}`,
+      '---',
+      '',
+      `# ${task.title}`,
+      '',
+      '## Task',
+      description,
+      '',
+      '## Run',
+      run,
+      '',
+      '## Evidence',
+      evidence,
+      '',
+      '## Notes',
+      feedback,
+      '',
+    ].join('\n');
+  }
+
   private async readJsonFile<T>(filePath: string): Promise<T | null> {
     try {
       const raw = await fs.promises.readFile(filePath, 'utf-8');
@@ -1083,9 +1195,11 @@ export class KanbanStore {
       const rootDir = path.join(baseDir, this.sanitizeFsSegment(rootTask.status), this.sanitizeFsSegment(rootTask.id));
       await fs.promises.mkdir(rootDir, { recursive: true });
       await this.writeJsonAtomic(path.join(rootDir, 'task.json'), rootTask);
+      await fs.promises.writeFile(path.join(rootDir, 'task.md'), this.formatTaskMarkdown(rootTask));
       for (const task of group) {
         if (task.id === rootTask.id) continue;
         await this.writeJsonAtomic(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.json`), task);
+        await fs.promises.writeFile(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.md`), this.formatTaskMarkdown(task));
       }
     }
   }
@@ -1199,19 +1313,13 @@ export class KanbanStore {
       data.config.quickViewLimit = DEFAULT_CONFIG.quickViewLimit;
     }
     data.tasks = data.tasks.map((task) => {
-      const childSessionKey = task.run?.childSessionKey ?? task.run?.sessionId;
-      return {
+      return normalizeTaskRun({
         ...task,
         status: normalizeTaskStatus(task.status, configuredStatuses),
         priority: normalizeTaskPriority(task.priority),
-        run: task.run
-          ? {
-              ...task.run,
-              childSessionKey,
-              sessionId: task.run.sessionId ?? childSessionKey,
-            }
-          : task.run,
-      };
+        feedback: Array.isArray(task.feedback) ? task.feedback : [],
+        labels: Array.isArray(task.labels) ? task.labels : [],
+      });
     });
     data.meta.schemaVersion = CURRENT_SCHEMA_VERSION;
     return data;
@@ -1282,6 +1390,11 @@ export class KanbanStore {
       if (this.hiddenDefaultMode) {
         const hiddenTreeExists = await fs.promises.access(this.splitTreeManifestPath).then(() => true).catch(() => false);
         if (hiddenTreeExists) {
+          // Existing live stores may contain legacy run-note shapes or be missing
+          // Markdown sidecars. Rewriting the migrated snapshot repairs the tree
+          // once at startup without changing valid task semantics.
+          const data = await this.readRaw();
+          await this.writeRaw(data);
           await this.cleanupLegacyVisibleStore();
           return;
         }

@@ -195,6 +195,8 @@ describe('createTask', () => {
 
     const taskDir = path.join(tmpDir, 'tasks', task.status, task.id);
     expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, 'task.md'))).toBe(true);
+    expect(fs.readFileSync(path.join(taskDir, 'task.md'), 'utf-8')).toContain('# Persisted');
     expect(fs.existsSync(path.join(taskDir, `${task.id}.json`))).toBe(false);
   });
 
@@ -204,7 +206,9 @@ describe('createTask', () => {
 
     const taskDir = path.join(tmpDir, 'tasks', parent.status, parent.id);
     expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, 'task.md'))).toBe(true);
     expect(fs.existsSync(path.join(taskDir, `${child.id}.json`))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, `${child.id}.md`))).toBe(true);
 
     await fs.promises.unlink(filePath);
 
@@ -213,6 +217,57 @@ describe('createTask', () => {
     const result = await treeStore.listTasks();
     expect(result.items.some((task) => task.id === parent.id)).toBe(true);
     expect(result.items.some((task) => task.id === child.id)).toBe(true);
+  });
+
+  it('recovers legacy heartbeat notes that were stored in run without showing them as execution errors', async () => {
+    const now = Date.now();
+    await fs.promises.rm(path.join(tmpDir, 'tasks'), { recursive: true, force: true });
+    const legacyTask = {
+      id: 'legacy-run-note',
+      title: 'Legacy run note',
+      status: 'review',
+      priority: 'normal',
+      createdBy: 'operator',
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+      labels: [],
+      columnOrder: 0,
+      feedback: [],
+      run: {
+        startedAt: '2026-05-08 11:43 Europe/London',
+        blocker: 'Waiting for Alex approval',
+        humanTask: 'Alex to approve scope',
+      },
+    };
+
+    await fs.promises.writeFile(filePath, JSON.stringify({
+      tasks: [legacyTask],
+      proposals: [],
+      config: {
+        columns: [
+          { key: 'backlog', title: 'Backlog', visible: true },
+          { key: 'todo', title: 'To Do', visible: true },
+          { key: 'in-progress', title: 'In Progress', visible: true },
+          { key: 'review', title: 'Review', visible: true },
+          { key: 'done', title: 'Done', visible: true },
+        ],
+        defaults: { status: 'todo', priority: 'normal' },
+        reviewRequired: true,
+        allowDoneDragBypass: false,
+        quickViewLimit: 3,
+        proposalPolicy: 'confirm',
+      },
+      meta: { schemaVersion: 1, updatedAt: now },
+    }, null, 2));
+
+    const recoveredStore = new KanbanStore(filePath);
+    await recoveredStore.init();
+    const recovered = await recoveredStore.getTask('legacy-run-note');
+
+    expect(recovered.run).toBeUndefined();
+    expect(recovered.feedback.at(-1)?.note).toContain('Recovered legacy run notes');
+    expect(recovered.feedback.at(-1)?.note).toContain('Waiting for Alex approval');
   });
 
   it('reopens a completed parent when a new child is attached', async () => {
