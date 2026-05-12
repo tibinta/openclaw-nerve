@@ -72,7 +72,7 @@ describe('applyVoiceTTSHint', () => {
     const result = applyVoiceTTSHint('[voice] Hello there');
     expect(result).toContain('[voice] Hello there');
     expect(result).toContain('[system: User sent a voice message');
-    expect(result).toContain('[tts:');
+    expect(result).toContain('[tts: short spoken summary]');
   });
 
   it('does not modify non-voice messages', () => {
@@ -269,7 +269,7 @@ describe('sendChatMessage', () => {
 
     const sentMessage = rpc.mock.calls[0][1].message;
     expect(sentMessage).toContain('[system: User sent a voice message');
-    expect(sentMessage).toContain('If you include a [tts:...] marker, Nerve will speak it automatically');
+    expect(sentMessage).toContain('Use exactly one canonical marker at the end: [tts: short spoken summary]');
     expect(sentMessage).toContain('Nerve will speak it automatically');
     expect(sentMessage).toContain('short, clear, and summary-like');
     expect(sentMessage).toContain('Do not answer with voice acknowledgements');

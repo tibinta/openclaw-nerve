@@ -104,12 +104,53 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
   return { speak };
 }
 
-/** Strip [tts:...] markers from text, returning cleaned text and the first TTS text found */
+const TTS_PREFIX = '[tts: ';
+
+function findTTSMarkerEnd(text: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '[') {
+      depth++;
+      continue;
+    }
+    if (ch === ']') {
+      if (depth === 0) return i;
+      depth--;
+    }
+  }
+  return -1;
+}
+
+/** Strip canonical `[tts: ...]` markers from text, returning cleaned text and the first TTS text found. */
 export function extractTTSMarkers(text: string): { cleaned: string; ttsText: string | null } {
+  let cursor = 0;
+  let cleaned = '';
   let ttsText: string | null = null;
-  const cleaned = text.replace(/\[tts:([^\]]+)\]/g, (_, t) => {
-    if (ttsText === null) ttsText = t;
-    return '';
-  });
+
+  while (cursor < text.length) {
+    const start = text.indexOf(TTS_PREFIX, cursor);
+    if (start === -1) {
+      cleaned += text.slice(cursor);
+      break;
+    }
+
+    cleaned += text.slice(cursor, start);
+
+    const payloadStart = start + TTS_PREFIX.length;
+    const end = findTTSMarkerEnd(text, payloadStart);
+    if (end === -1) {
+      cleaned += text.slice(start);
+      break;
+    }
+
+    if (ttsText === null) {
+      const payload = text.slice(payloadStart, end).trim();
+      if (payload) ttsText = payload;
+    }
+
+    cursor = end + 1;
+  }
+
   return { cleaned: cleaned.trim(), ttsText };
 }
