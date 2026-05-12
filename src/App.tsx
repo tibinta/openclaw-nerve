@@ -393,6 +393,12 @@ export default function App({ onLogout }: AppProps) {
     }
   }, [openFile, setFileBrowserCollapsed, workspaceAgentId]);
 
+  const openTargetSection = useCallback(async (path: string) => {
+    setAccountabilityOpen(false);
+    await openFile(path);
+    setActiveTab(path);
+  }, [openFile, setActiveTab]);
+
   const toggleMobileTopBar = useCallback(() => {
     setIsMobileTopBarHidden((prev) => !prev);
   }, []);
@@ -1056,7 +1062,13 @@ export default function App({ onLogout }: AppProps) {
 
       <PanelErrorBoundary name="Targets">
         <Suspense fallback={null}>
-          <TargetBoardModal open={accountabilityOpen} onClose={() => setAccountabilityOpen(false)} currentActiveTask={null} taskCount={0} />
+          <TargetBoardModal
+            open={accountabilityOpen}
+            onClose={() => setAccountabilityOpen(false)}
+            currentActiveTask={null}
+            taskCount={0}
+            onOpenSection={openTargetSection}
+          />
         </Suspense>
       </PanelErrorBoundary>
     </div>

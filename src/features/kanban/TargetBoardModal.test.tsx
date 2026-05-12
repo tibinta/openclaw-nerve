@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TargetBoardModal } from './TargetBoardModal';
 
@@ -89,5 +89,43 @@ describe('TargetBoardModal', () => {
 
     expect(screen.getByText('Lead universe')).toBeInTheDocument();
     expect(screen.getByText('11%')).toBeInTheDocument();
+  });
+
+  it('opens a linked section file when clicked', async () => {
+    const indexContent = `# Target Board Sections
+
+## Sections
+- cash-map.md
+`;
+    const cashContent = `# Cash Position
+
+## Today’s cash position
+- Cash available: ~£200
+`;
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: indexContent }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: cashContent }), { status: 200 }));
+
+    const onOpenSection = vi.fn().mockResolvedValue(undefined);
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <TargetBoardModal
+        open
+        onClose={vi.fn()}
+        onOpenSection={onOpenSection}
+        currentActiveTask={null}
+        taskCount={2}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Open section Cash Position' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open section Cash Position' }));
+    expect(onOpenSection).toHaveBeenCalledWith('target-board/cash-map.md');
   });
 });

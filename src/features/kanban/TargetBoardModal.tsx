@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useState } from 'react';
-import { X, Target, TrendingUp, Users, CircleCheckBig, ShieldCheck } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { FileText, X, Target, TrendingUp, Users, CircleCheckBig, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { KanbanTask } from './types';
 
@@ -8,6 +8,7 @@ interface TargetBoardModalProps {
   onClose: () => void;
   currentActiveTask: KanbanTask | null;
   taskCount: number;
+  onOpenSection?: (path: string) => void | Promise<void>;
 }
 
 const TARGET_INDEX_PATH = 'target-board/index.md';
@@ -54,6 +55,7 @@ interface CategoryNotes {
   nextActions: string[];
   extras: string[];
   sourcePath: string;
+  openable: boolean;
 }
 
 interface TargetLoadState {
@@ -146,6 +148,7 @@ function parseCategoryFile(source: string, path: string): CategoryNotes {
   category.autoCoachRules = [...coachValues];
   category.nextActions = [...actionValues];
   category.extras = [...extraValues];
+  category.openable = path.endsWith('.md');
 
   return category;
 }
@@ -200,10 +203,16 @@ function dedupeLines(items: string[]): string[] {
 }
 
 function fallbackCategory(): CategoryNotes[] {
-  return [parseCategoryFile(targetSourceFallback, TARGET_LEGACY_PATH)];
+  return [{ ...parseCategoryFile(targetSourceFallback, TARGET_LEGACY_PATH), openable: false }];
 }
 
-export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, currentActiveTask, taskCount }: TargetBoardModalProps) {
+export const TargetBoardModal = memo(function TargetBoardModal({
+  open,
+  onClose,
+  currentActiveTask,
+  taskCount,
+  onOpenSection,
+}: TargetBoardModalProps) {
   const [categories, setCategories] = useState<CategoryNotes[]>(fallbackCategory);
   const [sourceState, setSourceState] = useState<TargetLoadState>({
     mode: 'fallback',
@@ -272,6 +281,11 @@ export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, 
     };
   }, [open]);
 
+  const openSection = useCallback((path: string) => {
+    if (!onOpenSection) return;
+    void onOpenSection(path);
+  }, [onOpenSection]);
+
   const sectionRows = useMemo(() => (
     categories.flatMap((category) => [...category.metrics, ...category.extras].map((metric) => ({
       ...splitMetricLine(metric),
@@ -314,6 +328,35 @@ export const TargetBoardModal = memo(function TargetBoardModal({ open, onClose, 
         </div>
 
         <div className="grid gap-4 p-5 md:grid-cols-[1.1fr_0.9fr]">
+          <section className="rounded-[24px] border border-border/55 bg-background/70 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <FileText size={16} className="text-primary" />
+              Linked target sections
+            </div>
+            <div className="mt-3 grid gap-2">
+              {categories.some((category) => category.openable) ? (
+                categories
+                  .filter((category) => category.openable)
+                  .map((category) => (
+                    <button
+                      key={category.sourcePath}
+                      type="button"
+                      onClick={() => openSection(category.sourcePath)}
+                      aria-label={`Open section ${category.title}`}
+                      className="rounded-2xl border border-border/50 bg-secondary/25 px-3 py-2.5 text-left transition hover:bg-secondary/35"
+                    >
+                      <div className="text-sm font-medium text-foreground">{category.title}</div>
+                      <div className="text-[0.65rem] text-muted-foreground/85">{category.sourcePath}</div>
+                    </button>
+                  ))
+              ) : (
+                <div className="rounded-2xl border border-border/50 bg-secondary/25 p-3 text-sm text-muted-foreground">
+                  No linked target section files found.
+                </div>
+              )}
+            </div>
+          </section>
+
           <section className="rounded-[24px] border border-border/55 bg-background/70 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <Target size={16} className="text-primary" />
