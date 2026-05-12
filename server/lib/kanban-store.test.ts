@@ -219,6 +219,60 @@ describe('createTask', () => {
     expect(result.items.some((task) => task.id === child.id)).toBe(true);
   });
 
+  it('reads task changes from Markdown when the JSON cache is broken', async () => {
+    const task = await createSampleTask({
+      title: 'Original title',
+      description: 'Original description',
+      status: 'todo',
+      priority: 'normal',
+      labels: ['old'],
+    });
+
+    const taskDir = path.join(tmpDir, 'tasks', task.status, task.id);
+    await fs.promises.writeFile(path.join(taskDir, 'task.json'), '{ broken json');
+    await fs.promises.writeFile(path.join(taskDir, 'task.md'), [
+      '---',
+      `id: ${task.id}`,
+      'status: review',
+      'priority: high',
+      'assignee: agent:jane',
+      `version: ${task.version}`,
+      `createdAt: ${task.createdAt}`,
+      `updatedAt: ${task.updatedAt + 1000}`,
+      'labels: client, urgent',
+      '---',
+      '',
+      '# Markdown edited title',
+      '',
+      '## Task',
+      'Markdown edited description.',
+      '',
+      '## Run',
+      '- none',
+      '',
+      '## Evidence',
+      '- evidence://markdown-proof',
+      '',
+      '## Notes',
+      '- 123 operator: Markdown note',
+      '',
+    ].join('\n'));
+    await fs.promises.unlink(filePath);
+
+    const markdownStore = new KanbanStore(filePath);
+    await markdownStore.init();
+    const edited = await markdownStore.getTask(task.id);
+
+    expect(edited.title).toBe('Markdown edited title');
+    expect(edited.description).toBe('Markdown edited description.');
+    expect(edited.status).toBe('review');
+    expect(edited.priority).toBe('high');
+    expect(edited.assignee).toBe('agent:jane');
+    expect(edited.labels).toEqual(['client', 'urgent']);
+    expect(edited.evidence_links).toEqual(['evidence://markdown-proof']);
+    expect(edited.feedback.at(-1)?.note).toBe('Markdown note');
+  });
+
   it('recovers legacy heartbeat notes that were stored in run without showing them as execution errors', async () => {
     const now = Date.now();
     await fs.promises.rm(path.join(tmpDir, 'tasks'), { recursive: true, force: true });

@@ -1062,6 +1062,11 @@ export class KanbanStore {
       : '- none';
 
     return [
+      '<!--',
+      'Agent-safe file: edit this Markdown. Nerve rebuilds JSON cache files from this readable task file.',
+      'Keep the front matter keys simple. If power drops mid-edit, leave the last valid text in place.',
+      '-->',
+      '',
       '---',
       `id: ${task.id}`,
       `status: ${task.status}`,
@@ -1089,6 +1094,102 @@ export class KanbanStore {
     ].join('\n');
   }
 
+  private parseTaskMarkdown(raw: string, sourcePath: string, fallback?: Partial<KanbanTask>): KanbanTask | null {
+    const frontmatterMatch = raw.match(/(?:^|\n)---\n([\s\S]*?)\n---\n?/);
+    const frontmatter = new Map<string, string>();
+    if (frontmatterMatch) {
+      for (const line of frontmatterMatch[1].split('\n')) {
+        const index = line.indexOf(':');
+        if (index === -1) continue;
+        frontmatter.set(line.slice(0, index).trim(), line.slice(index + 1).trim());
+      }
+    }
+
+    const body = frontmatterMatch && frontmatterMatch.index !== undefined
+      ? raw.slice(frontmatterMatch.index + frontmatterMatch[0].length)
+      : raw;
+    const title = body.match(/^#\s+(.+)$/m)?.[1]?.trim() || fallback?.title;
+    const id = frontmatter.get('id') || fallback?.id || path.basename(path.dirname(sourcePath));
+    if (!id || !title) return null;
+
+    const section = (name: string): string => {
+      const lines = body.split('\n');
+      const start = lines.findIndex((line) => line.trim() === `## ${name}`);
+      if (start === -1) return '';
+      const collected: string[] = [];
+      for (const line of lines.slice(start + 1)) {
+        if (line.startsWith('## ')) break;
+        collected.push(line);
+      }
+      return collected.join('\n').trim();
+    };
+
+    const taskSection = section('Task');
+    const evidence = section('Evidence')
+      .split('\n')
+      .map((line) => line.replace(/^-\s*/, '').trim())
+      .filter((line) => line && line !== 'none');
+    const feedback = section('Notes')
+      .split('\n')
+      .map((line): TaskFeedback | null => {
+        const cleaned = line.replace(/^-\s*/, '').trim();
+        if (!cleaned || cleaned === 'none') return null;
+        const match = cleaned.match(/^(\S+)\s+([^:]+):\s*([\s\S]+)$/);
+        if (!match) {
+          return { at: Date.now(), by: 'operator', note: cleaned };
+        }
+        const numericAt = Number(match[1]);
+        return {
+          at: Number.isFinite(numericAt) ? numericAt : match[1],
+          by: match[2].trim() as TaskActor,
+          note: match[3].trim(),
+        };
+      })
+      .filter((entry): entry is TaskFeedback => Boolean(entry));
+
+    const labelsRaw = frontmatter.get('labels') || '';
+    const labels = labelsRaw && labelsRaw !== 'none'
+      ? labelsRaw.split(',').map((label) => label.trim()).filter(Boolean)
+      : [];
+
+    const numberFromFrontmatter = (key: string, fallbackValue: number): number => {
+      const value = Number(frontmatter.get(key));
+      return Number.isFinite(value) ? value : fallbackValue;
+    };
+
+    const now = Date.now();
+    return normalizeTaskRun({
+      id,
+      title,
+      description: taskSection && taskSection !== 'No description yet.' ? taskSection : fallback?.description,
+      status: normalizeTaskStatus(frontmatter.get('status') ?? fallback?.status),
+      priority: normalizeTaskPriority(frontmatter.get('priority') ?? fallback?.priority),
+      createdBy: fallback?.createdBy ?? 'operator',
+      createdAt: numberFromFrontmatter('createdAt', fallback?.createdAt ?? now),
+      updatedAt: numberFromFrontmatter('updatedAt', fallback?.updatedAt ?? now),
+      version: numberFromFrontmatter('version', fallback?.version ?? 1),
+      sourceSessionKey: fallback?.sourceSessionKey,
+      assignee: canonicalizeKanbanAssignee(frontmatter.get('assignee') || fallback?.assignee || 'operator'),
+      labels,
+      columnOrder: numberFromFrontmatter('columnOrder', fallback?.columnOrder ?? 0),
+      run: fallback?.run,
+      result: fallback?.result,
+      resultAt: fallback?.resultAt,
+      model: fallback?.model,
+      thinking: fallback?.thinking,
+      dueAt: fallback?.dueAt,
+      estimateMin: fallback?.estimateMin,
+      actualMin: fallback?.actualMin,
+      feedback,
+      evidence_links: evidence.length > 0 ? evidence : fallback?.evidence_links,
+      proof_gate: fallback?.proof_gate,
+      delegation_proof: fallback?.delegation_proof,
+      parentTaskId: fallback?.parentTaskId,
+      swarmSummary: fallback?.swarmSummary,
+      swarmPacket: fallback?.swarmPacket,
+    });
+  }
+
   private async readJsonFile<T>(filePath: string): Promise<T | null> {
     try {
       const raw = await fs.promises.readFile(filePath, 'utf-8');
@@ -1114,25 +1215,52 @@ export class KanbanStore {
     return current?.id ?? task.id;
   }
 
-  private async collectJsonFiles(dir: string): Promise<string[]> {
+  private async collectTaskFiles(dir: string): Promise<string[]> {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
     const files: string[] = [];
 
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        files.push(...await this.collectJsonFiles(entryPath));
-      } else if (entry.isFile() && entry.name.endsWith('.json') && entry.name !== '.manifest.json') {
+        files.push(...await this.collectTaskFiles(entryPath));
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
         files.push(entryPath);
+      } else if (entry.isFile() && entry.name.endsWith('.json') && entry.name !== '.manifest.json') {
+        const markdownPeer = entry.name === 'task.json'
+          ? path.join(path.dirname(entryPath), 'task.md')
+          : entryPath.replace(/\.json$/, '.md');
+        const hasMarkdownPeer = await fs.promises.access(markdownPeer).then(() => true).catch(() => false);
+        if (!hasMarkdownPeer) files.push(entryPath);
       }
     }
 
     return files;
   }
 
-  private async readTaskJsonFile(file: string, context: 'split tree' | 'archive tree'): Promise<KanbanTask | null> {
+  private async readTaskFile(file: string, context: 'split tree' | 'archive tree'): Promise<KanbanTask | null> {
+    if (file.endsWith('.md')) {
+      const jsonPeer = path.basename(file) === 'task.md'
+        ? path.join(path.dirname(file), 'task.json')
+        : file.replace(/\.md$/, '.json');
+      const [markdownStats, jsonStats] = await Promise.all([
+        fs.promises.stat(file).catch(() => null),
+        fs.promises.stat(jsonPeer).catch(() => null),
+      ]);
+      const fallback = await this.readJsonFile<KanbanTask>(jsonPeer).catch(() => null);
+      if (jsonStats && markdownStats && jsonStats.mtimeMs >= markdownStats.mtimeMs) {
+        return fallback ? normalizeTaskRun(fallback) : null;
+      }
+      try {
+        const markdownTask = this.parseTaskMarkdown(await fs.promises.readFile(file, 'utf-8'), file, fallback ?? undefined);
+        if (markdownTask) return markdownTask;
+      } catch (err) {
+        console.warn(`[kanban-store] failed to read ${context} Markdown task file ${file}:`, err);
+      }
+      return fallback ? normalizeTaskRun(fallback) : null;
+    }
+
     try {
-      return JSON.parse(await fs.promises.readFile(file, 'utf-8')) as KanbanTask;
+      return normalizeTaskRun(JSON.parse(await fs.promises.readFile(file, 'utf-8')) as KanbanTask);
     } catch (err) {
       console.warn(`[kanban-store] failed to read ${context} task file ${file}:`, err);
       return null;
@@ -1153,9 +1281,9 @@ export class KanbanStore {
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name === 'archived' || entry.name.startsWith('.')) continue;
       const statusDir = path.join(baseDir, entry.name);
-      const jsonFiles = await this.collectJsonFiles(statusDir);
-      for (const file of jsonFiles) {
-        const task = await this.readTaskJsonFile(file, 'split tree');
+      const taskFiles = await this.collectTaskFiles(statusDir);
+      for (const file of taskFiles) {
+        const task = await this.readTaskFile(file, 'split tree');
         if (task) tasks.push(task);
       }
     }
@@ -1194,12 +1322,14 @@ export class KanbanStore {
       const rootTask = tasksById.get(rootId) ?? group[0];
       const rootDir = path.join(baseDir, this.sanitizeFsSegment(rootTask.status), this.sanitizeFsSegment(rootTask.id));
       await fs.promises.mkdir(rootDir, { recursive: true });
-      await this.writeJsonAtomic(path.join(rootDir, 'task.json'), rootTask);
+      // Markdown is the agent-facing source; JSON is a generated cache. Write
+      // the cache last so normal Nerve writes do not look like manual MD edits.
       await fs.promises.writeFile(path.join(rootDir, 'task.md'), this.formatTaskMarkdown(rootTask));
+      await this.writeJsonAtomic(path.join(rootDir, 'task.json'), rootTask);
       for (const task of group) {
         if (task.id === rootTask.id) continue;
-        await this.writeJsonAtomic(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.json`), task);
         await fs.promises.writeFile(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.md`), this.formatTaskMarkdown(task));
+        await this.writeJsonAtomic(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.json`), task);
       }
     }
   }
@@ -1244,10 +1374,10 @@ export class KanbanStore {
     const stats = await fs.promises.stat(this.archiveTreeDir).catch(() => null);
     if (!stats?.isDirectory()) return null;
 
-    const jsonFiles = await this.collectJsonFiles(this.archiveTreeDir);
+    const taskFiles = await this.collectTaskFiles(this.archiveTreeDir);
     const tasks: KanbanTask[] = [];
-    for (const file of jsonFiles) {
-      const task = await this.readTaskJsonFile(file, 'archive tree');
+    for (const file of taskFiles) {
+      const task = await this.readTaskFile(file, 'archive tree');
       if (task) tasks.push(task);
     }
 
