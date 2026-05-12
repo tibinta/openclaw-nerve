@@ -98,7 +98,23 @@ describe('workspace routes', () => {
     expect(json.files.find((file) => file.key === 'user')?.exists).toBe(false);
   });
 
-    it('rejects invalid agent ids', async () => {
+  it('self-heals missing local CHAT_PATH_LINKS.json without gateway fallback', async () => {
+    const app = await buildApp();
+    const res = await app.request('/api/workspace/chatPathLinks');
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { ok: boolean; content: string; created?: boolean };
+    expect(json.ok).toBe(true);
+    expect(json.created).toBe(true);
+
+    const expected = `${JSON.stringify({
+      prefixes: ['/workspace/', `${mainWorkspace}/`],
+    }, null, 2)}\n`;
+    expect(json.content).toBe(expected);
+    await expect(fs.readFile(path.join(mainWorkspace, 'CHAT_PATH_LINKS.json'), 'utf-8')).resolves.toBe(expected);
+  });
+
+  it('rejects invalid agent ids', async () => {
       const app = await buildApp();
       const res = await app.request('/api/workspace?agentId=../bad');
 

@@ -266,9 +266,10 @@ describe('useWebSocket', () => {
       }
     }
 
-    it('rejects connect when the socket closes before auth completes', async () => {
+    it('rejects connect and schedules reconnect when the socket closes before auth completes', async () => {
       const wsInstances: ControlledCloseMockWebSocket[] = [];
       const OriginalMockWS = ControlledCloseMockWebSocket;
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
       (globalThis as unknown as { WebSocket: typeof ControlledCloseMockWebSocket }).WebSocket = class extends OriginalMockWS {
         constructor(url: string) {
           super(url);
@@ -296,11 +297,20 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await Promise.resolve();
       });
 
       expect(connectError?.message).toBe('Gateway connection closed before connect completed');
-      expect(result.current.connectionState).toBe('disconnected');
+      expect(result.current.connectionState).toBe('reconnecting');
+      expect(result.current.reconnectAttempt).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+        await vi.runOnlyPendingTimersAsync();
+      });
+
+      expect(wsInstances.length).toBeGreaterThanOrEqual(2);
+      randomSpy.mockRestore();
     });
 
     it('ignores stale close events from a superseded socket', async () => {

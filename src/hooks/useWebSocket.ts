@@ -134,6 +134,34 @@ export function useWebSocket(): UseWebSocketReturn {
     });
   }, []);
 
+  const scheduleReconnect = useCallback(() => {
+    const creds = credentialsRef.current;
+    if (intentionalDisconnectRef.current || !creds) {
+      setConnectionState('disconnected');
+      return;
+    }
+
+    const attempt = ++reconnectAttemptRef.current;
+    setReconnectAttempt(attempt);
+    const { base, max } = reconnectDelayProfileRef.current;
+    const delay = Math.min(
+      base * Math.pow(1.5, attempt - 1) + Math.random() * 500,
+      max,
+    );
+
+    console.debug(`[WS] Reconnecting in ${Math.round(delay)}ms (attempt ${attempt})`);
+    setConnectionState('reconnecting');
+
+    reconnectTimeoutRef.current = setTimeout(() => {
+      const latestCreds = credentialsRef.current;
+      if (latestCreds && !intentionalDisconnectRef.current && doConnectRef.current) {
+        doConnectRef.current(latestCreds.url, latestCreds.token, true).catch(() => {
+          // The close handler owns retry scheduling so failed reconnect attempts do not stack timers.
+        });
+      }
+    }, delay);
+  }, []);
+
   const doConnect = useCallback((url: string, token: string, isReconnect: boolean): Promise<void> => {
     return new Promise((resolve, reject) => {
       const gen = ++connectionGenRef.current;
@@ -272,37 +300,12 @@ export function useWebSocket(): UseWebSocketReturn {
         rejectPending(new Error('WebSocket disconnected'));
         wsRef.current = null;
 
-        // Don't reconnect if intentionally disconnected, no credentials, or never connected
-        if (intentionalDisconnectRef.current || !credentialsRef.current || !hasConnectedRef.current) {
-          setConnectionState('disconnected');
-          return;
-        }
-
-        // Attempt auto-reconnect
-        const attempt = ++reconnectAttemptRef.current;
-        setReconnectAttempt(attempt);
-
-        // Exponential backoff with jitter
-        const { base, max } = reconnectDelayProfileRef.current;
-        const delay = Math.min(
-          base * Math.pow(1.5, attempt - 1) + Math.random() * 500,
-          max,
-        );
-
-        console.debug(`[WS] Reconnecting in ${Math.round(delay)}ms (attempt ${attempt})`);
-        setConnectionState('reconnecting');
-
-        reconnectTimeoutRef.current = setTimeout(() => {
-          const creds = credentialsRef.current;
-          if (creds && !intentionalDisconnectRef.current && doConnectRef.current) {
-            doConnectRef.current(creds.url, creds.token, true).catch(() => {
-              // Error handling is done in onclose/onerror
-            });
-          }
-        }, delay);
+        // First-connect stalls are recoverable too; keep trying while the user
+        // still has credentials saved instead of leaving the UI stuck on Load failed.
+        scheduleReconnect();
       };
     });
-  }, [rejectPending]);
+  }, [rejectPending, scheduleReconnect]);
   
   // Store doConnect in ref so it can reference itself for reconnection
   useEffect(() => {
