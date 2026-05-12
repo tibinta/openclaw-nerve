@@ -13,6 +13,7 @@ import type { ChatMsg } from '@/features/chat/types';
 
 export const DEFAULT_VISIBLE_COUNT = 50;
 const LOAD_MORE_BATCH = 30;
+const INITIAL_HISTORY_LIMIT = DEFAULT_VISIBLE_COUNT;
 
 // ─── Pure helpers (exported for testing / reuse) ────────────────────────────────
 
@@ -128,7 +129,10 @@ export function useChatMessages({ rpc, currentSessionRef }: UseChatMessagesDeps)
   const loadHistory = useCallback(async (session?: string) => {
     const sk = session || currentSessionRef.current;
     try {
-      const result = await loadChatHistory({ rpc, sessionKey: sk, limit: 500 });
+      // Session clicks should paint the transcript quickly. Older history can be
+      // fetched later; loading hundreds of messages here makes large agent
+      // sessions feel frozen even when the gateway responds quickly.
+      const result = await loadChatHistory({ rpc, sessionKey: sk, limit: INITIAL_HISTORY_LIMIT });
       applyMessageWindow(result, true);
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);

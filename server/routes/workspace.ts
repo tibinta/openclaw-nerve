@@ -74,18 +74,21 @@ app.get('/api/workspace/:key', rateLimitGeneral, async (c) => {
     // Local failed — try gateway fallback
   }
 
-  if (key === 'chatPathLinks' && await isWorkspaceLocal(workspace.workspaceRoot)) {
+  if (key === 'chatPathLinks') {
     const content = defaultChatPathLinksContent(workspace.workspaceRoot);
     try {
       // CHAT_PATH_LINKS.json is a local Nerve config file; the gateway only
       // supports agent docs here, so create the safe local default instead of
       // sending noisy unsupported agents.files.get requests during startup.
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, content, 'utf-8');
-      console.warn(`[workspace] Missing CHAT_PATH_LINKS.json; regenerated local default template at ${filePath}`);
+      if (await isWorkspaceLocal(workspace.workspaceRoot)) {
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, content, 'utf-8');
+        console.warn(`[workspace] Missing CHAT_PATH_LINKS.json; regenerated local default template at ${filePath}`);
+      }
       return c.json({ ok: true, content, created: true });
     } catch (err) {
       console.warn('[workspace] CHAT_PATH_LINKS self-heal failed:', (err as Error).message);
+      return c.json({ ok: true, content, created: false });
     }
   }
 

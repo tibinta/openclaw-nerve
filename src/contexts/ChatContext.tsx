@@ -243,7 +243,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       subagentPollInFlightRef.current = true;
       try {
         const sk = currentSessionRef.current;
-        const result = await loadChatHistory({ rpc, sessionKey: sk, limit: 500 });
+        const result = await loadChatHistory({ rpc, sessionKey: sk, limit: 50 });
         if (sk !== currentSessionRef.current) return;
         const prev = msgHook.getAllMessages();
         if (

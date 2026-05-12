@@ -195,6 +195,17 @@ describe('workspace routes', () => {
       expect(json.remoteWorkspace).toBe(true);
     });
 
+    it('does not ask the gateway for CHAT_PATH_LINKS.json in remote workspaces', async () => {
+      const app = await buildRemoteApp();
+      const res = await app.request('/api/workspace/chatPathLinks');
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { ok: boolean; content: string; created?: boolean };
+      expect(json.ok).toBe(true);
+      expect(json.content).toContain('"prefixes"');
+      expect(gatewayFilesGetMock).not.toHaveBeenCalled();
+    });
+
     it('GET /api/workspace/:key returns 404 when gateway also has no file', async () => {
       gatewayFilesGetMock.mockResolvedValue(null);
 
