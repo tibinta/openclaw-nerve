@@ -588,7 +588,43 @@ describe('useWebSocket', () => {
       });
 
       expect(rpcError).not.toBeNull();
-      expect(rpcError?.message).toBe('Timeout');
+      expect(rpcError?.message).toBe('Timeout after 30000ms');
+    });
+
+    it('uses shorter timeouts for heavy UI gateway calls', async () => {
+      const wsInstances: MockWebSocket[] = [];
+      const OriginalMockWS = MockWebSocket;
+      (globalThis as unknown as { WebSocket: typeof MockWebSocket }).WebSocket = class extends OriginalMockWS {
+        constructor(url: string) {
+          super(url);
+          wsInstances.push(this);
+          this.readyState = MockWebSocket.OPEN;
+        }
+      };
+
+      const { result } = renderHook(() => useWebSocket());
+
+      act(() => {
+        result.current.connect('ws://localhost:8080', 'test-token');
+      });
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      let rpcError: Error | null = null;
+      act(() => {
+        result.current.rpc('sessions.list', { activeMinutes: 10080, limit: 200 }).catch((e: unknown) => {
+          rpcError = e as Error;
+        });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_100);
+      });
+
+      expect(rpcError).not.toBeNull();
+      expect(rpcError?.message).toBe('Timeout after 12000ms');
     });
 
     it('should reject RPC calls when not connected', async () => {

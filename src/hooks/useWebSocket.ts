@@ -27,6 +27,13 @@ const RECONNECT_MAX_DELAY = 120000;
 const LOCALHOST_RECONNECT_BASE_DELAY = 1000;
 const LOCALHOST_RECONNECT_MAX_DELAY = 15000;
 const INSTANCE_ID_STORAGE_KEY = 'oc-webchat-instance-id';
+const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+const METHOD_RPC_TIMEOUT_MS: Record<string, number> = {
+  'chat.history': 12_000,
+  'sessions.list': 12_000,
+  'node.list': 12_000,
+  status: 12_000,
+};
 
 function generateInstanceId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `inst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -123,13 +130,14 @@ export function useWebSocket(): UseWebSocketReturn {
       const id = String(++reqIdRef.current);
       pendingRef.current[id] = { resolve, reject };
       ws.send(JSON.stringify({ type: 'req', id, method, params }));
+      const timeoutMs = METHOD_RPC_TIMEOUT_MS[method] ?? DEFAULT_RPC_TIMEOUT_MS;
       const timeoutId = setTimeout(() => {
         if (pendingRef.current[id]) {
           delete pendingRef.current[id];
           if (timeoutsRef.current[id]) delete timeoutsRef.current[id];
-          reject(new Error('Timeout'));
+          reject(new Error(`Timeout after ${timeoutMs}ms`));
         }
-      }, 30000);
+      }, timeoutMs);
       timeoutsRef.current[id] = timeoutId;
     });
   }, []);
