@@ -65,7 +65,7 @@ describe('useChatTTS', () => {
       }, false);
     });
 
-    expect(speak).toHaveBeenCalledWith('First sentence explains the answer.');
+    expect(speak).toHaveBeenCalledWith('First sentence explains the answer. Second sentence adds detail that should stay in chat.');
   });
 
   it('drops COPY noise from spoken fallback text', () => {

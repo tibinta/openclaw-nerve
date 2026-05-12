@@ -87,8 +87,10 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
 
     if (finalData?.ttsText && !playedSoundsRef.current.has(finalData.ttsText)) {
       playedSoundsRef.current.add(finalData.ttsText);
-      const concise = buildConciseSpeechText(finalData.ttsText) ?? finalData.ttsText;
-      speak.current(concise);
+      const speechText = finalData.ttsText.trim();
+      if (speechText) {
+        speak.current(speechText);
+      }
       voiceReplyPendingRef.current = false;
     } else if (!finalData?.ttsText && voiceReplyPendingRef.current) {
       // Voice fallback: agent forgot [tts:...] marker — auto-speak a cleaned response,
