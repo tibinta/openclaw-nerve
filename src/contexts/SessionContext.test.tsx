@@ -556,6 +556,48 @@ describe('SessionContext', () => {
     expect(sessionsListCalls).toBe(2);
   });
 
+  it('shows a newly announced session immediately before the full session list catches up', async () => {
+    let sessionsListCalls = 0;
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        sessionsListCalls += 1;
+        return {
+          sessions: [
+            { sessionKey: 'agent:jane-whitmore---ceo:main', label: 'Jane Whitmore - CEO' },
+          ],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionRefreshProbe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Jane Whitmore - CEO')).toBeInTheDocument();
+    });
+
+    act(() => {
+      subscribedHandler?.({
+        type: 'event',
+        event: 'chat',
+        payload: {
+          sessionKey: 'agent:jane-whitmore---ceo:subagent:fresh-worker',
+          state: 'started',
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Subagent fresh-wo')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('session-count').textContent).toBe('2');
+    expect(sessionsListCalls).toBe(1);
+  });
+
   it('deletes every loaded session except the protected main root and resets the current session to blank', async () => {
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'sessions.list') {

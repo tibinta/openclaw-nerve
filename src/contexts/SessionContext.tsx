@@ -16,10 +16,12 @@ import {
   getRootAgentSessionKey,
   getSessionDisplayLabel,
   getTopLevelAgentSessions,
+  inferParentSessionKey,
   isSubagentSessionKey,
   isTopLevelAgentSessionKey,
   pickDefaultSessionKey,
   getRootAgentId,
+  normalizeSessionKey,
 } from '@/features/sessions/sessionKeys';
 
 const BUSY_STATES = new Set(['running', 'thinking', 'tool_use', 'delta', 'started']);
@@ -653,15 +655,31 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   // Update session in list from WebSocket event data
   const updateSessionFromEvent = useCallback((sessionKey: string, updates: Partial<Session>) => {
+    const normalizedSessionKey = normalizeSessionKey(sessionKey);
     setSessions(prev => {
-      const idx = prev.findIndex(s => getSessionKey(s) === sessionKey);
+      const idx = prev.findIndex(s => normalizeSessionKey(getSessionKey(s)) === normalizedSessionKey);
       if (idx === -1) {
-        // New session appeared that we don't have - schedule a refresh
-        // Use setTimeout to avoid calling during render
+        // New session appeared before the full sessions.list call returned.
+        // Show it immediately under the owning agent, then let the slower
+        // authoritative refresh fill in model/token details when it completes.
         setTimeout(() => {
           void refreshSessionsRef.current();
         }, 100);
-        return prev;
+        const now = Date.now();
+        const state = updates.state || updates.agentState || updates.status || 'running';
+        const optimisticSession: Session = {
+          sessionKey,
+          key: sessionKey,
+          label: updates.label || (isSubagentSessionKey(sessionKey) ? `Subagent ${sessionKey.split(':').pop()?.slice(0, 8) || ''}` : undefined),
+          parentId: updates.parentId || inferParentSessionKey(sessionKey) || undefined,
+          state,
+          status: updates.status || state,
+          agentState: updates.agentState || state,
+          updatedAt: now,
+          lastActivity: now,
+          ...updates,
+        };
+        return [...prev, optimisticSession];
       }
       
       // Check if the update actually changes anything
