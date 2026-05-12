@@ -1,12 +1,14 @@
 /**
- * Kanban task store — JSON file persistence with mutex-protected I/O.
+ * Kanban task store — Markdown-first task folders with hidden generated cache.
  *
  * The default live store now lives under a hidden root
  * `${NERVE_DATA_DIR:-~/.nerve}/.kanban/`. The preferred read path is the split
  * tree under `${NERVE_DATA_DIR:-~/.nerve}/.kanban/tasks/`. Each status gets
- * its own folder, and each task or subtask gets its own JSON file inside the
- * appropriate root task folder. The legacy visible `${NERVE_DATA_DIR:-~/.nerve}/kanban`
- * tree remains a migration source only.
+ * its own folder, and each task or subtask gets its own Markdown file inside
+ * the appropriate root task folder. Generated JSON lives only in `.cache/` so
+ * agents have one readable surface and do not accidentally edit app cache.
+ * The legacy visible `${NERVE_DATA_DIR:-~/.nerve}/kanban` tree remains a
+ * migration source only.
  *
  * Legacy installs may still have data under `server-dist/data/kanban/` or
  * `server/data/kanban/`, so the store performs a one-time migration into the
@@ -822,14 +824,14 @@ export class KanbanStore {
       this.legacyArchivePath = path.join(dataDir, 'done-archive.json');
       this.legacyAuditPath = path.join(dataDir, 'audit.log');
       this.legacySplitTreeDir = path.join(dataDir, 'tasks');
-      this.legacySplitTreeManifestPath = path.join(this.legacySplitTreeDir, '.manifest.json');
+      this.legacySplitTreeManifestPath = path.join(this.legacySplitTreeDir, '.cache', 'manifest.json');
       this.filePath = path.join(hiddenRootDir, 'tasks.json');
       this.archivePath = path.join(hiddenRootDir, 'done-archive.json');
       this.auditPath = path.join(hiddenRootDir, 'audit.log');
       this.splitTreeDir = path.join(hiddenRootDir, 'tasks');
-      this.splitTreeManifestPath = path.join(this.splitTreeDir, '.manifest.json');
+      this.splitTreeManifestPath = path.join(this.splitTreeDir, '.cache', 'manifest.json');
       this.archiveTreeDir = path.join(this.splitTreeDir, 'archived');
-      this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.manifest.json');
+      this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.cache', 'manifest.json');
       this.legacyCandidatePaths = [
         path.join(projectRoot, 'server-dist', 'data', 'kanban', 'tasks.json'),
         path.join(projectRoot, 'server', 'data', 'kanban', 'tasks.json'),
@@ -840,9 +842,9 @@ export class KanbanStore {
       this.archivePath = path.join(path.dirname(this.filePath), 'done-archive.json');
       this.auditPath = path.join(path.dirname(this.filePath), 'audit.log');
       this.splitTreeDir = path.join(path.dirname(this.filePath), 'tasks');
-      this.splitTreeManifestPath = path.join(this.splitTreeDir, '.manifest.json');
+      this.splitTreeManifestPath = path.join(this.splitTreeDir, '.cache', 'manifest.json');
       this.archiveTreeDir = path.join(this.splitTreeDir, 'archived');
-      this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.manifest.json');
+      this.archiveTreeManifestPath = path.join(this.archiveTreeDir, '.cache', 'manifest.json');
       this.legacyCandidatePaths = [];
     }
     this.withLock = createMutex();
@@ -1222,10 +1224,11 @@ export class KanbanStore {
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === '.cache') continue;
         files.push(...await this.collectTaskFiles(entryPath));
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
         files.push(entryPath);
-      } else if (entry.isFile() && entry.name.endsWith('.json') && entry.name !== '.manifest.json') {
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
         const markdownPeer = entry.name === 'task.json'
           ? path.join(path.dirname(entryPath), 'task.md')
           : entryPath.replace(/\.json$/, '.md');
@@ -1240,8 +1243,8 @@ export class KanbanStore {
   private async readTaskFile(file: string, context: 'split tree' | 'archive tree'): Promise<KanbanTask | null> {
     if (file.endsWith('.md')) {
       const jsonPeer = path.basename(file) === 'task.md'
-        ? path.join(path.dirname(file), 'task.json')
-        : file.replace(/\.md$/, '.json');
+        ? path.join(path.dirname(file), '.cache', 'task.json')
+        : path.join(path.dirname(file), '.cache', `${path.basename(file, '.md')}.json`);
       const [markdownStats, jsonStats] = await Promise.all([
         fs.promises.stat(file).catch(() => null),
         fs.promises.stat(jsonPeer).catch(() => null),
@@ -1268,8 +1271,9 @@ export class KanbanStore {
   }
 
   private async readSplitTreeRaw(baseDir: string): Promise<StoreData | null> {
-    const manifestPath = path.join(baseDir, '.manifest.json');
-    const manifest = await this.readJsonFile<TreeManifest>(manifestPath);
+    const manifestPath = path.join(baseDir, '.cache', 'manifest.json');
+    const manifest = await this.readJsonFile<TreeManifest>(manifestPath)
+      ?? await this.readJsonFile<TreeManifest>(path.join(baseDir, '.manifest.json'));
     if (!manifest) return null;
 
     const stats = await fs.promises.stat(baseDir).catch(() => null);
@@ -1325,17 +1329,17 @@ export class KanbanStore {
       // Markdown is the agent-facing source; JSON is a generated cache. Write
       // the cache last so normal Nerve writes do not look like manual MD edits.
       await fs.promises.writeFile(path.join(rootDir, 'task.md'), this.formatTaskMarkdown(rootTask));
-      await this.writeJsonAtomic(path.join(rootDir, 'task.json'), rootTask);
+      await this.writeJsonAtomic(path.join(rootDir, '.cache', 'task.json'), rootTask);
       for (const task of group) {
         if (task.id === rootTask.id) continue;
         await fs.promises.writeFile(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.md`), this.formatTaskMarkdown(task));
-        await this.writeJsonAtomic(path.join(rootDir, `${this.sanitizeFsSegment(task.id)}.json`), task);
+        await this.writeJsonAtomic(path.join(rootDir, '.cache', `${this.sanitizeFsSegment(task.id)}.json`), task);
       }
     }
   }
 
   private async writeSplitTreeRaw(data: StoreData, baseDir = this.splitTreeDir): Promise<void> {
-    const manifestPath = path.join(baseDir, '.manifest.json');
+    const manifestPath = path.join(baseDir, '.cache', 'manifest.json');
     await fs.promises.rm(baseDir, { recursive: true, force: true }).catch(() => {});
     await fs.promises.mkdir(baseDir, { recursive: true });
     await this.writeTreeGroup(baseDir, data.tasks);
@@ -1368,7 +1372,8 @@ export class KanbanStore {
   }
 
   private async readArchiveTreeRaw(): Promise<ArchiveData | null> {
-    const manifest = await this.readJsonFile<TreeManifest>(this.archiveTreeManifestPath);
+    const manifest = await this.readJsonFile<TreeManifest>(this.archiveTreeManifestPath)
+      ?? await this.readJsonFile<TreeManifest>(path.join(this.archiveTreeDir, '.manifest.json'));
     if (!manifest) return null;
 
     const stats = await fs.promises.stat(this.archiveTreeDir).catch(() => null);

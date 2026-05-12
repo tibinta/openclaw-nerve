@@ -101,7 +101,8 @@ describe('init', () => {
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     expect(raw.meta.schemaVersion).toBe(1);
     expect(raw.tasks).toEqual([]);
-    expect(fs.existsSync(path.join(tmpDir, 'tasks', '.manifest.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'tasks', '.manifest.json'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, 'tasks', '.cache', 'manifest.json'))).toBe(true);
   });
 
   it('does not overwrite existing store on re-init', async () => {
@@ -194,8 +195,9 @@ describe('createTask', () => {
     expect(raw.tasks[0].title).toBe('Persisted');
 
     const taskDir = path.join(tmpDir, 'tasks', task.status, task.id);
-    expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(true);
     expect(fs.existsSync(path.join(taskDir, 'task.md'))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(false);
+    expect(fs.existsSync(path.join(taskDir, '.cache', 'task.json'))).toBe(true);
     expect(fs.readFileSync(path.join(taskDir, 'task.md'), 'utf-8')).toContain('# Persisted');
     expect(fs.existsSync(path.join(taskDir, `${task.id}.json`))).toBe(false);
   });
@@ -205,10 +207,12 @@ describe('createTask', () => {
     const child = await createSampleTask({ title: 'Child task', status: 'todo', parentTaskId: parent.id });
 
     const taskDir = path.join(tmpDir, 'tasks', parent.status, parent.id);
-    expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(true);
     expect(fs.existsSync(path.join(taskDir, 'task.md'))).toBe(true);
-    expect(fs.existsSync(path.join(taskDir, `${child.id}.json`))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, 'task.json'))).toBe(false);
+    expect(fs.existsSync(path.join(taskDir, '.cache', 'task.json'))).toBe(true);
     expect(fs.existsSync(path.join(taskDir, `${child.id}.md`))).toBe(true);
+    expect(fs.existsSync(path.join(taskDir, `${child.id}.json`))).toBe(false);
+    expect(fs.existsSync(path.join(taskDir, '.cache', `${child.id}.json`))).toBe(true);
 
     await fs.promises.unlink(filePath);
 
@@ -229,7 +233,7 @@ describe('createTask', () => {
     });
 
     const taskDir = path.join(tmpDir, 'tasks', task.status, task.id);
-    await fs.promises.writeFile(path.join(taskDir, 'task.json'), '{ broken json');
+    await fs.promises.writeFile(path.join(taskDir, '.cache', 'task.json'), '{ broken json');
     await fs.promises.writeFile(path.join(taskDir, 'task.md'), [
       '---',
       `id: ${task.id}`,
@@ -781,7 +785,7 @@ describe('updateTask', () => {
 
   it('does not rewrite a legacy assignee during unrelated updates in the split tree', async () => {
     const task = await createSampleTask({ assignee: 'agent:codex' });
-    const taskFile = path.join(tmpDir, 'tasks', task.status, task.id, 'task.json');
+    const taskFile = path.join(tmpDir, 'tasks', task.status, task.id, '.cache', 'task.json');
     const raw = JSON.parse(fs.readFileSync(taskFile, 'utf-8'));
     raw.assignee = 'agent:reviewer:main';
     fs.writeFileSync(taskFile, JSON.stringify(raw, null, 2));
@@ -2018,7 +2022,7 @@ describe('migration', () => {
     const parent = await createSampleTask({ title: 'Parent task', status: 'todo' });
     const child = await createSampleTask({ title: 'Child task', status: 'todo', parentTaskId: parent.id });
 
-    const childFile = path.join(tmpDir, 'tasks', parent.status, parent.id, `${child.id}.json`);
+    const childFile = path.join(tmpDir, 'tasks', parent.status, parent.id, '.cache', `${child.id}.json`);
     fs.writeFileSync(childFile, '{ this is not valid json');
 
     const result = await store.listTasks();
@@ -2036,7 +2040,7 @@ describe('default path and legacy migration', () => {
     const defaultStore = new KanbanStore();
     await defaultStore.init();
 
-    const canonicalManifest = path.join(process.env.NERVE_DATA_DIR, '.kanban', 'tasks', '.manifest.json');
+    const canonicalManifest = path.join(process.env.NERVE_DATA_DIR, '.kanban', 'tasks', '.cache', 'manifest.json');
     expect(fs.existsSync(canonicalManifest)).toBe(true);
     expect(fs.existsSync(path.join(process.env.NERVE_DATA_DIR, 'kanban', 'tasks.json'))).toBe(false);
 
@@ -2108,7 +2112,8 @@ describe('default path and legacy migration', () => {
     const canonicalStore = new KanbanStore();
     await canonicalStore.init();
     await canonicalStore.createTask({ title: 'Canonical task', createdBy: 'operator' });
-    expect(fs.existsSync(path.join(canonicalRoot, 'tasks', '.manifest.json'))).toBe(true);
+    expect(fs.existsSync(path.join(canonicalRoot, 'tasks', '.manifest.json'))).toBe(false);
+    expect(fs.existsSync(path.join(canonicalRoot, 'tasks', '.cache', 'manifest.json'))).toBe(true);
 
     const legacyStore = new KanbanStore(path.join(legacyRoot, 'tasks.json'));
     await legacyStore.init();
