@@ -28,6 +28,7 @@ const LOCALHOST_RECONNECT_BASE_DELAY = 1000;
 const LOCALHOST_RECONNECT_MAX_DELAY = 15000;
 const INSTANCE_ID_STORAGE_KEY = 'oc-webchat-instance-id';
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+const CONNECT_TIMEOUT_MS = 12_000;
 const METHOD_RPC_TIMEOUT_MS: Record<string, number> = {
   'chat.history': 12_000,
   'sessions.list': 12_000,
@@ -87,6 +88,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const connectReqIdRef = useRef<string | null>(null);
   const connectResolveRef = useRef<(() => void) | null>(null);
   const connectRejectRef = useRef<((e: Error) => void) | null>(null);
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onEvent = useRef<((msg: GatewayEvent) => void) | null>(null);
   
   // Auto-reconnect state
@@ -120,6 +122,13 @@ export function useWebSocket(): UseWebSocketReturn {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearConnectTimeout = useCallback(() => {
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
     }
   }, []);
 
@@ -181,6 +190,7 @@ export function useWebSocket(): UseWebSocketReturn {
       }
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       rejectPending(new Error('Disconnected'));
+      clearConnectTimeout();
       connectReqIdRef.current = null;
       connectResolveRef.current = resolve;
       connectRejectRef.current = reject;
@@ -206,6 +216,19 @@ export function useWebSocket(): UseWebSocketReturn {
         return;
       }
       wsRef.current = ws;
+
+      connectTimeoutRef.current = setTimeout(() => {
+        if (gen !== connectionGenRef.current || wsRef.current !== ws) return;
+        const err = new Error(`Gateway connect timed out after ${CONNECT_TIMEOUT_MS}ms`);
+        setConnectError('Gateway did not answer');
+        connectRejectRef.current?.(err);
+        connectResolveRef.current = null;
+        connectRejectRef.current = null;
+        connectReqIdRef.current = null;
+        if (wsRef.current === ws) {
+          ws.close();
+        }
+      }, CONNECT_TIMEOUT_MS);
 
       ws.onopen = () => {
         setConnectionState(isReconnect ? 'reconnecting' : 'connecting');
@@ -244,6 +267,7 @@ export function useWebSocket(): UseWebSocketReturn {
           if (response.id === connectReqIdRef.current) {
             connectReqIdRef.current = null;
             if (response.ok) {
+              clearConnectTimeout();
               // Success! Reset reconnect counter
               reconnectAttemptRef.current = 0;
               hasConnectedRef.current = true;
@@ -257,6 +281,7 @@ export function useWebSocket(): UseWebSocketReturn {
               const errMsg = 'Auth failed: ' + (response.error?.message || 'unknown');
               setConnectError(errMsg);
               setConnectionState('disconnected');
+              clearConnectTimeout();
               // Treat auth failures during reconnect like transient failures so the
               // socket keeps retrying instead of getting stuck until a manual reload.
               ws.close();
@@ -295,6 +320,7 @@ export function useWebSocket(): UseWebSocketReturn {
       ws.onclose = () => {
         // Stale connection: a newer doConnect has already superseded this one
         if (gen !== connectionGenRef.current) return;
+        clearConnectTimeout();
 
         // A close before the connect response should fail the connect promise
         // immediately instead of leaving the caller stuck in "connecting".
@@ -313,7 +339,7 @@ export function useWebSocket(): UseWebSocketReturn {
         scheduleReconnect();
       };
     });
-  }, [rejectPending, scheduleReconnect]);
+  }, [rejectPending, scheduleReconnect, clearConnectTimeout]);
   
   // Store doConnect in ref so it can reference itself for reconnection
   useEffect(() => {
@@ -324,6 +350,7 @@ export function useWebSocket(): UseWebSocketReturn {
   useEffect(() => {
     return () => {
       clearReconnectTimeout();
+      clearConnectTimeout();
       if (wsRef.current) {
         intentionalDisconnectRef.current = true; // prevent reconnect on cleanup close
         wsRef.current.close();
@@ -336,6 +363,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
     clearReconnectTimeout();
+    clearConnectTimeout();
     reconnectAttemptRef.current = 0;
     setReconnectAttempt(0);
     credentialsRef.current = null;
@@ -348,7 +376,7 @@ export function useWebSocket(): UseWebSocketReturn {
     }
     rejectPending(new Error('Disconnected'));
     setConnectionState('disconnected');
-  }, [rejectPending, clearReconnectTimeout]);
+  }, [rejectPending, clearReconnectTimeout, clearConnectTimeout]);
 
   const connect = useCallback((url: string, token: string): Promise<void> => {
     // Store credentials for reconnection

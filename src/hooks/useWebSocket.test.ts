@@ -105,7 +105,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       act(() => {
@@ -113,7 +113,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(result.current.connectionState).toBe('disconnected');
@@ -138,7 +138,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       const ws = wsInstances[0];
@@ -170,7 +170,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       const ws = wsInstances[0];
@@ -203,7 +203,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       const firstWs = wsInstances[0];
@@ -231,7 +231,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(2500);
       });
 
       expect(wsInstances.length).toBeGreaterThanOrEqual(2);
@@ -287,7 +287,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(wsInstances.length).toBe(1);
@@ -306,7 +306,7 @@ describe('useWebSocket', () => {
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
-        await vi.runOnlyPendingTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(wsInstances.length).toBeGreaterThanOrEqual(2);
@@ -330,7 +330,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       const firstWs = wsInstances[0];
@@ -351,7 +351,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(wsInstances.length).toBeGreaterThanOrEqual(2);
@@ -373,7 +373,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(result.current.connectionState).toBe('connected');
@@ -399,7 +399,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(wsInstances.length).toBeGreaterThanOrEqual(1);
@@ -424,7 +424,7 @@ describe('useWebSocket', () => {
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1);
-        await vi.runOnlyPendingTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       expect(result.current.connectionState).toBe('reconnecting');
@@ -450,7 +450,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       const initialCount = wsInstances.length;
@@ -461,7 +461,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       // Wait for potential reconnect attempt
@@ -509,7 +509,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       const firstWs = wsInstances[0];
@@ -522,7 +522,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(2500);
       });
 
       expect(wsInstances.length).toBeGreaterThanOrEqual(2);
@@ -545,7 +545,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(2500);
       });
 
       expect(result.current.connectionState).toBe('reconnecting');
@@ -573,7 +573,17 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const ws = wsInstances[0];
+      act(() => {
+        ws.simulateMessage({ type: 'event', event: 'connect.challenge', payload: { nonce: 'rpc-timeout' } });
+      });
+      const connectReq = getConnectRequest(ws);
+      expect(connectReq).toBeTruthy();
+      act(() => {
+        ws.simulateMessage({ type: 'res', id: connectReq?.id as string, ok: true, payload: {} });
       });
 
       let rpcError: Error | null = null;
@@ -609,7 +619,17 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const ws = wsInstances[0];
+      act(() => {
+        ws.simulateMessage({ type: 'event', event: 'connect.challenge', payload: { nonce: 'sessions-timeout' } });
+      });
+      const connectReq = getConnectRequest(ws);
+      expect(connectReq).toBeTruthy();
+      act(() => {
+        ws.simulateMessage({ type: 'res', id: connectReq?.id as string, ok: true, payload: {} });
       });
 
       let rpcError: Error | null = null;
@@ -661,7 +681,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       act(() => {
@@ -669,7 +689,7 @@ describe('useWebSocket', () => {
       });
 
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
       });
 
       const ws = wsInstances[0];

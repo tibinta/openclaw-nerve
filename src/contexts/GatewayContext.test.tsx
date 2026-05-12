@@ -44,20 +44,12 @@ describe('GatewayContext', () => {
   });
 
   it('clears stale thinking when the latest poll no longer reports effort state', async () => {
-    let sessionsListCalls = 0;
+    let statusCalls = 0;
 
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'status') {
-        return { model: 'gpt-5.4-mini', thinking: '' };
-      }
-
-      if (method === 'sessions.list') {
-        sessionsListCalls += 1;
-        return {
-          sessions: sessionsListCalls === 1
-            ? [{ sessionKey: 'agent:jane-whitmore---ceo:main', thinking: 'high' }]
-            : [{ sessionKey: 'agent:jane-whitmore---ceo:main' }],
-        };
+        statusCalls += 1;
+        return { model: 'gpt-5.4-mini', thinking: statusCalls === 1 ? 'high' : '' };
       }
 
       return {};
@@ -85,5 +77,6 @@ describe('GatewayContext', () => {
     });
 
     expect(observed.at(-1)).toBe('--');
+    expect(rpcMock).not.toHaveBeenCalledWith('sessions.list', expect.anything());
   });
 });

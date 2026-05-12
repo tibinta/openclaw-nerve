@@ -42,6 +42,7 @@ const RESTRICTED_METHODS = new Set([
 const CONTROL_UI_CLIENT_ID = 'openclaw-control-ui';
 const CONTROL_UI_SESSION_ACTIVE_MINUTES = 7 * 24 * 60;
 const CONTROL_UI_SESSION_LIMIT = 200;
+const GATEWAY_OPEN_TIMEOUT_MS = 8_000;
 
 /**
  * Execute a gateway RPC call, bypassing webchat restrictions.
@@ -258,6 +259,8 @@ function createGatewayRelay(
   let isControlUiClient = false;
   /** Timeout handle for challenge nonce deadline */
   let challengeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Timeout handle for the gateway TCP/WebSocket open phase. */
+  let gatewayOpenTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Buffer client messages until gateway connection is open (with cap)
   const MAX_PENDING = 100;
@@ -291,6 +294,13 @@ function createGatewayRelay(
     if (challengeTimer) {
       clearTimeout(challengeTimer);
       challengeTimer = null;
+    }
+  }
+
+  function clearGatewayOpenTimer(): void {
+    if (gatewayOpenTimer) {
+      clearTimeout(gatewayOpenTimer);
+      gatewayOpenTimer = null;
     }
   }
 
@@ -353,6 +363,18 @@ function createGatewayRelay(
       headers: { Origin: clientOrigin },
     });
 
+    // When OpenClaw is CPU-wedged it can keep the socket half-open for minutes.
+    // Close this relay quickly so Nerve can back off instead of piling up
+    // gateway handshakes that make the reconnect storm worse.
+    gatewayOpenTimer = setTimeout(() => {
+      if (gwWs.readyState === WebSocket.OPEN) return;
+      console.warn(`${tag} Gateway open timeout after ${GATEWAY_OPEN_TIMEOUT_MS}ms`);
+      gwWs.terminate();
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.close(1013, 'Gateway busy');
+      }
+    }, GATEWAY_OPEN_TIMEOUT_MS);
+
     gwWs.on('pong', () => { gatewayAlive = true; });
 
     // Gateway → Client
@@ -378,6 +400,7 @@ function createGatewayRelay(
     });
 
     gwWs.on('open', () => {
+      clearGatewayOpenTimer();
       // Handle deferred connect message first. Non-connect pending messages are
       // flushed only after connect is dispatched to preserve protocol ordering.
       if (savedConnectMsg && !connectSent) {
@@ -399,6 +422,7 @@ function createGatewayRelay(
 
     gwWs.on('error', (err) => {
       console.error(`${tag} Gateway error:`, err.message);
+      clearGatewayOpenTimer();
       clearChallengeTimer();
       if (!hasRetried || handshakeComplete) clientWs.close();
     });
@@ -406,6 +430,7 @@ function createGatewayRelay(
     gwWs.on('close', (code, reason) => {
       const reasonStr = reason?.toString() || '';
       console.log(`${tag} Gateway closed: code=${code}, reason=${reasonStr}`);
+      clearGatewayOpenTimer();
       clearChallengeTimer();
 
       // Device auth rejected — retry without device identity
@@ -531,6 +556,7 @@ function createGatewayRelay(
 
   clientWs.on('close', (code, reason) => {
     clearInterval(pingTimer);
+    clearGatewayOpenTimer();
     clearChallengeTimer();
     const duration = Date.now() - connStartTime;
     console.log(`${tag} Client closed: code=${code}, reason=${reason?.toString()}`);
@@ -539,6 +565,7 @@ function createGatewayRelay(
   });
   clientWs.on('error', (err) => {
     clearInterval(pingTimer);
+    clearGatewayOpenTimer();
     clearChallengeTimer();
     console.error(`${tag} Client error:`, err.message);
     if (gwWs) gwWs.close();

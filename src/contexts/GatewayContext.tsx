@@ -2,12 +2,6 @@
 import { createContext, useContext, useCallback, useRef, useEffect, useState, useMemo, type ReactNode } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import type { GatewayEvent } from '@/types';
-import {
-  LEGACY_MAIN_SESSION_KEY,
-  PRIMARY_AGENT_SESSION_KEY,
-  isTopLevelAgentSessionKey,
-} from '@/features/sessions/sessionKeys';
-
 type EventHandler = (msg: GatewayEvent) => void;
 
 interface GatewayContextValue {
@@ -27,10 +21,7 @@ interface GatewayContextValue {
 
 const GatewayContext = createContext<GatewayContextValue | null>(null);
 
-const SESSIONS_ACTIVE_MINUTES = 24 * 60;
-const SESSIONS_LIMIT = 200;
-// Status polling can fall back to sessions.list, which is expensive under load.
-// Keep this slower so a congested gateway has room to recover.
+// Keep this slow so a congested gateway has room to recover.
 const STATUS_POLL_INTERVAL_MS = 60_000;
 
 /**
@@ -100,27 +91,14 @@ export function GatewayProvider({ children }: { children: ReactNode }) {
       const config = h?.config as Record<string, unknown> | undefined;
       let clean = normalizeModel(String(agent?.model || h?.model || config?.model || h?.defaultModel || '--'));
 
-      // Extract thinking/effort level from status response
+      // Extract thinking/effort level from status response. This poll must stay
+      // cheap: falling back to sessions.list here caused Nerve to amplify a
+      // wedged gateway with extra session scans during reconnect storms.
       const rawThinking = String(
         agent?.thinking || config?.thinking || h?.thinking || ''
       ).trim().toLowerCase();
       const hasThinking = rawThinking && rawThinking !== 'undefined' && rawThinking !== 'null';
-      let resolvedThinking = hasThinking ? rawThinking : '--';
-
-      // Fallback to sessions.list for model and/or thinking (single RPC call for both)
-      if (clean === '--' || !hasThinking) {
-        try {
-          const sr = await currentRpc('sessions.list', { activeMinutes: SESSIONS_ACTIVE_MINUTES, limit: SESSIONS_LIMIT }) as Record<string, unknown>;
-          const list = (sr?.sessions as Array<{ sessionKey?: string; key?: string; model?: string; thinking?: string }>) || [];
-          const primarySession = list.find(s => (s.sessionKey || s.key) === PRIMARY_AGENT_SESSION_KEY)
-            || list.find(s => (s.sessionKey || s.key) === LEGACY_MAIN_SESSION_KEY)
-            || list.find(s => isTopLevelAgentSessionKey(s.sessionKey || s.key || ''));
-          if (clean === '--' && primarySession?.model) clean = normalizeModel(primarySession.model);
-          if (!hasThinking && primarySession?.thinking) {
-            resolvedThinking = primarySession.thinking.toLowerCase();
-          }
-        } catch { /* fallback to '--' */ }
-      }
+      const resolvedThinking = hasThinking ? rawThinking : '--';
 
       setModel(clean);
       setThinking(resolvedThinking);
