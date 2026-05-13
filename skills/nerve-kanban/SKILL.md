@@ -19,6 +19,8 @@ All endpoints are relative to the Nerve server origin (e.g. `http://localhost:30
 - **Subtasks do not force parent review**: child progress is informational. A parent only auto-closes when every child is done; partial child progress must not push the parent into `review`.
 - **Proposals** let agents suggest task creation or updates. The operator (or auto-policy) approves/rejects them.
 - **Actors** are either `"operator"` or `"agent:<name>"`.
+- The Targets board is markdown-first. `full-context.md` is the first read. Double-click cards to open the fullscreen editor, then Save or Cancel.
+- Keep Targets docs wide and readable. Do not flatten the board into a single-column note view.
 
 ## Quick Reference
 

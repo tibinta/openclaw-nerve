@@ -3,39 +3,80 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TargetBoardModal } from './TargetBoardModal';
 
+vi.mock('@/features/markdown/MarkdownRenderer', () => ({
+  MarkdownRenderer: ({ content }: { content: string }) => (
+    <div data-testid="markdown-renderer">{content}</div>
+  ),
+}));
+
+vi.mock('@/features/file-browser/FileEditor', () => ({
+  FileEditor: ({
+    file,
+    onContentChange,
+  }: {
+    file: { path: string; content: string };
+    onContentChange: (path: string, content: string) => void;
+  }) => (
+    <textarea
+      aria-label="markdown editor"
+      value={file.content}
+      onChange={(event) => onContentChange(file.path, event.target.value)}
+    />
+  ),
+}));
+
+function buildMarkdown(title: string): string {
+  return `# ${title}
+
+## Overview
+- ${title} line one
+- ${title} line two
+`;
+}
+
+function createFetchMock(writeCapture?: { body?: unknown }) {
+  const docContent = {
+    'target-board/full-context.md': buildMarkdown('Full Context'),
+    'target-board/index.md': buildMarkdown('Target Board Index'),
+    'target-board-live-note.md': buildMarkdown('Live Note'),
+    'target-board/actions-dashboard.md': buildMarkdown('Actions Dashboard'),
+    'target-board/pipeline.md': buildMarkdown('Pipeline'),
+    'target-board/money-map-and-targets.md': buildMarkdown('Money Map and Targets'),
+    'target-board/cash-map.md': buildMarkdown('Cash Map'),
+    'target-board/debt-pressure.md': buildMarkdown('Debt Pressure'),
+    'target-board/monthly-costs.md': buildMarkdown('Monthly Costs'),
+    'target-board/revenue-and-mrr.md': buildMarkdown('Revenue and MRR'),
+    'target-board/money-wellness.md': buildMarkdown('Money Wellness'),
+  } as Record<string, string>;
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === 'string' || input instanceof URL ? input.toString() : input.url;
+    const parsedUrl = new URL(requestUrl, 'http://localhost');
+    const path = parsedUrl.searchParams.get('path');
+
+    if (init?.method === 'PUT') {
+      writeCapture!.body = JSON.parse(String(init.body ?? '{}'));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
+    if (!path || !(path in docContent)) {
+      return new Response(JSON.stringify({ ok: false, error: `Missing ${path ?? 'path'}` }), { status: 404 });
+    }
+
+    return new Response(JSON.stringify({ ok: true, content: docContent[path], mtime: 1_716_000_000_000 }), {
+      status: 200,
+    });
+  });
+}
+
 describe('TargetBoardModal', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('loads target metrics from split markdown sections', async () => {
-    const indexContent = `# Target Board Sections
-
-## Sections
-- cash-map.md
-- actions-dashboard.md
-`;
-    const cashContent = `# Cash Position
-
-## Today’s cash position
-- Cash available: ~£200
-- Car fund: £0
-`;
-    const actionsContent = `# Actions
-
-## Auto-Coach Rules
-- If activity is below target, Jane creates a growth packet bundle.
-
-## Next Actions
-1. Confirm live CRM source and stream endpoints.
-`;
-
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: indexContent }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: cashContent }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: actionsContent }), { status: 200 }));
-
-    vi.stubGlobal('fetch', fetchMock);
+  it('renders a full-screen dashboard and opens the editor on double click', async () => {
+    vi.stubGlobal('fetch', createFetchMock());
 
     render(
       <TargetBoardModal
@@ -46,33 +87,31 @@ describe('TargetBoardModal', () => {
       />,
     );
 
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Edit full context/i })).toBeInTheDocument();
+    });
+
     expect(screen.getByText('Coach the work')).toBeInTheDocument();
+    expect(screen.getAllByText('Full Context')[0]).toBeInTheDocument();
+    expect(screen.getByText('Execution')).toBeInTheDocument();
+    expect(screen.getByText('Finance')).toBeInTheDocument();
+
+    const fullContextCard = screen.getAllByText('Full Context')[0].closest('[role="button"]');
+    expect(fullContextCard).toBeTruthy();
+    fireEvent.doubleClick(fullContextCard as HTMLElement);
 
     await waitFor(() => {
-      expect(screen.getByText('Source: target-board/index.md')).toBeInTheDocument();
+      expect(screen.getByText('Target doc')).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText('Cash available').length).toBeGreaterThan(0);
-    expect(screen.getByText('~£200')).toBeInTheDocument();
-    expect(screen.getByText('If activity is below target, Jane creates a growth packet bundle.')).toBeInTheDocument();
-    expect(screen.getAllByText('Confirm live CRM source and stream endpoints.').length).toBe(2);
-    expect(screen.getByText('Active target task')).toBeInTheDocument();
-    expect(screen.getByText('7 board items visible, reused from the existing task state.')).toBeInTheDocument();
-
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining('/api/files/read?path=target-board%2Fcash-map.md&agentId=main'),
-      expect.any(Object),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      expect.stringContaining('/api/files/read?path=target-board%2Factions-dashboard.md&agentId=main'),
-      expect.any(Object),
-    );
+    expect(screen.getByRole('textbox', { name: 'markdown editor' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
 
-  it('falls back to legacy note if split target sections fail', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('not-json', { status: 500 })));
+  it('saves edits from the fullscreen modal and keeps the board coherent', async () => {
+    const writeCapture: { body?: unknown } = {};
+    vi.stubGlobal('fetch', createFetchMock(writeCapture));
 
     render(
       <TargetBoardModal
@@ -84,48 +123,66 @@ describe('TargetBoardModal', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Source: safe fallback')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Edit full context/i })).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Lead universe')).toBeInTheDocument();
-    expect(screen.getByText('11%')).toBeInTheDocument();
+    const fullContextCard = screen.getAllByText('Full Context')[0].closest('[role="button"]');
+    expect(fullContextCard).toBeTruthy();
+    fireEvent.doubleClick(fullContextCard as HTMLElement);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'markdown editor' })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'markdown editor' }), {
+      target: { value: '# Full Context\n\nUpdated text for the board.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(writeCapture.body).toMatchObject({
+        path: 'target-board/full-context.md',
+        content: '# Full Context\n\nUpdated text for the board.',
+        agentId: 'main',
+      });
+    });
   });
 
-  it('opens a linked section file when clicked', async () => {
-    const indexContent = `# Target Board Sections
-
-## Sections
-- cash-map.md
-`;
-    const cashContent = `# Cash Position
-
-## Today’s cash position
-- Cash available: ~£200
-`;
-
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: indexContent }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, content: cashContent }), { status: 200 }));
-
-    const onOpenSection = vi.fn().mockResolvedValue(undefined);
-
-    vi.stubGlobal('fetch', fetchMock);
+  it('cancels an edit without writing when the user confirms discard', async () => {
+    const writeCapture: { body?: unknown } = {};
+    vi.stubGlobal('fetch', createFetchMock(writeCapture));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     render(
       <TargetBoardModal
         open
         onClose={vi.fn()}
-        onOpenSection={onOpenSection}
         currentActiveTask={null}
         taskCount={2}
       />,
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Open section Cash Position' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Edit full context/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open section Cash Position' }));
-    expect(onOpenSection).toHaveBeenCalledWith('target-board/cash-map.md');
+    const fullContextCard = screen.getAllByText('Full Context')[0].closest('[role="button"]');
+    expect(fullContextCard).toBeTruthy();
+    fireEvent.doubleClick(fullContextCard as HTMLElement);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'markdown editor' })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'markdown editor' }), {
+      target: { value: '# Full Context\n\nDraft text that should be discarded.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('textbox', { name: 'markdown editor' })).not.toBeInTheDocument();
+    });
+
+    expect(writeCapture.body).toBeUndefined();
   });
 });
