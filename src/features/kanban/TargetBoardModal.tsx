@@ -366,11 +366,11 @@ function DocCard({
       role="button"
       tabIndex={0}
       onClick={() => onSelect(doc.path)}
-      onDoubleClick={() => onOpen(doc.path, 'edit')}
+      onDoubleClick={() => onOpen(doc.path, 'preview')}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          onOpen(doc.path, 'edit');
+          onOpen(doc.path, 'preview');
         }
         if (event.key === ' ') {
           event.preventDefault();
@@ -525,8 +525,8 @@ function TargetModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="fixed left-0 top-0 h-[100dvh] w-[100dvw] max-w-none translate-x-0 translate-y-0 overflow-hidden rounded-none border-0 bg-card/96 p-0 shadow-none sm:max-w-none">
-        <div className="flex h-full min-h-0 flex-col">
+      <DialogContent className="fixed left-0 top-0 h-[100dvh] w-[100dvw] max-w-none translate-x-0 translate-y-0 overflow-y-auto overscroll-contain rounded-none border-0 bg-card/96 p-0 shadow-none sm:max-w-none">
+        <div className="flex min-h-full flex-col">
           <DialogHeader className="shrink-0 border-b border-border/60 bg-background/85 px-5 py-4 text-left backdrop-blur-md sm:px-6">
             <div className="flex flex-wrap items-start gap-3">
               <div className="min-w-0 flex-1">
@@ -582,7 +582,7 @@ function TargetModal({
                 )}
               >
                 <CheckCircle2 size={14} />
-                Preview
+                Dashboard
               </button>
               <button
                 type="button"
@@ -608,7 +608,7 @@ function TargetModal({
                   </span>
                 </div>
                 <div className="text-[0.733rem] text-muted-foreground">
-                  {mode === 'edit' ? 'Editor open' : 'Preview open'}
+                  {mode === 'edit' ? 'Editor open' : 'Dashboard open'}
                 </div>
               </div>
 
@@ -671,7 +671,7 @@ function TargetModal({
                     onClick={() => onModeChange(mode === 'edit' ? 'preview' : 'edit')}
                   >
                     <PencilLine size={14} />
-                    {mode === 'edit' ? 'Preview' : 'Edit'}
+                    {mode === 'edit' ? 'Dashboard' : 'Edit'}
                   </Button>
                 </div>
 
@@ -703,7 +703,7 @@ function TargetModal({
                 </div>
 
                 <div className="text-[0.733rem] text-muted-foreground">
-                  {mode === 'edit' ? 'Editor open' : 'Preview open'}
+                  {mode === 'edit' ? 'Editor open' : 'Dashboard open'}
                 </div>
               </div>
 
@@ -726,7 +726,16 @@ function TargetModal({
                     </Button>
                   </div>
                 ) : mode === 'edit' && file ? (
-                  <div className="h-full min-h-[48rem]">
+                  <div className="h-full min-h-[48rem] rounded-[26px] border border-border/60 bg-background/55 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="cockpit-field-label">Editor</div>
+                        <p className="mt-1 text-[0.733rem] text-muted-foreground">
+                          Edit the full markdown file, then save or cancel.
+                        </p>
+                      </div>
+                      <span className="cockpit-badge" data-tone="primary">Markdown</span>
+                    </div>
                     <FileEditor
                       file={file}
                       onContentChange={onContentChange}
@@ -735,13 +744,25 @@ function TargetModal({
                     />
                   </div>
                 ) : (
-                  <div className="min-h-0">
-                    <MarkdownRenderer
-                      content={activeContent}
-                      className="markdown-document-content"
-                      currentDocumentPath={doc.path}
-                      onOpenWorkspacePath={(targetPath) => onOpenSection?.(targetPath)}
-                    />
+                  <div className="min-h-0 rounded-[26px] border border-border/60 bg-background/55 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="cockpit-field-label">Dashboard preview</div>
+                        <p className="mt-1 text-[0.733rem] text-muted-foreground">
+                          Read the file first. Switch to Edit when you need to change it.
+                        </p>
+                      </div>
+                      <span className="cockpit-badge" data-tone="primary">Dashboard</span>
+                    </div>
+
+                    <div className="rounded-[22px] border border-border/60 bg-background/45 p-4">
+                      <MarkdownRenderer
+                        content={activeContent}
+                        className="markdown-document-content"
+                        currentDocumentPath={doc.path}
+                        onOpenWorkspacePath={(targetPath) => onOpenSection?.(targetPath)}
+                      />
+                    </div>
 
                     {activeContent.trim().length === 0 && (
                       <div className="cockpit-note mt-4">
@@ -844,7 +865,7 @@ function TargetModal({
                   Cancel
                 </Button>
                 <span className="hidden text-[0.733rem] text-muted-foreground sm:inline">
-                  Double-click the card to jump straight into edit mode.
+                  Double-click the card to open dashboard mode, then switch to edit when ready.
                 </span>
               </div>
 
@@ -1124,8 +1145,8 @@ export const TargetBoardModal = memo(function TargetBoardModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-0 py-0 backdrop-blur-sm">
-      <div className="shell-panel h-[100dvh] w-[100dvw] overflow-hidden rounded-none animate-[targetBoardIn_180ms_ease-out]">
-        <div className="flex h-full min-h-0 flex-col">
+      <div className="shell-panel h-[100dvh] w-[100dvw] overflow-y-auto overscroll-contain rounded-none animate-[targetBoardIn_180ms_ease-out]">
+        <div className="flex min-h-full flex-col">
           <div className="shrink-0 border-b border-border/50 bg-secondary/35 px-5 py-4">
             <div className="flex flex-wrap items-start gap-4">
               <div className="min-w-0 flex-1">
@@ -1135,14 +1156,14 @@ export const TargetBoardModal = memo(function TargetBoardModal({
                 </div>
                 <h2 className="mt-1 text-lg font-semibold text-foreground">Coach the work</h2>
                 <div className="mt-1 text-[0.733rem] text-muted-foreground">
-                  Source: target-board/full-context.md first. Double-click any card to edit the file.
+                  Source: target-board/full-context.md first. Double-click any card to open the dashboard.
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => openModal(DEFAULT_SELECTED_PATH, 'edit')}>
-                  <PencilLine size={14} />
-                  Edit full context
+                <Button type="button" variant="outline" size="sm" onClick={() => openModal(DEFAULT_SELECTED_PATH, 'preview')}>
+                  <ArrowUpRight size={14} />
+                  Open full context
                 </Button>
                 <Button type="button" variant="secondary" size="sm" onClick={reloadAllDocs}>
                   <RefreshCcw size={14} />
@@ -1185,7 +1206,7 @@ export const TargetBoardModal = memo(function TargetBoardModal({
 
               <div className="flex items-center gap-2 text-[0.733rem] text-muted-foreground">
                 <Target size={14} className="text-primary" />
-                <span>Double-click opens the editor.</span>
+                <span>Double-click opens the dashboard.</span>
               </div>
             </div>
           </div>

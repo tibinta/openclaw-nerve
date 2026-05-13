@@ -75,7 +75,30 @@ describe('TargetBoardModal', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders a full-screen dashboard and opens the editor on double click', async () => {
+  async function openDashboardFromFullContext() {
+    await waitFor(() => {
+      const fullContextCard = screen.getAllByRole('button').find((button) => (
+        button.textContent?.includes('Full Context')
+        && button.textContent?.includes('target-board/full-context.md')
+      ));
+      expect(fullContextCard).toBeTruthy();
+    });
+
+    const fullContextCard = screen.getAllByRole('button').find((button) => (
+      button.textContent?.includes('Full Context')
+      && button.textContent?.includes('target-board/full-context.md')
+    ));
+    expect(fullContextCard).toBeTruthy();
+    fireEvent.doubleClick(fullContextCard as HTMLElement);
+
+    await waitFor(() => {
+      const dashboardToggle = screen.getAllByRole('button', { name: 'Dashboard' }).find((button) => button.getAttribute('aria-pressed') === 'true');
+      expect(dashboardToggle).toBeTruthy();
+    });
+    expect(screen.queryByRole('textbox', { name: 'markdown editor' })).not.toBeInTheDocument();
+  }
+
+  it('renders a full-screen dashboard first and then opens the editor', async () => {
     vi.stubGlobal('fetch', createFetchMock());
 
     render(
@@ -88,20 +111,22 @@ describe('TargetBoardModal', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Edit full context/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open full context' })).toBeInTheDocument();
     });
 
     expect(screen.getByText('Coach the work')).toBeInTheDocument();
-    expect(screen.getAllByText('Full Context')[0]).toBeInTheDocument();
+    expect(screen.getByText('Open full context')).toBeInTheDocument();
     expect(screen.getByText('Execution')).toBeInTheDocument();
     expect(screen.getByText('Finance')).toBeInTheDocument();
 
-    const fullContextCard = screen.getAllByText('Full Context')[0].closest('[role="button"]');
-    expect(fullContextCard).toBeTruthy();
-    fireEvent.doubleClick(fullContextCard as HTMLElement);
+    await openDashboardFromFullContext();
+
+    const editToggle = screen.getAllByRole('button', { name: 'Edit' }).find((button) => button.getAttribute('aria-pressed') === 'false');
+    expect(editToggle).toBeTruthy();
+    fireEvent.click(editToggle as HTMLElement);
 
     await waitFor(() => {
-      expect(screen.getByText('Target doc')).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'markdown editor' })).toBeInTheDocument();
     });
 
     expect(screen.getByRole('textbox', { name: 'markdown editor' })).toBeInTheDocument();
@@ -123,12 +148,14 @@ describe('TargetBoardModal', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Edit full context/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open full context' })).toBeInTheDocument();
     });
 
-    const fullContextCard = screen.getAllByText('Full Context')[0].closest('[role="button"]');
-    expect(fullContextCard).toBeTruthy();
-    fireEvent.doubleClick(fullContextCard as HTMLElement);
+    await openDashboardFromFullContext();
+
+    const editToggle = screen.getAllByRole('button', { name: 'Edit' }).find((button) => button.getAttribute('aria-pressed') === 'false');
+    expect(editToggle).toBeTruthy();
+    fireEvent.click(editToggle as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: 'markdown editor' })).toBeInTheDocument();
@@ -163,12 +190,14 @@ describe('TargetBoardModal', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Edit full context/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open full context' })).toBeInTheDocument();
     });
 
-    const fullContextCard = screen.getAllByText('Full Context')[0].closest('[role="button"]');
-    expect(fullContextCard).toBeTruthy();
-    fireEvent.doubleClick(fullContextCard as HTMLElement);
+    await openDashboardFromFullContext();
+
+    const editToggle = screen.getAllByRole('button', { name: 'Edit' }).find((button) => button.getAttribute('aria-pressed') === 'false');
+    expect(editToggle).toBeTruthy();
+    fireEvent.click(editToggle as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: 'markdown editor' })).toBeInTheDocument();
