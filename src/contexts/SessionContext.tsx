@@ -2,7 +2,7 @@
 import { createContext, useContext, useCallback, useRef, useEffect, useState, useMemo, type ReactNode } from 'react';
 import { useGateway } from './GatewayContext';
 import { useSettings } from './SettingsContext';
-import { getSessionKey, type Session, type AgentLogEntry, type EventEntry, type GatewayEvent, type EventPayload, type AgentEventPayload, type ChatEventPayload, type ContentBlock, type SessionsListResponse, type ChatHistoryResponse, type ChatMessage, type GranularAgentState } from '@/types';
+import { getSessionKey, type Session, type AgentLogEntry, type EventEntry, type GatewayEvent, type EventPayload, type AgentEventPayload, type ChatEventPayload, type ContentBlock, type SessionsListResponse, type ChatMessage, type GranularAgentState } from '@/types';
 import { CONTEXT_CRITICAL_THRESHOLD } from '@/lib/constants';
 import { playPing } from '@/features/voice/audio-feedback';
 import { describeToolUse } from '@/utils/helpers';
@@ -38,9 +38,9 @@ const FULL_SESSIONS_LIMIT = 50;
 const SESSION_REFRESH_ACTIVE_MINUTES = 7 * 24 * 60;
 // When the gateway is already slow, backing off the fallback polling keeps the
 // session list from piling on top of live event-driven refreshes.
-const SESSION_REFRESH_POLL_INTERVAL_MS = 120_000;
-const FULL_SESSION_REFRESH_DELAY_MS = 20_000;
-const DELAYED_SESSION_REFRESH_MS = 5_000;
+const SESSION_REFRESH_POLL_INTERVAL_MS = 300_000;
+const FULL_SESSION_REFRESH_DELAY_MS = 60_000;
+const DELAYED_SESSION_REFRESH_MS = 30_000;
 
 export interface GatewayAgentRegistration {
   id: string;
@@ -524,11 +524,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (Array.isArray(p.content)) processToolBlocks(p.content as ContentBlock[]);
       if (Array.isArray(p.messages)) processMessages(p.messages as ChatMessage[]);
       if (p.state === 'final') {
-        if (sk && rpcRef.current) {
-          rpcRef.current('chat.history', { sessionKey: sk, limit: 10 })
-            .then((res: unknown) => processMessages((res as ChatHistoryResponse)?.messages || []))
-            .catch(() => {});
-        }
+        // Do not tail chat.history for every final event. During gateway
+        // saturation those tiny tails can keep running server-side for minutes,
+        // while the event payload already carries the useful activity-log text.
         addAgentLogEntry(isMain ? '✦' : '✅', isMain ? 'finished response' : name + ' completed');
         delete logStateRef.current['_conv_' + sk];
       } else if (p.state === 'error' || p.state === 'aborted') {
@@ -670,11 +668,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const idx = prev.findIndex(s => normalizeSessionKey(getSessionKey(s)) === normalizedSessionKey);
       if (idx === -1) {
         // New session appeared before the full sessions.list call returned.
-        // Show it immediately under the owning agent, then let the slower
-        // authoritative refresh fill in model/token details when it completes.
-        setTimeout(() => {
-          void refreshSessionsRef.current();
-        }, 100);
+        // Show it immediately under the owning agent. Coalesced delayed refresh
+        // fills in model/token details without launching sessions.list per event.
         const now = Date.now();
         const state = updates.state || updates.agentState || updates.status || 'running';
         const optimisticSession: Session = {
@@ -757,7 +752,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 markSessionUnread(sk);
                 pingSession(sk);
               }
-              refreshSessions();
               scheduleDelayedRefresh();
             } else if (phase === 'error') {
               setGranularStatus(sk, { status: 'ERROR', since: Date.now() });
@@ -765,7 +759,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 markSessionUnread(sk);
                 pingSession(sk);
               }
-              refreshSessions();
+              scheduleDelayedRefresh();
             }
           } else if (ap.stream === 'tool' && ap.data) {
             if (ap.data.phase === 'start' && ap.data.name) {
@@ -802,7 +796,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               markSessionUnread(sk);
               pingSession(sk);
             }
-            refreshSessions();
             // Delayed refresh to catch token counts that may not be available immediately.
             scheduleDelayedRefresh();
           } else if (state === 'error') {
@@ -834,7 +827,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               setGranularStatus(sk, { status: 'DONE', since: Date.now() });
             }
             if (state === 'final' || state === 'done' || state === 'completed') {
-              refreshSessions();
+              scheduleDelayedRefresh();
             }
           }
         }
@@ -866,10 +859,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Poll sessions when connected (reduced to 30s - WebSocket events provide real-time updates)
+  // Poll sessions only as a fallback. WebSocket events keep the visible tree
+  // fresh enough, and avoiding an immediate full refresh on reconnect prevents
+  // slow gateway sessions.list calls from stacking behind a saturated gateway.
   useEffect(() => {
     if (connectionState !== 'connected') return;
-    refreshSessions(initialSessionSnapshotLoadedRef.current ? 'full' : 'initial');
+    if (!initialSessionSnapshotLoadedRef.current) {
+      refreshSessions('initial');
+    } else {
+      setSessionsLoading(false);
+    }
     fullRefreshTimeoutRef.current = setTimeout(() => {
       fullRefreshTimeoutRef.current = null;
       void refreshSessionsRef.current('full');
