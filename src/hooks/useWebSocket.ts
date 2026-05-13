@@ -28,7 +28,9 @@ const LOCALHOST_RECONNECT_BASE_DELAY = 1000;
 const LOCALHOST_RECONNECT_MAX_DELAY = 15000;
 const INSTANCE_ID_STORAGE_KEY = 'oc-webchat-instance-id';
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
-const CONNECT_TIMEOUT_MS = 12_000;
+const CONNECT_TIMEOUT_MS = 6_000;
+const HANDSHAKE_FAILURES_BEFORE_COOLDOWN = 3;
+const HANDSHAKE_FAILURE_COOLDOWN_MS = 15_000;
 const METHOD_RPC_TIMEOUT_MS: Record<string, number> = {
   'chat.history': 12_000,
   'sessions.list': 12_000,
@@ -104,6 +106,11 @@ export function useWebSocket(): UseWebSocketReturn {
     base: RECONNECT_BASE_DELAY,
     max: RECONNECT_MAX_DELAY,
   });
+  const connectInFlightRef = useRef<{
+    key: string;
+    promise: Promise<void>;
+  } | null>(null);
+  const handshakeFailureStreakRef = useRef(0);
 
   const rejectPending = useCallback((reason: Error) => {
     const pending = pendingRef.current;
@@ -151,7 +158,7 @@ export function useWebSocket(): UseWebSocketReturn {
     });
   }, []);
 
-  const scheduleReconnect = useCallback(() => {
+  const scheduleReconnect = useCallback((minDelayMs = 0) => {
     const creds = credentialsRef.current;
     if (intentionalDisconnectRef.current || !creds) {
       setConnectionState('disconnected');
@@ -161,9 +168,12 @@ export function useWebSocket(): UseWebSocketReturn {
     const attempt = ++reconnectAttemptRef.current;
     setReconnectAttempt(attempt);
     const { base, max } = reconnectDelayProfileRef.current;
-    const delay = Math.min(
-      base * Math.pow(1.5, attempt - 1) + Math.random() * 500,
-      max,
+    const delay = Math.max(
+      minDelayMs,
+      Math.min(
+        base * Math.pow(1.5, attempt - 1) + Math.random() * 500,
+        max,
+      ),
     );
 
     console.debug(`[WS] Reconnecting in ${Math.round(delay)}ms (attempt ${attempt})`);
@@ -270,6 +280,7 @@ export function useWebSocket(): UseWebSocketReturn {
               clearConnectTimeout();
               // Success! Reset reconnect counter
               reconnectAttemptRef.current = 0;
+              handshakeFailureStreakRef.current = 0;
               hasConnectedRef.current = true;
               setReconnectAttempt(0);
               setConnectError('');
@@ -317,14 +328,18 @@ export function useWebSocket(): UseWebSocketReturn {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         // Stale connection: a newer doConnect has already superseded this one
         if (gen !== connectionGenRef.current) return;
         clearConnectTimeout();
 
         // A close before the connect response should fail the connect promise
         // immediately instead of leaving the caller stuck in "connecting".
-        if (!hasConnectedRef.current && !intentionalDisconnectRef.current) {
+        // If this close happens while connect handshake hasn't completed,
+        // reject the connect promise so callers can settle and let the
+        // reconnect scheduler own the retry policy.
+        const closedBeforeConnect = Boolean(connectRejectRef.current) && !intentionalDisconnectRef.current;
+        if (closedBeforeConnect) {
           connectRejectRef.current?.(new Error('Gateway connection closed before connect completed'));
         }
         connectResolveRef.current = null;
@@ -334,9 +349,22 @@ export function useWebSocket(): UseWebSocketReturn {
         rejectPending(new Error('WebSocket disconnected'));
         wsRef.current = null;
 
+        let minReconnectDelayMs = 0;
+        if (closedBeforeConnect || event.code === 1013) {
+          handshakeFailureStreakRef.current += 1;
+          // Gateway busy closes usually mean OpenClaw is CPU-bound. After a few
+          // quick failures, cool down so Nerve preserves the last good screen
+          // instead of opening more handshakes into a saturated gateway.
+          if (handshakeFailureStreakRef.current >= HANDSHAKE_FAILURES_BEFORE_COOLDOWN) {
+            minReconnectDelayMs = HANDSHAKE_FAILURE_COOLDOWN_MS;
+          }
+        } else {
+          handshakeFailureStreakRef.current = 0;
+        }
+
         // First-connect stalls are recoverable too; keep trying while the user
         // still has credentials saved instead of leaving the UI stuck on Load failed.
-        scheduleReconnect();
+        scheduleReconnect(minReconnectDelayMs);
       };
     });
   }, [rejectPending, scheduleReconnect, clearConnectTimeout]);
@@ -379,13 +407,29 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [rejectPending, clearReconnectTimeout, clearConnectTimeout]);
 
   const connect = useCallback((url: string, token: string): Promise<void> => {
+    const normalizedUrl = url.trim();
+    const normalizedToken = token.trim();
+    const key = `${normalizedUrl}|||${normalizedToken}`;
+
+    if (connectInFlightRef.current?.key === key) {
+      return connectInFlightRef.current.promise;
+    }
+
     // Store credentials for reconnection
-    credentialsRef.current = { url, token };
+    credentialsRef.current = { url: normalizedUrl, token: normalizedToken };
     intentionalDisconnectRef.current = false;
     clearReconnectTimeout();
     reconnectAttemptRef.current = 0;
     setReconnectAttempt(0);
-    return doConnect(url, token, false);
+
+    const doConnectPromise = doConnect(normalizedUrl, normalizedToken, false);
+    const promise = doConnectPromise.finally(() => {
+      if (connectInFlightRef.current?.key === key) {
+        connectInFlightRef.current = null;
+      }
+    });
+    connectInFlightRef.current = { key, promise };
+    return promise;
   }, [doConnect, clearReconnectTimeout]);
 
   return { connectionState, connect, disconnect, rpc, onEvent, connectError, reconnectAttempt };

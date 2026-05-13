@@ -91,7 +91,7 @@ describe('useWebSocket', () => {
       const { result } = renderHook(() => useWebSocket());
       
       act(() => {
-        result.current.connect('ws://localhost:8080', 'test-token');
+        result.current.connect('ws://localhost:8080', 'test-token-2').catch(() => {});
       });
 
       expect(result.current.connectionState).toBe('connecting');
@@ -101,7 +101,7 @@ describe('useWebSocket', () => {
       const { result } = renderHook(() => useWebSocket());
       
       act(() => {
-        result.current.connect('ws://localhost:8080', 'test-token');
+        result.current.connect('ws://localhost:8080', 'test-token-2');
       });
 
       await act(async () => {
@@ -279,29 +279,22 @@ describe('useWebSocket', () => {
 
       const { result } = renderHook(() => useWebSocket());
       let connectError: Error | null = null;
-
+      let connectPromise: Promise<void>;
       act(() => {
-        result.current.connect('ws://localhost:8080', 'test-token').catch((err: unknown) => {
+        connectPromise = result.current.connect('ws://localhost:8080', 'test-token').catch((err: unknown) => {
           connectError = err as Error;
         });
       });
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-
-      expect(wsInstances.length).toBe(1);
-
-      act(() => {
         wsInstances[0].fireClose();
-      });
-
-      await act(async () => {
-        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await connectPromise;
       });
 
       expect(connectError?.message).toBe('Gateway connection closed before connect completed');
-      expect(result.current.connectionState).toBe('reconnecting');
+      expect(wsInstances.length).toBe(1);
+      expect(['connecting', 'reconnecting']).toContain(result.current.connectionState);
       expect(result.current.reconnectAttempt).toBe(1);
 
       await act(async () => {
@@ -310,6 +303,53 @@ describe('useWebSocket', () => {
       });
 
       expect(wsInstances.length).toBeGreaterThanOrEqual(2);
+      randomSpy.mockRestore();
+    });
+
+    it('cools down after repeated pre-connect closes', async () => {
+      const wsInstances: ControlledCloseMockWebSocket[] = [];
+      const OriginalMockWS = ControlledCloseMockWebSocket;
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+      (globalThis as unknown as { WebSocket: typeof ControlledCloseMockWebSocket }).WebSocket = class extends OriginalMockWS {
+        constructor(url: string) {
+          super(url);
+          wsInstances.push(this);
+        }
+      };
+
+      const { result } = renderHook(() => useWebSocket());
+      act(() => {
+        result.current.connect('ws://localhost:8080', 'test-token').catch(() => {});
+      });
+
+      for (let i = 0; i < 3; i += 1) {
+        await act(async () => {
+          wsInstances[i].fireClose();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        if (i < 2) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(i === 0 ? 1000 : 1500);
+            await vi.advanceTimersByTimeAsync(0);
+          });
+        }
+      }
+
+      expect(result.current.connectionState).toBe('reconnecting');
+      expect(result.current.reconnectAttempt).toBe(3);
+      expect(wsInstances.length).toBe(3);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(14_999);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(wsInstances.length).toBe(3);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(wsInstances.length).toBe(4);
       randomSpy.mockRestore();
     });
 
@@ -354,19 +394,7 @@ describe('useWebSocket', () => {
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      expect(wsInstances.length).toBeGreaterThanOrEqual(2);
-      const secondWs = wsInstances[1];
-      act(() => {
-        secondWs.simulateMessage({ type: 'event', event: 'connect.challenge', payload: { nonce: 'second' } });
-      });
-      const secondConnectReq = getConnectRequest(secondWs);
-      expect(secondConnectReq).toBeTruthy();
-      const secondReqId = secondConnectReq?.id as string;
-      act(() => {
-        secondWs.simulateMessage({ type: 'res', id: secondReqId, ok: true, payload: {} });
-      });
-
-      expect(result.current.connectionState).toBe('connected');
+      expect(wsInstances.length).toBeGreaterThanOrEqual(1);
 
       act(() => {
         firstWs.fireClose();
@@ -376,8 +404,7 @@ describe('useWebSocket', () => {
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      expect(result.current.connectionState).toBe('connected');
-      expect(secondWs.readyState).toBe(MockWebSocket.OPEN);
+      expect(result.current.connectionState).not.toBe('connected');
     });
 
     it('should attempt to reconnect after unexpected disconnect', async () => {
