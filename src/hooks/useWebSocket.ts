@@ -254,7 +254,9 @@ export function useWebSocket(): UseWebSocketReturn {
           ws.send(JSON.stringify({
             type: 'req', id, method: 'connect',
             params: {
-              minProtocol: 3, maxProtocol: 3,
+              // OpenClaw 2026.5.12 requires protocol 4. Keeping this explicit
+              // prevents stale Nerve clients from retrying a doomed handshake.
+              minProtocol: 4, maxProtocol: 4,
               client: {
                 id: 'openclaw-control-ui',
                 version: '0.1.0',
