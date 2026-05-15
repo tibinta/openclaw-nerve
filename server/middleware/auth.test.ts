@@ -8,6 +8,7 @@ vi.mock('../lib/config.js', () => {
     config: {
       auth: false,
       sessionSecret: 'test-secret-123',
+      gatewayToken: 'gateway-token-123',
     },
     SESSION_COOKIE_NAME: 'nerve_session_3080',
   };
@@ -23,7 +24,7 @@ import { authMiddleware } from './auth.js';
 import { config } from '../lib/config.js';
 import { verifySession } from '../lib/session.js';
 
-const mockedConfig = config as { auth: boolean; sessionSecret: string };
+const mockedConfig = config as { auth: boolean; sessionSecret: string; gatewayToken: string };
 const mockedVerifySession = verifySession as ReturnType<typeof vi.fn>;
 
 function createTestApp(): Hono {
@@ -95,6 +96,26 @@ describe('authMiddleware', () => {
       });
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true });
+    });
+
+    it('passes through with the server bearer token', async () => {
+      const app = createTestApp();
+      const res = await app.request('/api/test', {
+        headers: { Authorization: 'Bearer gateway-token-123' },
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(mockedVerifySession).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid server bearer token', async () => {
+      const app = createTestApp();
+      const res = await app.request('/api/test', {
+        headers: { Authorization: 'Bearer wrong-token' },
+      });
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe('Authentication required');
     });
 
     describe('public routes bypass auth', () => {
