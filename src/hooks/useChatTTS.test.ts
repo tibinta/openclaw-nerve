@@ -8,6 +8,25 @@ function makeRef<T>(value: T) {
 }
 
 describe('useChatTTS', () => {
+  it('speaks an explicit marker even when sound effects are off', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    act(() => {
+      result.current.handleFinalTTS({
+        message: { role: 'assistant', content: 'Visible [tts: Spoken answer.]' } as never,
+        text: 'Visible [tts: Spoken answer.]',
+        ttsText: 'Spoken answer.',
+        charts: [],
+      }, true);
+    });
+
+    expect(speak).toHaveBeenCalledWith('Spoken answer.');
+  });
+
   it('auto-speaks the next assistant reply for a voice message even without a TTS marker', () => {
     const speak = vi.fn();
     const { result } = renderHook(() => useChatTTS({

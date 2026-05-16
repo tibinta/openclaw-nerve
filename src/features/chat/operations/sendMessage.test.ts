@@ -269,12 +269,11 @@ describe('sendChatMessage', () => {
 
     const sentMessage = rpc.mock.calls[0][1].message;
     expect(sentMessage).toContain('[system: User sent a voice message');
-    expect(sentMessage).toContain('Use exactly one canonical marker at the end: [tts: spoken sentence]');
-    expect(sentMessage).toContain('Nerve will speak it automatically');
-    expect(sentMessage).toContain('full intended sentence');
-    expect(sentMessage).toContain('Do not answer with voice acknowledgements');
-    expect(sentMessage).toContain('Start with the answer, not a greeting');
-    expect(sentMessage).toContain('Do not emit COPY or tool labels');
+    expect(sentMessage).toContain('End with exactly one canonical TTS marker');
+    expect(sentMessage).toContain('[tts: spoken sentence]');
+    expect(sentMessage).toContain('Do not include examples');
+    expect(sentMessage).not.toContain('Here is my text response');
+    expect(sentMessage).not.toContain('Example reply');
   });
 
   it('handles null/empty rpc response gracefully', async () => {

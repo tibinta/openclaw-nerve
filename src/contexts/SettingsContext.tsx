@@ -140,7 +140,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem(KANBAN_VISIBILITY_STORAGE_KEY);
     return saved !== 'false';
   });
-  const { speak } = useTTS(soundEnabled, ttsProvider, ttsModel || undefined);
+  // TTS is separate from small UI pings: voice replies with [tts: ...]
+  // should still speak when "Sound effects" is off.
+  const { speak } = useTTS(true, ttsProvider, ttsModel || undefined);
   const wakeWordToggleRef = useRef<(() => void) | null>(null);
 
   // Apply theme on mount and when it changes
