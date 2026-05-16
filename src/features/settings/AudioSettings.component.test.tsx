@@ -14,7 +14,7 @@ const updateField = vi.fn();
 vi.mock('@/features/tts/useTTSConfig', () => ({
   useTTSConfig: () => ({
     config: {
-      edge: { voice: 'en-US-AriaNeural' },
+      edge: { voice: 'en-GB-SoniaNeural' },
       openai: { model: 'tts-1', voice: 'alloy', instructions: '' },
       qwen: { mode: 'voice_design', language: 'English', speaker: 'Serena', voiceDescription: '', styleInstruction: '' },
       xiaomi: { model: 'mimo-v2-tts', voice: 'mimo_default', style: '' },
@@ -55,7 +55,7 @@ const baseProps = {
   onTtsModelChange: vi.fn(),
   sttProvider: 'local' as const,
   sttInputMode: 'hybrid' as const,
-  sttModel: 'base',
+  sttModel: 'small.en',
   onSttProviderChange: vi.fn(),
   onSttInputModeChange: vi.fn(),
   onSttModelChange: vi.fn(),

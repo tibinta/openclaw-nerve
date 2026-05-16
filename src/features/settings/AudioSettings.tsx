@@ -284,11 +284,6 @@ function SttModelSelector({ model, onModelChange }: { model: string; onModelChan
           value={model}
           onChange={handleModelChange}
           options={[
-            { value: 'tiny',     label: 'tiny (75MB, multilingual)' },
-            { value: 'base',     label: 'base (142MB, multilingual)' },
-            { value: 'small',    label: 'small (466MB, multilingual)' },
-            { value: 'tiny.en',  label: 'tiny.en (75MB, English only)' },
-            { value: 'base.en',  label: 'base.en (142MB, English only)' },
             { value: 'small.en', label: 'small.en (466MB, English only)' },
           ]}
           ariaLabel="STT Model"
@@ -334,7 +329,7 @@ function SttModelSelector({ model, onModelChange }: { model: string; onModelChan
           <div className="flex items-start gap-2">
           <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
           <span className="text-[0.733rem]">
-            No GPU detected — {model.includes('small') ? `${model} will be very slow on CPU` : `${model} may be slow on CPU`}. Use tiny for faster multilingual transcription.
+            No GPU detected — {model} may be slower on CPU.
           </span>
           </div>
         </div>

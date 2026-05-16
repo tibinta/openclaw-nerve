@@ -32,6 +32,7 @@ const ALLOWED_AUDIO_TYPES = new Set([
 ]);
 
 const app = new Hono();
+const ENGLISH_ONLY_MODEL = 'small.en';
 
 app.post('/api/transcribe', rateLimitTranscribe, async (c) => {
   try {
@@ -91,12 +92,7 @@ app.get('/api/transcribe/config', (c) => {
     replicateKeySet: !!config.replicateApiToken,
     hasGpu,
     availableModels: {
-      'tiny.en':  { size: '75MB',  ready: isModelAvailable('tiny.en'),  multilingual: false },
-      'base.en':  { size: '142MB', ready: isModelAvailable('base.en'),  multilingual: false },
-      'small.en': { size: '466MB', ready: isModelAvailable('small.en'), multilingual: false },
-      'tiny':     { size: '75MB',  ready: isModelAvailable('tiny'),     multilingual: true },
-      'base':     { size: '142MB', ready: isModelAvailable('base'),     multilingual: true },
-      'small':    { size: '466MB', ready: isModelAvailable('small'),    multilingual: true },
+      [ENGLISH_ONLY_MODEL]: { size: '466MB', ready: isModelAvailable(ENGLISH_ONLY_MODEL), multilingual: false },
     },
     download: download ? {
       model: download.model,
@@ -121,6 +117,9 @@ app.put('/api/transcribe/config', async (c) => {
 
     // Switch model
     if (body.model) {
+      if (body.model !== ENGLISH_ONLY_MODEL) {
+        return c.text(`Nerve voice input is locked to ${ENGLISH_ONLY_MODEL} for English-only transcription.`, 400);
+      }
       const result = await setWhisperModel(body.model);
       if (!result.ok) return c.text(result.message, 400);
       messages.push(result.message);

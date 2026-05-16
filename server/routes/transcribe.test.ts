@@ -51,8 +51,8 @@ describe('transcribe routes', () => {
     }));
     vi.doMock('../services/whisper-local.js', () => ({
       transcribeLocal: vi.fn(async () => ({ ok: true, text: 'local transcription' })),
-      isModelAvailable: vi.fn((model?: string) => !model || model === 'base.en'),
-      getActiveModel: vi.fn(() => 'base.en'),
+      isModelAvailable: vi.fn((model?: string) => !model || model === 'small.en'),
+      getActiveModel: vi.fn(() => 'small.en'),
       setWhisperModel: vi.fn(async (model: string) => {
         if (model === 'bad-model') return { ok: false, message: 'Unknown model' };
         return { ok: true, message: `Model set to ${model}` };
@@ -77,9 +77,10 @@ describe('transcribe routes', () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
       expect(json.provider).toBe('local');
-      expect(json.model).toBe('base.en');
+      expect(json.model).toBe('small.en');
       expect(json.language).toBe('en');
       expect(json).toHaveProperty('availableModels');
+      expect(Object.keys(json.availableModels as Record<string, unknown>)).toEqual(['small.en']);
       expect(json).toHaveProperty('hasGpu');
     });
 
@@ -139,6 +140,31 @@ describe('transcribe routes', () => {
         body: JSON.stringify({ model: 'bad-model' }),
       });
       expect(res.status).toBe(400);
+    });
+
+    it('rejects non-small.en model changes', async () => {
+      mockDeps();
+      const app = await buildApp();
+      const res = await app.request('/api/transcribe/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'base.en' }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('small.en');
+    });
+
+    it('accepts the locked small.en model', async () => {
+      mockDeps();
+      const app = await buildApp();
+      const res = await app.request('/api/transcribe/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'small.en' }),
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.model).toBe('small.en');
     });
 
     it('returns 400 for invalid JSON', async () => {
@@ -234,8 +260,8 @@ describe('transcribe routes', () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as { languages: Array<Record<string, unknown>>; currentModel: string; isMultilingual: boolean };
       expect(Array.isArray(json.languages)).toBe(true);
-      expect(json.currentModel).toBe('base.en');
-      expect(json.isMultilingual).toBe(false);  // base.en ends with .en
+      expect(json.currentModel).toBe('small.en');
+      expect(json.isMultilingual).toBe(false);  // small.en ends with .en
     });
   });
 });

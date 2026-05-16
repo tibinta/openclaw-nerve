@@ -101,7 +101,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem('nerve:sttInputMode') as STTInputMode | null;
     return saved === 'browser' || saved === 'local' || saved === 'hybrid' ? saved : 'hybrid';
   });
-  const [sttModel, setSttModelState] = useState(() => localStorage.getItem('oc-stt-model') || 'base');
+  const [sttModel, setSttModelState] = useState(() => localStorage.getItem('oc-stt-model') || 'small.en');
   const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const [liveTranscriptionPreview, setLiveTranscriptionPreview] = useState(() => {
     const saved = localStorage.getItem('nerve:liveTranscriptionPreview');

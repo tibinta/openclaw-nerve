@@ -23,7 +23,7 @@ const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`;
 
 import { getTTSConfig, resolveEdgeTTSVoice } from '../lib/tts-config.js';
 
-const DEFAULT_VOICE = 'en-US-AriaNeural';
+const DEFAULT_VOICE = 'en-GB-SoniaNeural';
 
 // Windows epoch offset: seconds between 1601-01-01 and 1970-01-01
 const WIN_EPOCH = 11644473600;

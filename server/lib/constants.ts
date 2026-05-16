@@ -42,8 +42,8 @@ export const WHISPER_MODEL_FILES: Record<string, string> = {
   'small':    'ggml-small.bin',
 };
 
-// New installs default to multilingual base for better multilingual accuracy.
-export const WHISPER_DEFAULT_MODEL = 'base';
+// New installs default to English-only small.en for faster browser-backed transcription.
+export const WHISPER_DEFAULT_MODEL = 'small.en';
 
 // ─── Language registry ───────────────────────────────────────────────────────
 
@@ -63,7 +63,7 @@ export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
   {
     code: 'en', name: 'English', nativeName: 'English',
     whisperCode: 'en',
-    edgeTtsVoices: { female: 'en-US-AriaNeural', male: 'en-US-GuyNeural' },
+    edgeTtsVoices: { female: 'en-GB-SoniaNeural', male: 'en-GB-RyanNeural' },
     qwen3Language: 'English',
   },
   {

@@ -72,7 +72,7 @@ const DEFAULTS: TTSVoiceConfig = {
       'Speak naturally and conversationally, like a real person. Warm, friendly tone with a slight British accent. Keep it casual and relaxed, not robotic or overly formal.',
   },
   edge: {
-    voice: 'en-US-AriaNeural',
+    voice: 'en-GB-SoniaNeural',
   },
   xiaomi: {
     model: 'mimo-v2-tts',

@@ -9,7 +9,7 @@ interface MockLanguageEntry {
 
 const MOCK_LANGUAGES: Record<string, MockLanguageEntry> = {
   en: {
-    edgeTtsVoices: { female: 'en-US-AriaNeural', male: 'en-US-GuyNeural' },
+    edgeTtsVoices: { female: 'en-GB-SoniaNeural', male: 'en-GB-RyanNeural' },
   },
   tr: {
     edgeTtsVoices: { female: 'tr-TR-EmelNeural', male: 'tr-TR-AhmetNeural' },
@@ -57,6 +57,17 @@ async function loadTtsModule(opts: {
 }
 
 describe('getTTSConfig', () => {
+  it('defaults English Edge voice to Sonia GB when config file is missing', async () => {
+    const mod = await loadTtsModule({
+      language: 'en',
+      edgeVoiceGender: 'female',
+      storedVoice: 'en-GB-SoniaNeural',
+    });
+
+    const cfg = mod.getTTSConfig();
+    expect(cfg.edge.voice).toBe('en-GB-SoniaNeural');
+  });
+
   it('returns Xiaomi defaults when config file is missing', async () => {
     const mod = await loadTtsModule({
       language: 'en',

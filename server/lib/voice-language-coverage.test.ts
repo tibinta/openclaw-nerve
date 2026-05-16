@@ -7,8 +7,13 @@ describe('server multilingual voice phrase coverage', () => {
     expect(DEFAULT_LANGUAGE).toBe('en');
   });
 
-  it('should default local whisper model to base', () => {
-    expect(WHISPER_DEFAULT_MODEL).toBe('base');
+  it('should default local whisper model to small.en', () => {
+    expect(WHISPER_DEFAULT_MODEL).toBe('small.en');
+  });
+
+  it('should default English Edge voice to Sonia GB', () => {
+    const english = SUPPORTED_LANGUAGES.find((language) => language.code === 'en');
+    expect(english?.edgeTtsVoices.female).toBe('en-GB-SoniaNeural');
   });
 
   it('should provide stop and cancel defaults for every supported language', () => {
