@@ -247,6 +247,7 @@ export function useVoiceInput(
   // Track pending timeouts for cleanup
   const pendingTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const silenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transcriptPauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silenceAudioContextRef = useRef<AudioContext | null>(null);
   const startRef = useRef<() => Promise<void> | void>(() => undefined);
   const discardRef = useRef<() => void>(() => undefined);
@@ -330,13 +331,33 @@ export function useVoiceInput(
     }
   }, [stopSilenceWatcher]);
 
+  const clearTranscriptPauseTimer = useCallback(() => {
+    if (transcriptPauseTimeoutRef.current) {
+      clearTimeout(transcriptPauseTimeoutRef.current);
+      transcriptPauseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleTranscriptPauseStop = useCallback(() => {
+    clearTranscriptPauseTimer();
+    const pauseMs = autoStopAfterSilenceMsRef.current;
+    if (!pauseMs || pauseMs <= 0) return;
+    transcriptPauseTimeoutRef.current = setTimeout(() => {
+      transcriptPauseTimeoutRef.current = null;
+      if (stateRef.current === 'recording') {
+        stopRef.current();
+      }
+    }, pauseMs);
+  }, [clearTranscriptPauseTimer]);
+
   const stopStream = useCallback(() => {
+    clearTranscriptPauseTimer();
     stopSilenceWatcher();
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     mediaRecorderRef.current = null;
     chunksRef.current = [];
-  }, [stopSilenceWatcher]);
+  }, [clearTranscriptPauseTimer, stopSilenceWatcher]);
 
   const resetBrowserTranscript = useCallback(() => {
     browserTranscriptRef.current = '';
@@ -392,6 +413,7 @@ export function useVoiceInput(
             browserTranscriptRef.current = cleaned;
             lastNonEmptyTranscriptRef.current = cleaned;
             setInterimTranscript(cleaned);
+            scheduleTranscriptPauseStop();
           }
         }
 
@@ -456,7 +478,7 @@ export function useVoiceInput(
       }
     }, 200);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- refs are stable, deps are intentionally minimal to avoid recreation
-  }, [trackedTimeout]);
+  }, [scheduleTranscriptPauseStop, trackedTimeout]);
 
   const ensureRecognitionRef = useRef(ensureRecognition);
   ensureRecognitionRef.current = ensureRecognition;
@@ -521,6 +543,7 @@ export function useVoiceInput(
 
   const doDiscard = useCallback(() => {
     setInterimTranscript('');
+    clearTranscriptPauseTimer();
     resetBrowserTranscript();
     wakeTriggeredRef.current = false;
     intentionalStopRef.current = true;
@@ -538,7 +561,7 @@ export function useVoiceInput(
     } else {
       setVoiceState('idle');
     }
-  }, [resetBrowserTranscript, stopStream, setVoiceState]);
+  }, [clearTranscriptPauseTimer, resetBrowserTranscript, stopStream, setVoiceState]);
 
   const transcribeWithBackend = useCallback(async (blob: Blob) => {
     const fd = new FormData();
@@ -564,6 +587,7 @@ export function useVoiceInput(
     const mr = mediaRecorderRef.current;
     if (!mr || mr.state !== 'recording') return;
     setInterimTranscript('');
+    clearTranscriptPauseTimer();
     wakeTriggeredRef.current = false;
     intentionalStopRef.current = true;
     try {
@@ -620,7 +644,7 @@ export function useVoiceInput(
     };
     try { mr.requestData?.(); } catch { /* Some browsers only emit on stop. */ }
     mr.stop();
-  }, [resetBrowserTranscript, stopStream, setVoiceState, transcribeWithBackend, waitForBrowserTranscript]);
+  }, [clearTranscriptPauseTimer, resetBrowserTranscript, stopStream, setVoiceState, transcribeWithBackend, waitForBrowserTranscript]);
 
   const startWakeWordListener = useCallback(async () => {
     if (!wakeWordSupported) {
@@ -771,6 +795,7 @@ export function useVoiceInput(
       timers.clear();
       wakeWordEnabledRef.current = false;
       intentionalStopRef.current = true;
+      clearTranscriptPauseTimer();
       try { recognitionRef.current?.abort(); } catch { /* already stopped */ }
       recognitionRef.current = null;
       if (mediaRecorderRef.current?.state === 'recording') {
@@ -778,7 +803,7 @@ export function useVoiceInput(
       }
       stopStream();
     };
-  }, [stopStream]);
+  }, [clearTranscriptPauseTimer, stopStream]);
 
   return {
     voiceState: state,

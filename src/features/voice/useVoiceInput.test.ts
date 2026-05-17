@@ -535,6 +535,27 @@ describe('useVoiceInput', () => {
       expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
     });
 
+    it('auto-sends after the browser transcript pauses even if raw mic stays active', async () => {
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'browser', 500));
+
+      await act(async () => {
+        await result.current.startRecording();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      act(() => {
+        mockRecognition?.simulateResult('second turn text', false);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(650);
+      });
+
+      expect(result.current.voiceState).toBe('idle');
+      expect(onTranscription).toHaveBeenCalledWith('second turn text');
+    });
+
     it('should handle transcription API errors gracefully', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       (globalThis.fetch as Mock).mockResolvedValue({
