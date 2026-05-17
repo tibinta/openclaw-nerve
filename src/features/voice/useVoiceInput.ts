@@ -402,7 +402,10 @@ export function useVoiceInput(
       const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       mediaRecorderRef.current = mr;
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mr.start();
+      // Ask the browser for periodic chunks. Safari/WebKit can lose the final
+      // blob when recording is stopped while speech recognition is also ending;
+      // timesliced chunks give us recoverable audio before the stop edge.
+      mr.start(1000);
       setError(null);
       setVoiceState('recording');
       // Now start listening for stop phrases
@@ -518,6 +521,7 @@ export function useVoiceInput(
         setVoiceState('idle');
       }
     };
+    try { mr.requestData?.(); } catch { /* Some browsers only emit on stop. */ }
     mr.stop();
   }, [resetBrowserTranscript, stopStream, setVoiceState, transcribeWithBackend, waitForBrowserTranscript]);
 

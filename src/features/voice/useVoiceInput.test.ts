@@ -65,8 +65,14 @@ class MockMediaRecorder {
     MockMediaRecorder.instances.push(this);
   }
 
-  start() {
+  start(_timeslice?: number) {
     this.state = 'recording';
+  }
+
+  requestData() {
+    if (this.state === 'recording') {
+      this.ondataavailable?.({ data: new Blob(['test'], { type: 'audio/webm' }) });
+    }
   }
 
   stop() {

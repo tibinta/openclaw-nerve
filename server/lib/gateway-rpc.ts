@@ -120,8 +120,11 @@ function buildConnectParams(nonce: string) {
   const token = config.gatewayToken;
 
   return {
-    minProtocol: 3,
-    maxProtocol: 3,
+    // OpenClaw 2026.5.12 requires protocol 4. The browser client already
+    // uses v4; keeping the server RPC helper aligned avoids noisy reconnect
+    // loops and `protocol mismatch` gateway warnings.
+    minProtocol: 4,
+    maxProtocol: 4,
     client: {
       id: clientId,
       version: '0.1.0',
