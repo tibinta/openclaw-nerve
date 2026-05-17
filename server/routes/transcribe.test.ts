@@ -101,6 +101,13 @@ describe('transcribe routes', () => {
       expect(normalizeTranscribeResponseText('[BLANK_AUDIO]')).toBe('');
       expect({ text: normalizeTranscribeResponseText('[BLANK_AUDIO]') }).toEqual({ text: '' });
     });
+
+    it('normalizes webm opus MIME parameters from live browser recording', async () => {
+      mockDeps();
+      const { normalizeAudioMimeType } = await import('./transcribe.js');
+      expect(normalizeAudioMimeType('audio/webm; codecs=opus')).toBe('audio/webm');
+      expect(normalizeAudioMimeType(' Audio/WEBM ; codecs=opus ')).toBe('audio/webm');
+    });
   });
 
   describe('PUT /api/transcribe/config', () => {

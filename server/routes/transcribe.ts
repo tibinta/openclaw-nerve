@@ -35,6 +35,10 @@ const ALLOWED_AUDIO_TYPES = new Set([
 const app = new Hono();
 const ENGLISH_ONLY_MODEL = 'small.en';
 
+export function normalizeAudioMimeType(mimeType: string): string {
+  return (mimeType || '').split(';', 1)[0].trim().toLowerCase();
+}
+
 /** Keep the public response shape stable while collapsing no-speech sentinels. */
 export function normalizeTranscribeResponseText(text: string): string {
   return normalizeVoiceTranscript(text || '');
@@ -53,7 +57,8 @@ app.post('/api/transcribe', rateLimitTranscribe, async (c) => {
       return c.text(`File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)`, 413);
     }
 
-    if (file.type && !ALLOWED_AUDIO_TYPES.has(file.type)) {
+    const audioMimeType = normalizeAudioMimeType(file.type);
+    if (audioMimeType && !ALLOWED_AUDIO_TYPES.has(audioMimeType)) {
       return c.text(`Unsupported audio format: ${file.type}`, 415);
     }
 
@@ -68,7 +73,7 @@ app.post('/api/transcribe', rateLimitTranscribe, async (c) => {
       if (!config.openaiApiKey) {
         return c.text('OpenAI API key not configured. Set OPENAI_API_KEY in .env or switch to STT_PROVIDER=local', 500);
       }
-      result = await transcribeOpenAI(fileData, filename, file.type || 'audio/webm', lang);
+      result = await transcribeOpenAI(fileData, filename, audioMimeType || 'audio/webm', lang);
     } else {
       result = await transcribeLocal(fileData, filename, lang);
     }
