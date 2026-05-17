@@ -57,6 +57,7 @@ class MockSpeechRecognition {
 class MockMediaRecorder {
   static instances: MockMediaRecorder[] = [];
   state: 'inactive' | 'recording' | 'paused' = 'inactive';
+  mimeType = 'audio/webm';
   ondataavailable: ((e: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
 
@@ -87,6 +88,33 @@ class MockMediaRecorder {
 class MockMediaStream {
   getTracks() {
     return [{ stop: vi.fn() }];
+  }
+}
+
+class MockAnalyser {
+  fftSize = 1024;
+  calls = 0;
+
+  getByteTimeDomainData(samples: Uint8Array) {
+    this.calls += 1;
+    const loud = this.calls <= 2;
+    for (let i = 0; i < samples.length; i += 1) {
+      samples[i] = loud ? (i % 2 === 0 ? 80 : 176) : 128;
+    }
+  }
+}
+
+class MockAudioContext {
+  createMediaStreamSource() {
+    return { connect: vi.fn() };
+  }
+
+  createAnalyser() {
+    return new MockAnalyser();
+  }
+
+  close() {
+    return Promise.resolve();
   }
 }
 
@@ -134,6 +162,7 @@ describe('useVoiceInput', () => {
 
     // Mock MediaRecorder on window
     (window as unknown as { MediaRecorder: typeof MockMediaRecorder }).MediaRecorder = MockMediaRecorder;
+    (window as unknown as { AudioContext: typeof MockAudioContext }).AudioContext = MockAudioContext;
 
     // Mock getUserMedia
     (navigator as unknown as { mediaDevices: { getUserMedia: Mock } }).mediaDevices = {
@@ -178,6 +207,7 @@ describe('useVoiceInput', () => {
     globalThis.fetch = originalFetch;
     delete (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition;
     delete (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+    delete (window as unknown as { AudioContext?: unknown }).AudioContext;
   });
 
   describe('Initial State', () => {
@@ -483,6 +513,26 @@ describe('useVoiceInput', () => {
           credentials: 'include',
         })
       );
+    });
+
+    it('auto-sends after a speech pause when live silence stop is enabled', async () => {
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'local', 500));
+
+      await act(async () => {
+        await result.current.startRecording();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      expect(result.current.voiceState).toBe('recording');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1800);
+      });
+
+      expect(result.current.voiceState).toBe('idle');
+      expect(onTranscription).toHaveBeenCalledWith('transcribed text');
+      expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
     });
 
     it('should handle transcription API errors gracefully', async () => {

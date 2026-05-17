@@ -503,7 +503,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     setDraftText('');
     onSend('[voice] ' + text);
-  }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode);
+  }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? 1100 : undefined);
   const wasGeneratingRef = useRef(isGenerating);
 
   useEffect(() => {
@@ -1331,7 +1331,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground px-4 pb-1.5 pl-10 bg-card">
         <span>
           {voiceState === 'recording'
-            ? 'Recording… tap mic to send'
+            ? continuousVoiceEnabled ? 'Recording… pause to send' : 'Recording… tap mic to send'
             : voiceState === 'transcribing'
             ? 'Transcribing…'
             : continuousVoiceEnabled

@@ -46,6 +46,12 @@ export function invalidatePhrasesCache(): void {
 }
 
 const WAKE_WORD_KEY = 'nerve:wakeWordEnabled';
+const SILENCE_RMS_THRESHOLD = 0.018;
+const SILENCE_CHECK_MS = 200;
+const SILENCE_MIN_RECORDING_MS = 900;
+const SILENCE_NO_SPEECH_LIMIT_MS = 10000;
+
+type BrowserAudioContext = typeof AudioContext;
 
 function getSupportedRecordingMimeType(): string | undefined {
   const candidates = [
@@ -159,6 +165,7 @@ export function useVoiceInput(
   language: string = 'en',
   phrasesVersion: number = 0,
   sttInputMode: STTInputMode = 'hybrid',
+  autoStopAfterSilenceMs?: number,
 ) {
   const [state, setState] = useState<VoiceState>('idle');
   const stateRef = useRef<VoiceState>('idle');
@@ -173,6 +180,8 @@ export function useVoiceInput(
   onTranscriptionRef.current = onTranscription;
   const sttInputModeRef = useRef(sttInputMode);
   sttInputModeRef.current = sttInputMode;
+  const autoStopAfterSilenceMsRef = useRef(autoStopAfterSilenceMs);
+  autoStopAfterSilenceMsRef.current = autoStopAfterSilenceMs;
 
   // Single persistent recognition instance
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -237,6 +246,11 @@ export function useVoiceInput(
   const modeRef = useRef<'wake' | 'stop'>('wake');
   // Track pending timeouts for cleanup
   const pendingTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const silenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const silenceAudioContextRef = useRef<AudioContext | null>(null);
+  const startRef = useRef<() => Promise<void> | void>(() => undefined);
+  const discardRef = useRef<() => void>(() => undefined);
+  const stopRef = useRef<() => void>(() => undefined);
 
   const setVoiceState = useCallback((s: VoiceState) => {
     stateRef.current = s;
@@ -252,12 +266,77 @@ export function useVoiceInput(
     return id;
   }, []);
 
+  const stopSilenceWatcher = useCallback(() => {
+    if (silenceIntervalRef.current) {
+      clearInterval(silenceIntervalRef.current);
+      silenceIntervalRef.current = null;
+    }
+    if (silenceAudioContextRef.current) {
+      void silenceAudioContextRef.current.close().catch(() => undefined);
+      silenceAudioContextRef.current = null;
+    }
+  }, []);
+
+  const startSilenceWatcher = useCallback((stream: MediaStream) => {
+    stopSilenceWatcher();
+    const pauseMs = autoStopAfterSilenceMsRef.current;
+    if (!pauseMs || pauseMs <= 0) return;
+
+    const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: BrowserAudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    try {
+      const audioContext = new AudioContextCtor();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      silenceAudioContextRef.current = audioContext;
+
+      const samples = new Uint8Array(analyser.fftSize);
+      const startedAt = Date.now();
+      let heardSpeech = false;
+      let quietSince: number | null = null;
+
+      silenceIntervalRef.current = setInterval(() => {
+        if (stateRef.current !== 'recording') return;
+        analyser.getByteTimeDomainData(samples);
+        let total = 0;
+        for (let i = 0; i < samples.length; i += 1) {
+          const centered = (samples[i] - 128) / 128;
+          total += centered * centered;
+        }
+        const rms = Math.sqrt(total / samples.length);
+        const now = Date.now();
+        const isQuiet = rms < SILENCE_RMS_THRESHOLD;
+
+        if (!isQuiet) {
+          heardSpeech = true;
+          quietSince = null;
+          return;
+        }
+
+        if (!quietSince) quietSince = now;
+        const longEnough = now - startedAt >= SILENCE_MIN_RECORDING_MS;
+        const pauseReached = heardSpeech && now - quietSince >= pauseMs;
+        const noSpeechTimeout = !heardSpeech && now - startedAt >= SILENCE_NO_SPEECH_LIMIT_MS;
+        if (longEnough && (pauseReached || noSpeechTimeout)) {
+          stopRef.current();
+        }
+      }, SILENCE_CHECK_MS);
+    } catch (err) {
+      console.warn('[VOICE] silence watcher unavailable:', err);
+      stopSilenceWatcher();
+    }
+  }, [stopSilenceWatcher]);
+
   const stopStream = useCallback(() => {
+    stopSilenceWatcher();
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     mediaRecorderRef.current = null;
     chunksRef.current = [];
-  }, []);
+  }, [stopSilenceWatcher]);
 
   const resetBrowserTranscript = useCallback(() => {
     browserTranscriptRef.current = '';
@@ -422,6 +501,7 @@ export function useVoiceInput(
       // blob when recording is stopped while speech recognition is also ending;
       // timesliced chunks give us recoverable audio before the stop edge.
       mr.start(1000);
+      startSilenceWatcher(stream);
       setError(null);
       setVoiceState('recording');
       // Now start listening for stop phrases
@@ -437,7 +517,7 @@ export function useVoiceInput(
         ensureRecognitionRef.current('wake');
       }
     }
-  }, [resetBrowserTranscript, setVoiceState]);
+  }, [resetBrowserTranscript, setVoiceState, startSilenceWatcher]);
 
   const doDiscard = useCallback(() => {
     setInterimTranscript('');
@@ -495,7 +575,7 @@ export function useVoiceInput(
 
     setVoiceState('transcribing');
     mr.onstop = async () => {
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      const blob = new Blob(chunksRef.current, { type: mr.mimeType || chunksRef.current[0]?.type || 'audio/webm' });
       stopStream();
       try {
         const browserRecognitionSupported = Boolean(getSpeechRecognition());
@@ -637,9 +717,6 @@ export function useVoiceInput(
   }, []);
 
   // Double-tap left Shift support
-  const startRef = useRef(doStartRecording);
-  const discardRef = useRef(doDiscard);
-  const stopRef = useRef(doStopAndTranscribe);
   startRef.current = doStartRecording;
   discardRef.current = doDiscard;
   stopRef.current = doStopAndTranscribe;
