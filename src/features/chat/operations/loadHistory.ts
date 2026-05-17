@@ -189,8 +189,9 @@ export function filterMessage(m: ChatMessage): boolean {
 /** Matches "System: [2026-02-17 20:30:23 GMT+1] ..." lines injected by the gateway. */
 const SYSTEM_EVENT_LINE = /^System: \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? [^\]]*\]/;
 
-/** Strip the TTS system prompt hint appended to voice messages by sendMessage. */
+/** Strip legacy and current TTS prompt contracts appended to voice messages by sendMessage. */
 const TTS_SYSTEM_HINT_RE = /\s*\[system: User sent a voice message\.[\s\S]*$/;
+const TTS_CONTRACT_HINT_RE = /\s*<openclaw-voice-reply-contract>[\s\S]*?<\/openclaw-voice-reply-contract>/g;
 
 /**
  * Strip the "Conversation info (untrusted metadata)" envelope that the OpenClaw
@@ -372,10 +373,13 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
   // Strip gateway decorations from user messages
   let isVoice = false;
   if (m.role === 'user') {
+    isVoice = TTS_CONTRACT_HINT_RE.test(rawText);
+    TTS_CONTRACT_HINT_RE.lastIndex = 0;
+    rawText = rawText.replace(TTS_CONTRACT_HINT_RE, '');
     rawText = rawText.replace(TTS_SYSTEM_HINT_RE, '');
     rawText = rawText.replace(WEBCHAT_ENVELOPE_RE, '');
     // Detect voice messages before stripping the marker
-    isVoice = /\[voice\]\s/.test(rawText);
+    isVoice = isVoice || /\[voice\]\s/.test(rawText);
     // Strip the [voice] prefix tag (internal marker for TTS hint injection)
     rawText = rawText.replace(/^\[voice\]\s*/, '');
     // After all decorations are removed, a voice-only message with no

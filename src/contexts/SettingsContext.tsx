@@ -7,6 +7,13 @@ import { type FontName, applyFont, fontNames } from '@/lib/fonts';
 export type STTProvider = 'local' | 'openai';
 export type STTInputMode = 'browser' | 'local' | 'hybrid';
 
+interface TTSVoiceConfigSnapshot {
+  openai?: { voice?: string; model?: string };
+  edge?: { voice?: string };
+  qwen?: { speaker?: string };
+  xiaomi?: { voice?: string; model?: string };
+}
+
 interface SettingsContextValue {
   soundEnabled: boolean;
   toggleSound: () => void;
@@ -93,6 +100,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [soundEnabled, setSoundEnabled] = useState(localStorage.getItem('oc-sound') === 'true');
   const [ttsProvider, setTtsProvider] = useState<TTSProvider>(() => migrateTTSProvider(localStorage.getItem('oc-tts-provider') || 'edge'));
   const [ttsModel, setTtsModelState] = useState(() => localStorage.getItem('oc-tts-model') || '');
+  const [ttsVoiceConfig, setTtsVoiceConfig] = useState<TTSVoiceConfigSnapshot | null>(null);
   const [sttProvider, setSttProviderState] = useState<STTProvider>(() => {
     const saved = localStorage.getItem('oc-stt-provider') as STTProvider | null;
     return saved === 'openai' ? 'openai' : 'local';
@@ -142,8 +150,35 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   });
   // TTS is separate from small UI pings: voice replies with [tts: ...]
   // should still speak when "Sound effects" is off.
-  const { speak } = useTTS(true, ttsProvider, ttsModel || undefined);
+  const selectedTtsVoice =
+    ttsProvider === 'openai' ? ttsVoiceConfig?.openai?.voice :
+      ttsProvider === 'edge' ? ttsVoiceConfig?.edge?.voice :
+        ttsProvider === 'xiaomi' ? ttsVoiceConfig?.xiaomi?.voice :
+          ttsVoiceConfig?.qwen?.speaker;
+  const selectedTtsModel = ttsProvider === 'xiaomi'
+    ? (ttsModel || ttsVoiceConfig?.xiaomi?.model)
+    : (ttsModel || ttsVoiceConfig?.openai?.model);
+  const { speak } = useTTS(true, ttsProvider, { model: selectedTtsModel || undefined, voice: selectedTtsVoice || undefined });
   const wakeWordToggleRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/tts/config')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!cancelled && data) setTtsVoiceConfig(data);
+      })
+      .catch(() => undefined);
+
+    const handleConfigChanged = (event: Event) => {
+      setTtsVoiceConfig((event as CustomEvent<TTSVoiceConfigSnapshot>).detail);
+    };
+    window.addEventListener('nerve:tts-config-changed', handleConfigChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('nerve:tts-config-changed', handleConfigChanged);
+    };
+  }, []);
 
   // Apply theme on mount and when it changes
   useEffect(() => {

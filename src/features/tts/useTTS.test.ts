@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractTTSMarkers, migrateTTSProvider } from './useTTS';
+import { buildTTSRequestBody, extractTTSMarkers, migrateTTSProvider } from './useTTS';
 
 describe('extractTTSMarkers', () => {
   it('should extract a single TTS marker', () => {
@@ -107,5 +107,23 @@ describe('migrateTTSProvider', () => {
   it('should default unknown values to "openai"', () => {
     expect(migrateTTSProvider('unknown')).toBe('openai');
     expect(migrateTTSProvider('')).toBe('openai');
+  });
+});
+
+describe('buildTTSRequestBody', () => {
+  it('includes provider and text by default', () => {
+    expect(buildTTSRequestBody('Hello', 'edge')).toEqual({
+      text: 'Hello',
+      provider: 'edge',
+    });
+  });
+
+  it('includes selected model and voice when provided', () => {
+    expect(buildTTSRequestBody('Hello', 'openai', { model: 'gpt-4o-mini-tts', voice: 'marin' })).toEqual({
+      text: 'Hello',
+      provider: 'openai',
+      model: 'gpt-4o-mini-tts',
+      voice: 'marin',
+    });
   });
 });

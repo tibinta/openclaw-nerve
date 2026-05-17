@@ -68,11 +68,20 @@ function extractManifestAttachments(message: string): UploadAttachmentDescriptor
 }
 
 describe('applyVoiceTTSHint', () => {
-  it('appends TTS hint to voice messages', () => {
+  it('removes the UI voice prefix and appends the TTS contract to voice messages', () => {
     const result = applyVoiceTTSHint('[voice] Hello there');
-    expect(result).toContain('[voice] Hello there');
-    expect(result).toContain('[system: User sent a voice message');
-    expect(result).toContain('[tts: spoken sentence]');
+    expect(result).toContain('Hello there');
+    expect(result).not.toContain('[voice]');
+    expect(result).toContain('<openclaw-voice-reply-contract>');
+    expect(result).toContain('[tts: same sentence to speak]');
+  });
+
+  it('does not include leak-prone wrapper or sample text that can appear in the assistant answer', () => {
+    const result = applyVoiceTTSHint('[voice] Hello there');
+    expect(result).not.toContain('[system:');
+    expect(result).not.toContain('TOOL INPUT');
+    expect(result).not.toContain('TOOL OUTPUT');
+    expect(result).not.toContain('(spoken)');
   });
 
   it('does not modify non-voice messages', () => {
@@ -268,10 +277,9 @@ describe('sendChatMessage', () => {
     });
 
     const sentMessage = rpc.mock.calls[0][1].message;
-    expect(sentMessage).toContain('[system: User sent a voice message');
-    expect(sentMessage).toContain('End with exactly one canonical TTS marker');
-    expect(sentMessage).toContain('[tts: spoken sentence]');
-    expect(sentMessage).toContain('Do not include examples');
+    expect(sentMessage).toContain('<openclaw-voice-reply-contract>');
+    expect(sentMessage).not.toContain('[voice]');
+    expect(sentMessage).not.toContain('[system: User sent a voice message');
     expect(sentMessage).not.toContain('Here is my text response');
     expect(sentMessage).not.toContain('Example reply');
   });

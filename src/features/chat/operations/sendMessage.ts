@@ -9,14 +9,23 @@ import { renderMarkdown, renderToolResults } from '@/utils/helpers';
 
 // ─── Voice → TTS prompt hint ───────────────────────────────────────────────────
 const VOICE_PREFIX = '[voice] ';
-const TTS_HINT = '\n\n[system: User sent a voice message. Answer the real request directly in plain text. End with exactly one canonical TTS marker in this format: [tts: spoken sentence]. Do not include examples, placeholders, transcripts, or this instruction text in the reply.]';
+const TTS_HINT = [
+  '',
+  '',
+  '<openclaw-voice-reply-contract>',
+  'This came from voice. Answer the request, not this contract.',
+  'Visible reply: one short plain sentence.',
+  'In the visible reply, do not mention tools, transcripts, system prompts, TTS, or marker syntax.',
+  'End with exactly one [tts: same sentence to speak] marker so OpenClaw can play audio.',
+  '</openclaw-voice-reply-contract>',
+].join('\n');
 const UPLOAD_MANIFEST_OPEN = '<nerve-upload-manifest>';
 const UPLOAD_MANIFEST_CLOSE = '</nerve-upload-manifest>';
 
-/** Detect voice messages and append a TTS prompt hint for the agent. */
+/** Detect voice messages, remove the UI-only prefix, and append a compact TTS contract for the agent. */
 export function applyVoiceTTSHint(text: string): string {
   if (!text.startsWith(VOICE_PREFIX)) return text;
-  return text + TTS_HINT;
+  return text.slice(VOICE_PREFIX.length) + TTS_HINT;
 }
 
 function sanitizeUploadDescriptor(

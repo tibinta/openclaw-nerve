@@ -67,6 +67,7 @@ export function useTTSConfig(): UseTTSConfigReturn {
       })
       .then((updated) => {
         setConfig(updated);
+        window.dispatchEvent(new CustomEvent('nerve:tts-config-changed', { detail: updated }));
         setSaved(true);
         clearTimeout(savedTimer.current);
         savedTimer.current = setTimeout(() => setSaved(false), 1500);

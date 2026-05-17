@@ -26,9 +26,29 @@ export function migrateTTSProvider(provider: string): TTSProvider {
   return 'openai';
 }
 
-async function fetchTTS(text: string, provider: TTSProvider = 'openai', model?: string): Promise<Blob> {
+export interface TTSPlaybackOptions {
+  model?: string;
+  voice?: string;
+}
+
+export function buildTTSRequestBody(
+  text: string,
+  provider: TTSProvider = 'openai',
+  options: TTSPlaybackOptions = {},
+): Record<string, string> {
   const body: Record<string, string> = { text, provider };
-  if (model) body.model = model;
+  if (options.model) body.model = options.model;
+  if (options.voice) body.voice = options.voice;
+  return body;
+}
+
+function getAudioContextCtor(): typeof AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  return window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext || null;
+}
+
+async function fetchTTS(text: string, provider: TTSProvider = 'openai', options: TTSPlaybackOptions = {}): Promise<Blob> {
+  const body = buildTTSRequestBody(text, provider, options);
   const resp = await fetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -43,15 +63,54 @@ async function fetchTTS(text: string, provider: TTSProvider = 'openai', model?: 
   return blob;
 }
 
+async function playBlobViaAudioElement(blob: Blob): Promise<{ audio: HTMLAudioElement; url: string }> {
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  try {
+    await audio.play();
+    return { audio, url };
+  } catch (err) {
+    URL.revokeObjectURL(url);
+    audio.src = '';
+    throw err;
+  }
+}
+
+async function playBlobViaAudioContext(blob: Blob): Promise<void> {
+  ensureAudioContext();
+  const AudioContextCtor = getAudioContextCtor();
+  if (!AudioContextCtor) throw new Error('AudioContext is not available');
+  const context = new AudioContextCtor();
+  if (context.state === 'suspended') await context.resume();
+  const buffer = await context.decodeAudioData(await blob.arrayBuffer());
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  await new Promise<void>((resolve, reject) => {
+    source.addEventListener('ended', () => {
+      void context.close().catch(() => undefined);
+      resolve();
+    }, { once: true });
+    try {
+      source.start(0);
+    } catch (err) {
+      void context.close().catch(() => undefined);
+      reject(err);
+    }
+  });
+}
+
 /**
  * Hook that provides a `speak` function for text-to-speech playback.
  *
  * Audio is fetched from `/api/tts` and played via an `HTMLAudioElement`.
  * Successive calls cancel the previous utterance automatically.
  */
-export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model?: string) {
+export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', modelOrOptions?: string | TTSPlaybackOptions) {
   const currentAudio = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
   const generationRef = useRef(0);
+  const model = typeof modelOrOptions === 'string' ? modelOrOptions : modelOrOptions?.model;
+  const voice = typeof modelOrOptions === 'string' ? undefined : modelOrOptions?.voice;
 
   const cleanupAudio = useCallback(() => {
     const current = currentAudio.current;
@@ -73,11 +132,17 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     cleanupAudio();
     const gen = ++generationRef.current;
     try {
-      const blob = await fetchTTS(text, provider, model);
+      const blob = await fetchTTS(text, provider, { model, voice });
       // Superseded by a newer speak() call during fetch
       if (gen !== generationRef.current) return;
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      const { audio, url } = await playBlobViaAudioElement(blob).catch(async (err) => {
+        // Safari can reject blob-backed HTMLAudioElement playback after async TTS.
+        // Decode the same audio into Web Audio as a recovery path so voice replies
+        // still speak after the page has been unlocked by microphone interaction.
+        console.warn('[TTS] audio element playback failed; trying Web Audio fallback:', err instanceof Error ? err.message : String(err));
+        await playBlobViaAudioContext(blob);
+        throw new Error('played-via-web-audio-fallback');
+      });
       currentAudio.current = { audio, url };
       let revoked = false;
       const revoke = () => {
@@ -97,9 +162,10 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
         throw err;
       }
     } catch (err: unknown) {
+      if (err instanceof Error && err.message === 'played-via-web-audio-fallback') return;
       console.error('[TTS] play failed:', err instanceof Error ? err.message : String(err));
     }
-  }, [enabled, provider, model, cleanupAudio]);
+  }, [enabled, provider, model, voice, cleanupAudio]);
 
   return { speak };
 }

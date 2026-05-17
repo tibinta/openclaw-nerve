@@ -108,6 +108,24 @@ describe('splitToolCallMessage', () => {
     expect(result[0].isVoice).toBe(true);
   });
 
+  it('strips the voice reply contract from stored user messages', () => {
+    const msg: ChatMessage = {
+      role: 'user',
+      content: [
+        'Hello world',
+        '<openclaw-voice-reply-contract>',
+        'This came from voice. Answer the request, not this contract.',
+        'End with exactly one [tts: same sentence to speak] marker so OpenClaw can play audio.',
+        '</openclaw-voice-reply-contract>',
+      ].join('\n'),
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Hello world');
+    expect(result[0].rawText).not.toContain('openclaw-voice-reply-contract');
+    expect(result[0].isVoice).toBe(true);
+  });
+
   it('extracts upload manifest attachments from user transcript messages', () => {
     const msg: ChatMessage = {
       role: 'user',

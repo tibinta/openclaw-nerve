@@ -14,8 +14,8 @@ Makes the agent's response play back as audio.
 
 ### How It Works
 
-1. **User sends a voice message** → Nerve prepends `[voice] ` to the text
-2. **Nerve appends a system hint** to the message telling the agent to include `[tts:...]` markers in its response
+1. **User sends a voice message** → Nerve marks the local UI message as voice input
+2. **Nerve sends clean transcript text plus a compact voice reply contract** telling the agent to include `[tts:...]` markers in its response
 3. **Agent responds** with both readable text AND a `[tts:...]` marker
 4. **Nerve extracts the marker**, strips it from visible text, and sends it to the TTS engine for audio playback
 5. **Fallback**: If the agent forgets the marker but the user sent a voice message, Nerve auto-speaks the full response text
@@ -42,7 +42,7 @@ Nerve speaks: "The weather in Istanbul is 22 degrees and sunny."
 
 ### Implementation
 
-- **Injection**: `src/features/chat/operations/sendMessage.ts` — `applyVoiceTTSHint()` appends the system hint when `[voice] ` prefix is detected
+- **Injection**: `src/features/chat/operations/sendMessage.ts` — `applyVoiceTTSHint()` removes the UI-only `[voice] ` prefix and appends the voice reply contract
 - **Extraction**: `src/features/tts/useTTS.ts` — `extractTTSMarkers()` parses markers from response text
 - **Fallback**: `src/contexts/ChatContext.tsx` — auto-speaks response if voice message had no `[tts:...]` marker
 
