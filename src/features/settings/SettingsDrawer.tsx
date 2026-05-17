@@ -33,6 +33,8 @@ interface SettingsDrawerProps {
   onToggleWakeWord: () => void;
   liveTranscriptionPreview: boolean;
   onToggleLiveTranscriptionPreview: () => void;
+  continuousVoiceEnabled: boolean;
+  onToggleContinuousVoice: () => void;
   // Agent identity
   agentName?: string;
   // Auth
@@ -87,6 +89,8 @@ export function SettingsDrawer({
   onToggleWakeWord,
   liveTranscriptionPreview,
   onToggleLiveTranscriptionPreview,
+  continuousVoiceEnabled,
+  onToggleContinuousVoice,
   agentName,
   onLogout,
   onGatewayRestart,
@@ -240,6 +244,8 @@ export function SettingsDrawer({
                 onToggleWakeWord={onToggleWakeWord}
                 liveTranscriptionPreview={liveTranscriptionPreview}
                 onToggleLiveTranscriptionPreview={onToggleLiveTranscriptionPreview}
+                continuousVoiceEnabled={continuousVoiceEnabled}
+                onToggleContinuousVoice={onToggleContinuousVoice}
                 agentName={agentName}
               />
             )}

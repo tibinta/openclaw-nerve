@@ -16,6 +16,7 @@ describe('auth routes', () => {
       auth: true,
       passwordHash: '',
       gatewayToken: 'test-token',
+      allowGatewayTokenLogin: true,
       sessionSecret: 'test-secret-key-for-tests-only-1234',
       sessionTtlMs: 86400000,
       port: 3000,
@@ -82,6 +83,20 @@ describe('auth routes', () => {
       const json = (await res.json()) as Record<string, unknown>;
       expect(json.ok).toBe(true);
       expect(res.headers.get('set-cookie')).toContain('nerve_session');
+    });
+
+    it('rejects gateway token fallback when disabled for public exposure', async () => {
+      const app = await buildApp({
+        passwordHash: '',
+        gatewayToken: 'my-secret-token',
+        allowGatewayTokenLogin: false,
+      });
+      const res = await app.request('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'my-secret-token' }),
+      });
+      expect(res.status).toBe(401);
     });
 
     it('accepts valid password with scrypt hash', async () => {

@@ -168,6 +168,8 @@ vi.mock('@/contexts/SettingsContext', () => ({
     handleWakeWordState: vi.fn(),
     liveTranscriptionPreview: false,
     toggleLiveTranscriptionPreview: vi.fn(),
+    continuousVoiceEnabled: false,
+    toggleContinuousVoice: vi.fn(),
     panelRatio: 60,
     setPanelRatio: vi.fn(),
     eventsVisible: false,

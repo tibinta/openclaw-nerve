@@ -63,6 +63,8 @@ const baseProps = {
   onToggleWakeWord: vi.fn(),
   liveTranscriptionPreview: true,
   onToggleLiveTranscriptionPreview: vi.fn(),
+  continuousVoiceEnabled: false,
+  onToggleContinuousVoice: vi.fn(),
   agentName: 'Kim',
   section: 'input' as const,
 };

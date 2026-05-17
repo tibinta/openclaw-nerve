@@ -47,6 +47,19 @@ export function invalidatePhrasesCache(): void {
 
 const WAKE_WORD_KEY = 'nerve:wakeWordEnabled';
 
+function getSupportedRecordingMimeType(): string | undefined {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/aac',
+  ];
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    return undefined;
+  }
+  return candidates.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
 /** Get SpeechRecognition constructor with webkit prefix fallback. */
 function getSpeechRecognition(): SpeechRecognitionConstructor | undefined {
   const w = window as WindowWithSpeechRecognition;
@@ -399,7 +412,10 @@ export function useVoiceInput(
       chunksRef.current = [];
       resetBrowserTranscript();
       setInterimTranscript('');
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      // Safari on iPhone often rejects WebM. Pick the first supported format so
+      // tap-to-talk works through HTTPS tunnels and LAN HTTPS alike.
+      const mimeType = getSupportedRecordingMimeType();
+      const mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       mediaRecorderRef.current = mr;
       mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       // Ask the browser for periodic chunks. Safari/WebKit can lose the final
@@ -446,7 +462,8 @@ export function useVoiceInput(
 
   const transcribeWithBackend = useCallback(async (blob: Blob) => {
     const fd = new FormData();
-    fd.append('file', blob, 'audio.webm');
+    const ext = blob.type.includes('mp4') || blob.type.includes('m4a') || blob.type.includes('aac') ? 'm4a' : 'webm';
+    fd.append('file', blob, `audio.${ext}`);
     const resp = await fetch('/api/transcribe', { method: 'POST', body: fd, credentials: 'include' });
     if (!resp.ok) throw new Error(await resp.text());
     const { text } = await resp.json();

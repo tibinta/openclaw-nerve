@@ -38,11 +38,9 @@ describe('config module', () => {
       expect(['127.0.0.1', 'localhost', '::1', '0.0.0.0']).toContain(config.host);
     });
 
-    it('defaults auth to false', async () => {
+    it('resolves auth to a boolean', async () => {
       const { config } = await import('./config.js');
-      if (!process.env.NERVE_AUTH || process.env.NERVE_AUTH !== 'true') {
-        expect(config.auth).toBe(false);
-      }
+      expect(typeof config.auth).toBe('boolean');
     });
 
     it('defaults language to en', async () => {

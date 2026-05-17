@@ -1,14 +1,15 @@
 /**
- * LoginPage — Full-screen login gate for Nerve authentication.
+ * LoginPage — Full-screen login gate for private access.
  *
- * Renders a password form matching Nerve's dark cockpit theme.
+ * Keeps product details off the public login screen, so tunnel visitors only see
+ * a generic private-access gate before authentication.
  * Supports Enter-to-submit and auto-focuses the password input on mount.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import NerveLogo from '../../components/NerveLogo';
 
 interface LoginPageProps {
   onLogin: (password: string) => Promise<void>;
@@ -42,43 +43,43 @@ export function LoginPage({ onLogin, error }: LoginPageProps) {
         <div className="grid lg:grid-cols-[1.15fr_0.85fr]">
           <div className="border-b border-border/70 bg-gradient-to-br from-background via-card/90 to-secondary/90 px-6 py-8 sm:px-8 lg:border-b-0 lg:border-r">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-background/60">
-              <NerveLogo size={30} />
+              <ShieldCheck aria-hidden="true" className="h-7 w-7 text-primary" />
             </div>
             <div className="mt-6 text-[0.667rem] font-medium uppercase tracking-[0.32em] text-primary/80">
-              Private Cockpit Access
+              Private Access
             </div>
             <h1 className="mt-3 max-w-[12ch] text-4xl font-semibold tracking-[-0.05em] text-foreground sm:text-5xl">
-              Sign in to your agent control surface
+              Sign in
             </h1>
             <p className="mt-4 max-w-[48ch] text-sm leading-6 text-muted-foreground sm:text-base">
-              Nerve is the high visibility workspace for OpenClaw agents. Authenticate once, then manage chats, tasks, files, memory, and telemetry from one place.
+              Use your private access key to continue.
             </p>
 
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               <div className="shell-panel rounded-2xl px-4 py-3">
-                <div className="text-[0.667rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">Sessions</div>
-                <div className="mt-2 text-sm font-medium text-foreground">Live agent context</div>
+                <div className="text-[0.667rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">Secure</div>
+                <div className="mt-2 text-sm font-medium text-foreground">Private session</div>
               </div>
               <div className="shell-panel rounded-2xl px-4 py-3">
-                <div className="text-[0.667rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">Workspace</div>
-                <div className="mt-2 text-sm font-medium text-foreground">Files, memory, and skills</div>
+                <div className="text-[0.667rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">Quiet</div>
+                <div className="mt-2 text-sm font-medium text-foreground">Low clutter</div>
               </div>
               <div className="shell-panel rounded-2xl px-4 py-3">
-                <div className="text-[0.667rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">Telemetry</div>
-                <div className="mt-2 text-sm font-medium text-foreground">Costs, events, and uptime</div>
+                <div className="text-[0.667rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">Ready</div>
+                <div className="mt-2 text-sm font-medium text-foreground">Fast access</div>
               </div>
             </div>
           </div>
 
           <div className="px-6 py-8 sm:px-8">
             <div className="text-[0.667rem] font-medium uppercase tracking-[0.3em] text-primary/80">
-              Authentication Required
+              Locked
             </div>
             <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-foreground">
-              Unlock Nerve
+              Enter key
             </h2>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              Enter the password configured for this deployment. Your gateway token also works if password auth is using the fallback path.
+              This page is private.
             </p>
 
             <form onSubmit={handleSubmit} className="mt-8 space-y-4">
@@ -110,12 +111,12 @@ export function LoginPage({ onLogin, error }: LoginPageProps) {
                 size="lg"
                 className="w-full text-[0.733rem] uppercase tracking-[0.22em]"
               >
-                {submitting ? 'Signing In…' : 'Enter Nerve'}
+                {submitting ? 'Checking…' : 'Continue'}
               </Button>
             </form>
 
             <div className="mt-6 text-xs leading-5 text-muted-foreground">
-              Need to recover access? Check the gateway configuration or deployment notes where the token was originally set.
+              Too many tries will pause access for a short time.
             </div>
           </div>
         </div>

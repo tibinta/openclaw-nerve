@@ -17,7 +17,7 @@ import { rateLimitAuth } from '../middleware/rate-limit.js';
 const app = new Hono();
 
 function matchesGatewayTokenFallback(password: string): boolean {
-  if (config.passwordHash || !config.gatewayToken) {
+  if (config.passwordHash || !config.gatewayToken || !config.allowGatewayTokenLogin) {
     return false;
   }
 

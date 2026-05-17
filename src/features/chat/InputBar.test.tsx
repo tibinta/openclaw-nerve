@@ -26,6 +26,9 @@ vi.mock('@/features/voice/useVoiceInput', () => ({
     interimTranscript: '',
     wakeWordEnabled: false,
     toggleWakeWord: vi.fn(),
+    startRecording: vi.fn(),
+    stopAndTranscribe: vi.fn(),
+    discardRecording: vi.fn(),
     error: null,
     clearError: vi.fn(),
   }),
@@ -60,6 +63,8 @@ vi.mock('@/contexts/SettingsContext', () => ({
     liveTranscriptionPreview: false,
     sttInputMode: 'browser',
     sttProvider: 'browser',
+    continuousVoiceEnabled: false,
+    toggleContinuousVoice: vi.fn(),
   }),
 }));
 

@@ -34,6 +34,8 @@ interface SettingsContextValue {
   handleWakeWordState: (enabled: boolean, toggle: () => void) => void;
   liveTranscriptionPreview: boolean;
   toggleLiveTranscriptionPreview: () => void;
+  continuousVoiceEnabled: boolean;
+  toggleContinuousVoice: () => void;
   speak: (text: string) => Promise<void>;
   panelRatio: number;
   setPanelRatio: (ratio: number) => void;
@@ -115,6 +117,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem('nerve:liveTranscriptionPreview');
     return saved === 'true'; // Default to disabled (fresh installs)
   });
+  const [continuousVoiceEnabled, setContinuousVoiceEnabled] = useState(() => localStorage.getItem('nerve:continuousVoiceEnabled') === 'true');
   const [panelRatio, setPanelRatioState] = useState(() => {
     const saved = localStorage.getItem('oc-panel-ratio');
     return saved ? Number(saved) : 75;
@@ -212,6 +215,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setLiveTranscriptionPreview(prev => {
       const next = !prev;
       localStorage.setItem('nerve:liveTranscriptionPreview', String(next));
+      return next;
+    });
+  }, []);
+
+  const toggleContinuousVoice = useCallback(() => {
+    setContinuousVoiceEnabled(prev => {
+      const next = !prev;
+      localStorage.setItem('nerve:continuousVoiceEnabled', String(next));
       return next;
     });
   }, []);
@@ -382,6 +393,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     handleWakeWordState,
     liveTranscriptionPreview,
     toggleLiveTranscriptionPreview,
+    continuousVoiceEnabled,
+    toggleContinuousVoice,
     speak,
     panelRatio,
     setPanelRatio,
@@ -405,7 +418,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     soundEnabled, toggleSound, ttsProvider, ttsModel, changeTtsProvider, changeTtsModel, toggleTtsProvider,
     sttProvider, changeSttProvider, sttInputMode, changeSttInputMode, sttModel, changeSttModel,
     wakeWordEnabled, handleToggleWakeWord, handleWakeWordState,
-    liveTranscriptionPreview, toggleLiveTranscriptionPreview,
+    liveTranscriptionPreview, toggleLiveTranscriptionPreview, continuousVoiceEnabled, toggleContinuousVoice,
     speak, panelRatio, setPanelRatio, telemetryVisible, toggleTelemetry,
     eventsVisible, toggleEvents, logVisible, toggleLog, theme, setTheme, font, setFont,
     fontSize, setFontSize, editorFontSize, setEditorFontSize, kanbanVisible, toggleKanbanVisible,

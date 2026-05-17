@@ -108,6 +108,7 @@ export const config = {
   // Authentication
   auth: (process.env.NERVE_AUTH || 'false').toLowerCase() === 'true',
   passwordHash: process.env.NERVE_PASSWORD_HASH || '',
+  allowGatewayTokenLogin: (process.env.NERVE_ALLOW_GATEWAY_TOKEN_LOGIN || 'true').toLowerCase() !== 'false',
   sessionSecret: process.env.NERVE_SESSION_SECRET || '',
   sessionTtlMs: Number(process.env.NERVE_SESSION_TTL || 30 * 24 * 60 * 60 * 1000), // 30 days
 } as const;
@@ -225,10 +226,17 @@ export function validateConfig(): void {
   }
 
   // ── Auth validation ──────────────────────────────────────────────
-  if (config.auth && !config.passwordHash && !config.gatewayToken) {
+  if (config.auth && !config.passwordHash && (!config.gatewayToken || !config.allowGatewayTokenLogin)) {
     console.error(
-      '\n  \x1b[31m✗ NERVE_AUTH is enabled but no password or gateway token is configured.\x1b[0m\n' +
-      '  Run \x1b[36mnpm run setup\x1b[0m to set a password, or set GATEWAY_TOKEN as a fallback.\n',
+      '\n  \x1b[31m✗ NERVE_AUTH is enabled but no usable login password is configured.\x1b[0m\n' +
+      '  Set NERVE_PASSWORD_HASH, or allow the temporary gateway-token fallback only on trusted networks.\n',
+    );
+  }
+
+  if (config.auth && !config.passwordHash && config.gatewayToken && config.allowGatewayTokenLogin) {
+    console.warn(
+      '\n  \x1b[33m⚠ Auth is using the gateway token as the login fallback.\x1b[0m\n' +
+      '  For Cloudflare Tunnel/public access, set NERVE_PASSWORD_HASH and NERVE_ALLOW_GATEWAY_TOKEN_LOGIN=false.\n',
     );
   }
 

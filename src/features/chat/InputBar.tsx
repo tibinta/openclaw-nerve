@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback, useImperativeHandle, forwardRef, useMemo } from 'react';
-import { Mic, Paperclip, X, Loader2, ArrowUp, FileText, FolderOpen } from 'lucide-react';
+import { Mic, Paperclip, X, Loader2, ArrowUp, FileText, FolderOpen, Radio } from 'lucide-react';
 import type { TreeEntry } from '@/features/file-browser';
 import { useVoiceInput } from '@/features/voice/useVoiceInput';
 import { useTabCompletion } from '@/hooks/useTabCompletion';
@@ -279,7 +279,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   // Tab completion for session names
   const { sessions, agentName: ctxAgentName } = useSessionContext();
-  const { liveTranscriptionPreview, sttInputMode, sttProvider } = useSettings();
+  const { liveTranscriptionPreview, sttInputMode, sttProvider, continuousVoiceEnabled, toggleContinuousVoice } = useSettings();
   const getSessionLabels = useMemo(() => {
     // Build a closure that returns current session labels
     const labels = sessions.map((s) => {
@@ -483,7 +483,17 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const effectiveSttInputMode = sttProvider === 'openai' ? 'local' : sttInputMode;
 
-  const { voiceState, interimTranscript, wakeWordEnabled, toggleWakeWord, error: voiceError, clearError: clearVoiceError } = useVoiceInput((text) => {
+  const {
+    voiceState,
+    interimTranscript,
+    wakeWordEnabled,
+    toggleWakeWord,
+    startRecording,
+    stopAndTranscribe,
+    discardRecording,
+    error: voiceError,
+    clearError: clearVoiceError,
+  } = useVoiceInput((text) => {
     const input = inputRef.current;
     if (input) {
       input.value = '';
@@ -494,6 +504,40 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setDraftText('');
     onSend('[voice] ' + text);
   }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode);
+  const wasGeneratingRef = useRef(isGenerating);
+
+  useEffect(() => {
+    const wasGenerating = wasGeneratingRef.current;
+    wasGeneratingRef.current = isGenerating;
+    if (!continuousVoiceEnabled || isGenerating || !wasGenerating || voiceState !== 'idle') return;
+    const id = window.setTimeout(() => {
+      void startRecording();
+    }, 700);
+    return () => window.clearTimeout(id);
+  }, [continuousVoiceEnabled, isGenerating, startRecording, voiceState]);
+
+  const handleVoiceButton = useCallback(() => {
+    clearVoiceError();
+    if (voiceState === 'recording') {
+      stopAndTranscribe();
+      return;
+    }
+    if (voiceState === 'idle' || voiceState === 'listening') {
+      void startRecording();
+    }
+  }, [clearVoiceError, startRecording, stopAndTranscribe, voiceState]);
+
+  const handleContinuousVoiceButton = useCallback(() => {
+    clearVoiceError();
+    const next = !continuousVoiceEnabled;
+    toggleContinuousVoice();
+    if (next && (voiceState === 'idle' || voiceState === 'listening')) {
+      void startRecording();
+    }
+    if (!next && voiceState === 'recording') {
+      discardRecording();
+    }
+  }, [clearVoiceError, continuousVoiceEnabled, discardRecording, startRecording, toggleContinuousVoice, voiceState]);
 
   // Live transcription preview: write interim transcript to textarea during recording
   useEffect(() => {
@@ -1246,6 +1290,26 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         />
         <button
           type="button"
+          onClick={handleVoiceButton}
+          disabled={voiceState === 'transcribing'}
+          className={`bg-transparent border-none px-2 self-stretch h-full flex items-center justify-center transition-colors disabled:opacity-50 ${voiceState === 'recording' ? 'text-red-500' : 'text-muted-foreground hover:text-primary'}`}
+          title={voiceState === 'recording' ? 'Send voice' : 'Voice'}
+          aria-label={voiceState === 'recording' ? 'Send voice' : 'Start voice'}
+        >
+          <Mic size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={handleContinuousVoiceButton}
+          disabled={voiceState === 'transcribing'}
+          className={`bg-transparent border-none px-2 self-stretch h-full flex items-center justify-center transition-colors disabled:opacity-50 ${continuousVoiceEnabled ? 'text-primary' : 'text-muted-foreground hover:text-primary'}`}
+          title={continuousVoiceEnabled ? 'Stop live voice' : 'Live voice'}
+          aria-label={continuousVoiceEnabled ? 'Stop live voice' : 'Start live voice'}
+        >
+          <Radio size={16} />
+        </button>
+        <button
+          type="button"
           onClick={openUploadFilesPicker}
           disabled={!uploadsEnabled}
           className="bg-transparent border-none text-muted-foreground hover:text-primary cursor-pointer px-2 self-stretch h-full flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1267,10 +1331,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground px-4 pb-1.5 pl-10 bg-card">
         <span>
           {voiceState === 'recording'
-            ? 'Recording… Left Shift to send · Double Left Shift to discard'
+            ? 'Recording… tap mic to send'
             : voiceState === 'transcribing'
             ? 'Transcribing…'
-            : 'Enter or ⌘Enter to send · Shift+Enter for newline · Double Left Shift to start dictation · Ctrl+F search'}
+            : continuousVoiceEnabled
+              ? 'Live voice on'
+              : 'Enter to send · tap mic to talk'}
         </span>
       </div>
       {voiceError && (

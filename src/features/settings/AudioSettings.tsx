@@ -219,6 +219,8 @@ interface AudioSettingsProps {
   onToggleWakeWord: () => void;
   liveTranscriptionPreview: boolean;
   onToggleLiveTranscriptionPreview: () => void;
+  continuousVoiceEnabled: boolean;
+  onToggleContinuousVoice: () => void;
   agentName?: string;
   section?: AudioSettingsSection;
 }
@@ -441,6 +443,8 @@ export function AudioSettings({
   onToggleWakeWord,
   liveTranscriptionPreview,
   onToggleLiveTranscriptionPreview,
+  continuousVoiceEnabled,
+  onToggleContinuousVoice,
   agentName = 'Agent',
   section = 'all',
 }: AudioSettingsProps) {
@@ -925,6 +929,23 @@ export function AudioSettings({
             onCheckedChange={onToggleWakeWord}
             disabled={!wakeWordSupported}
             aria-label="Toggle wake word detection"
+          />
+        </div>
+      )}
+
+      {showInput && (
+        <div className="cockpit-row items-start justify-between">
+          <div className="flex items-center gap-3">
+            <Mic size={14} className={continuousVoiceEnabled ? 'text-primary' : 'text-muted-foreground'} aria-hidden="true" />
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-foreground" id="continuous-voice-label">Live voice</span>
+              <span className="text-xs text-muted-foreground">Restart listening after each reply. Use the live voice button in chat.</span>
+            </div>
+          </div>
+          <Switch
+            checked={continuousVoiceEnabled}
+            onCheckedChange={onToggleContinuousVoice}
+            aria-label="Toggle live voice"
           />
         </div>
       )}
