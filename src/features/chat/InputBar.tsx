@@ -146,16 +146,8 @@ function getBase64ByteLength(base64: string): number {
 }
 
 function buildFileUriFromPath(path: string): string {
-  if (path.startsWith('file://')) return path;
-
-  const normalized = path.replace(/\\/g, '/');
-  if (/^[A-Za-z]:\//.test(normalized)) {
-    return `file:///${encodeURI(normalized)}`;
-  }
-  if (normalized.startsWith('/')) {
-    return `file://${encodeURI(normalized)}`;
-  }
-  return `file:///${encodeURI(normalized)}`;
+  const canonicalPath = path.replace(/^\/?workspace\/?/, '').replace(/^\.\//, '');
+  return `/api/files/raw?path=${encodeURI(canonicalPath)}`;
 }
 
 function inferMimeTypeFromName(name: string): string {
@@ -1278,7 +1270,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             ? 'Recording… Left Shift to send · Double Left Shift to discard'
             : voiceState === 'transcribing'
             ? 'Transcribing…'
-            : 'Enter or ⌘Enter to send · Shift+Enter for newline · Double Left Shift for voice · Ctrl+F search'}
+            : 'Enter or ⌘Enter to send · Shift+Enter for newline · Double Left Shift to start dictation · Ctrl+F search'}
         </span>
       </div>
       {voiceError && (

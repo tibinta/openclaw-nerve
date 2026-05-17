@@ -100,6 +100,14 @@ async function startWakeWordListener(result: { current: { startWakeWordListener:
   });
 }
 
+async function tapLeftShift() {
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', location: 1, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', location: 1, bubbles: true }));
+    await vi.runAllTimersAsync();
+  });
+}
+
 describe('useVoiceInput', () => {
   let mockRecognition: MockSpeechRecognition | null = null;
   let originalFetch: typeof fetch;
@@ -801,6 +809,30 @@ describe('useVoiceInput', () => {
       });
 
       expect(result.current.voiceState).toBe('recording');
+    });
+
+    it('should start dictation on double left shift and send on a single left shift', async () => {
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription));
+
+      await tapLeftShift();
+      expect(result.current.voiceState).toBe('idle');
+
+      await tapLeftShift();
+      expect(result.current.voiceState).toBe('recording');
+
+      act(() => {
+        mockRecognition?.simulateResult('hello there');
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
+
+      await tapLeftShift();
+
+      expect(onTranscription).toHaveBeenCalledWith('hello there');
+      expect(result.current.voiceState).toBe('idle');
     });
   });
 });
