@@ -65,6 +65,8 @@ const baseProps = {
   onToggleLiveTranscriptionPreview: vi.fn(),
   continuousVoiceEnabled: false,
   onToggleContinuousVoice: vi.fn(),
+  liveVoicePauseMs: 1800,
+  onLiveVoicePauseMsChange: vi.fn(),
   agentName: 'Kim',
   section: 'input' as const,
 };

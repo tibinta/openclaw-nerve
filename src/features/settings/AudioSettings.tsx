@@ -221,6 +221,8 @@ interface AudioSettingsProps {
   onToggleLiveTranscriptionPreview: () => void;
   continuousVoiceEnabled: boolean;
   onToggleContinuousVoice: () => void;
+  liveVoicePauseMs: number;
+  onLiveVoicePauseMsChange: (ms: number) => void;
   agentName?: string;
   section?: AudioSettingsSection;
 }
@@ -445,6 +447,8 @@ export function AudioSettings({
   onToggleLiveTranscriptionPreview,
   continuousVoiceEnabled,
   onToggleContinuousVoice,
+  liveVoicePauseMs,
+  onLiveVoicePauseMsChange,
   agentName = 'Agent',
   section = 'all',
 }: AudioSettingsProps) {
@@ -934,19 +938,37 @@ export function AudioSettings({
       )}
 
       {showInput && (
-        <div className="cockpit-row items-start justify-between">
-          <div className="flex items-center gap-3">
-            <Mic size={14} className={continuousVoiceEnabled ? 'text-primary' : 'text-muted-foreground'} aria-hidden="true" />
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-foreground" id="continuous-voice-label">Live voice</span>
-              <span className="text-xs text-muted-foreground">Restart listening after each reply. Use the live voice button in chat.</span>
+        <div className="space-y-3 rounded-[18px] border border-border/70 bg-background/35 px-3 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Mic size={14} className={continuousVoiceEnabled ? 'text-primary' : 'text-muted-foreground'} aria-hidden="true" />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium text-foreground" id="continuous-voice-label">Live voice</span>
+                <span className="text-xs text-muted-foreground">Listen after each spoken reply.</span>
+              </div>
             </div>
+            <Switch
+              checked={continuousVoiceEnabled}
+              onCheckedChange={onToggleContinuousVoice}
+              aria-label="Toggle live voice"
+            />
           </div>
-          <Switch
-            checked={continuousVoiceEnabled}
-            onCheckedChange={onToggleContinuousVoice}
-            aria-label="Toggle live voice"
-          />
+          <div className="grid gap-2 sm:grid-cols-[1fr_118px] sm:items-center">
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-foreground">Pause to send</span>
+              <span className="text-xs text-muted-foreground">Silence before sending. Default 1800 ms.</span>
+            </div>
+            <input
+              type="number"
+              min={700}
+              max={5000}
+              step={100}
+              value={liveVoicePauseMs}
+              onChange={(event) => onLiveVoicePauseMsChange(Number(event.target.value))}
+              className="min-h-10 rounded-2xl border border-border/80 bg-background/65 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+              aria-label="Live voice pause milliseconds"
+            />
+          </div>
         </div>
       )}
 

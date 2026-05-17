@@ -65,6 +65,7 @@ vi.mock('@/contexts/SettingsContext', () => ({
     sttProvider: 'browser',
     continuousVoiceEnabled: false,
     toggleContinuousVoice: vi.fn(),
+    liveVoicePauseMs: 1800,
     isTtsSpeaking: false,
   }),
 }));
