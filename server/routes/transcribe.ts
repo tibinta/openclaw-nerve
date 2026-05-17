@@ -14,6 +14,7 @@ import { isLanguageSupported } from '../lib/language.js';
 import { transcribe as transcribeOpenAI } from '../services/openai-whisper.js';
 import { transcribeLocal, isModelAvailable, getActiveModel, setWhisperModel, getDownloadProgress, getSystemInfo } from '../services/whisper-local.js';
 import { rateLimitTranscribe, rateLimitGeneral } from '../middleware/rate-limit.js';
+import { normalizeVoiceTranscript } from '../lib/voice-transcript.js';
 
 const MAX_FILE_SIZE = config.limits.transcribe; // 12 MB
 
@@ -33,6 +34,11 @@ const ALLOWED_AUDIO_TYPES = new Set([
 
 const app = new Hono();
 const ENGLISH_ONLY_MODEL = 'small.en';
+
+/** Keep the public response shape stable while collapsing no-speech sentinels. */
+export function normalizeTranscribeResponseText(text: string): string {
+  return normalizeVoiceTranscript(text || '');
+}
 
 app.post('/api/transcribe', rateLimitTranscribe, async (c) => {
   try {
@@ -71,7 +77,7 @@ app.post('/api/transcribe', rateLimitTranscribe, async (c) => {
       return c.text(result.message, result.status as 400 | 500);
     }
 
-    return c.json({ text: result.text });
+    return c.json({ text: normalizeTranscribeResponseText(result.text || '') });
   } catch (err) {
     console.error('[transcribe] error:', (err as Error).message || err);
     return c.text('Transcription failed', 500);

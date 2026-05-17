@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { buildPrimaryWakePhrase, buildStopPhrasesRegex } from '@/lib/constants';
+import { normalizeVoiceTranscript } from '@/lib/voiceTranscript';
 import { playWakePing, playSubmitPing, playCancelPing, ensureAudioContext } from './audio-feedback';
 import type { STTInputMode } from '@/contexts/SettingsContext';
 import { getWakeWordSupport } from './wakeWordSupport';
@@ -87,7 +88,7 @@ function matchesPhrase(transcript: string, phrases: string[], language: string):
 }
 
 function cleanTranscript(text: string, stopPhrasesRegex: RegExp): string {
-  return (text || '').trim().replace(stopPhrasesRegex, '').trim();
+  return normalizeVoiceTranscript((text || '').trim().replace(stopPhrasesRegex, '').trim());
 }
 
 /**
@@ -447,11 +448,11 @@ export function useVoiceInput(
   const waitForBrowserTranscript = useCallback(async (timeoutMs = 350, stepMs = 25) => {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-      const current = browserTranscriptRef.current.trim();
+      const current = cleanTranscript(browserTranscriptRef.current, stopPhrasesRegexRef.current);
       if (current) return current;
       await new Promise((resolve) => setTimeout(resolve, stepMs));
     }
-    return browserTranscriptRef.current.trim();
+    return cleanTranscript(browserTranscriptRef.current, stopPhrasesRegexRef.current);
   }, []);
 
   const doStopAndTranscribe = useCallback(() => {
@@ -473,7 +474,7 @@ export function useVoiceInput(
       stopStream();
       try {
         const browserRecognitionSupported = Boolean(getSpeechRecognition());
-        let browserTranscript = browserTranscriptRef.current.trim();
+        let browserTranscript = cleanTranscript(browserTranscriptRef.current, stopPhrasesRegexRef.current);
         let cleaned = '';
 
         if (sttInputModeRef.current === 'local') {
@@ -511,7 +512,7 @@ export function useVoiceInput(
     mr.stop();
   }, [resetBrowserTranscript, stopStream, setVoiceState, transcribeWithBackend, waitForBrowserTranscript]);
 
-  const startWakeWordListener = useCallback(() => {
+  const startWakeWordListener = useCallback(async () => {
     if (!wakeWordSupported) {
       wakeWordEnabledRef.current = false;
       if (stateRef.current === 'listening') {
@@ -529,10 +530,30 @@ export function useVoiceInput(
       setError('Speech recognition is not supported in this browser');
       return;
     }
+
+    // Mark the listener as requested before we await permission so a later
+    // stop call can cancel the startup cleanly without racing a stale enable.
+    wakeWordEnabledRef.current = true;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      if (!wakeWordEnabledRef.current) return;
+    } catch (err) {
+      console.warn('[VOICE] Failed to acquire microphone for wake word', err);
+      wakeWordEnabledRef.current = false;
+      setStoredWakeWordEnabled(false);
+      setVoiceState('idle');
+      setError(err instanceof Error && /denied|permission/i.test(err.message)
+        ? 'Microphone permission denied'
+        : 'Microphone access is required for wake word');
+      return;
+    }
+
     // Initialize AudioContext on user interaction
     ensureAudioContext();
-    wakeWordEnabledRef.current = true;
     setStoredWakeWordEnabled(true);
+    setError(null);
     setVoiceState('listening');
     ensureRecognitionRef.current('wake');
   }, [setVoiceState, wakeWordSupported]);
@@ -551,8 +572,11 @@ export function useVoiceInput(
   }, [setVoiceState, wakeWordSupported]);
 
   const toggleWakeWord = useCallback(() => {
-    if (wakeWordEnabledRef.current) stopWakeWordListener();
-    else startWakeWordListener();
+    if (wakeWordEnabledRef.current) {
+      stopWakeWordListener();
+      return;
+    }
+    return startWakeWordListener();
   }, [startWakeWordListener, stopWakeWordListener]);
 
   // Restart recognition when language changes (so Web Speech API uses new locale)

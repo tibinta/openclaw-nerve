@@ -16,6 +16,7 @@ import type { WhisperContext, TranscribeOptions } from '@fugood/whisper.node';
 import { config } from '../lib/config.js';
 import { WHISPER_MODEL_FILES, WHISPER_MODELS_BASE_URL } from '../lib/constants.js';
 import { resolveLanguage } from '../lib/language.js';
+import { normalizeVoiceTranscript } from '../lib/voice-transcript.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -403,11 +404,7 @@ export async function transcribeLocal(
       return { ok: false, status: 500, message: 'Transcription was aborted' };
     }
 
-    const text = result.result?.trim() || '';
-    if (!text) {
-      return { ok: false, status: 500, message: 'Transcription returned empty result' };
-    }
-
+    const text = normalizeVoiceTranscript(result.result || '');
     return { ok: true, text };
   } catch (err) {
     console.error('[whisper-local] Transcription failed:', (err as Error).message);

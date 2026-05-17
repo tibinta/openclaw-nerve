@@ -93,6 +93,13 @@ function mockWakeWordSupport(result: { supported: boolean; reason: 'mobile-web' 
   (wakeWordSupport.isWakeWordSupportedEnvironment as Mock).mockReturnValue(result.supported);
 }
 
+async function startWakeWordListener(result: { current: { startWakeWordListener: () => Promise<void> | void } }) {
+  await act(async () => {
+    await result.current.startWakeWordListener();
+    await vi.advanceTimersByTimeAsync(300);
+  });
+}
+
 describe('useVoiceInput', () => {
   let mockRecognition: MockSpeechRecognition | null = null;
   let originalFetch: typeof fetch;
@@ -186,9 +193,7 @@ describe('useVoiceInput', () => {
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
-      act(() => {
-        result.current.startWakeWordListener();
-      });
+      await startWakeWordListener(result);
 
       expect(result.current.voiceState).toBe('listening');
       expect(result.current.wakeWordEnabled).toBe(true);
@@ -199,9 +204,7 @@ describe('useVoiceInput', () => {
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
-      act(() => {
-        result.current.startWakeWordListener();
-      });
+      await startWakeWordListener(result);
 
       expect(result.current.voiceState).toBe('listening');
 
@@ -218,14 +221,15 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       // Toggle on
-      act(() => {
-        result.current.toggleWakeWord();
+      await act(async () => {
+        await result.current.toggleWakeWord();
+        await vi.advanceTimersByTimeAsync(300);
       });
       expect(result.current.wakeWordEnabled).toBe(true);
 
       // Toggle off
-      act(() => {
-        result.current.toggleWakeWord();
+      await act(async () => {
+        await result.current.toggleWakeWord();
       });
       expect(result.current.wakeWordEnabled).toBe(false);
     });
@@ -242,14 +246,14 @@ describe('useVoiceInput', () => {
       expect(localStorage.getItem('nerve:wakeWordEnabled')).toBe('true');
     });
 
-    it('does not start wake listening on mobile web', () => {
+    it('does not start wake listening on mobile web', async () => {
       mockWakeWordSupport({ supported: false, reason: 'mobile-web' });
 
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
-      act(() => {
-        result.current.startWakeWordListener();
+      await act(async () => {
+        await result.current.startWakeWordListener();
       });
 
       expect(result.current.voiceState).toBe('idle');
@@ -277,8 +281,8 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       // Should not throw
-      act(() => {
-        result.current.startWakeWordListener();
+      await act(async () => {
+        await result.current.startWakeWordListener();
       });
 
       // Should remain idle and disabled
@@ -293,9 +297,7 @@ describe('useVoiceInput', () => {
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
-      act(() => {
-        result.current.startWakeWordListener();
-      });
+      await startWakeWordListener(result);
 
       expect(result.current.voiceState).toBe('listening');
     });
@@ -327,13 +329,7 @@ describe('useVoiceInput', () => {
       for (const [lang, locale] of Object.entries(LANG_TO_BCP47)) {
         const { result, unmount } = renderHook(() => useVoiceInput(onTranscription, 'Kim', lang));
 
-        act(() => {
-          result.current.startWakeWordListener();
-        });
-
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(300);
-        });
+        await startWakeWordListener(result);
 
         expect(mockRecognition?.lang).toBe(locale);
         unmount();
@@ -347,7 +343,7 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -357,18 +353,18 @@ describe('useVoiceInput', () => {
 
     it('should handle microphone permission denied', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      (navigator.mediaDevices.getUserMedia as Mock).mockRejectedValue(new Error('Permission denied'));
+      const getUserMedia = navigator.mediaDevices.getUserMedia as Mock;
+      getUserMedia.mockResolvedValueOnce(new MockMediaStream());
+      getUserMedia.mockRejectedValueOnce(new Error('Permission denied'));
 
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       // First enable wake word
-      act(() => {
-        result.current.startWakeWordListener();
-      });
+      await startWakeWordListener(result);
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -383,13 +379,11 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       // Start wake word
-      act(() => {
-        result.current.startWakeWordListener();
-      });
+      await startWakeWordListener(result);
 
       // Start recording
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -414,7 +408,7 @@ describe('useVoiceInput', () => {
 
       // Start recording without wake word
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -436,7 +430,7 @@ describe('useVoiceInput', () => {
 
       // Start recording
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -455,7 +449,7 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -488,7 +482,7 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -510,7 +504,7 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'browser'));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -532,7 +526,7 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'local'));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -554,7 +548,7 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'hybrid'));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -571,16 +565,17 @@ describe('useVoiceInput', () => {
       expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(false);
     });
 
-    it('should fall back to backend transcription in hybrid mode when browser transcript is empty', async () => {
+    it('should fall back to backend transcription in hybrid mode when browser transcript is [BLANK_AUDIO]', async () => {
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'hybrid'));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
       act(() => {
+        mockRecognition?.simulateResult('[BLANK_AUDIO]');
         result.current.stopAndTranscribe();
       });
 
@@ -592,6 +587,54 @@ describe('useVoiceInput', () => {
       expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
     });
 
+    it('does not send text when the backend returns an empty transcript', async () => {
+      const fetchMock = globalThis.fetch as Mock;
+      fetchMock.mockImplementation((input: string | URL) => {
+        const url = String(input);
+
+        if (url.startsWith('/api/voice-phrases')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              stopPhrases: ['boom', 'done'],
+              cancelPhrases: ['cancel'],
+            }),
+          });
+        }
+
+        if (url === '/api/transcribe') {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ text: '' }),
+          });
+        }
+
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({}),
+        });
+      }) as typeof fetch;
+
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'hybrid'));
+
+      await act(async () => {
+        await result.current.startRecording();
+        await vi.runAllTimersAsync();
+      });
+
+      act(() => {
+        result.current.stopAndTranscribe();
+      });
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      expect(onTranscription).not.toHaveBeenCalled();
+      expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
+    });
+
     it('should fall back to backend transcription in browser mode when browser recognition is unsupported', async () => {
       delete (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition;
 
@@ -599,7 +642,7 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'browser'));
 
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -654,14 +697,7 @@ describe('useVoiceInput', () => {
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
-      act(() => {
-        result.current.startWakeWordListener();
-      });
-
-      // Wait for recognition to start
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(300);
-      });
+      await startWakeWordListener(result);
 
       // Simulate not-allowed error
       act(() => {
@@ -676,13 +712,7 @@ describe('useVoiceInput', () => {
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
-      act(() => {
-        result.current.startWakeWordListener();
-      });
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(300);
-      });
+      await startWakeWordListener(result);
 
       // Simulate aborted error (happens during intentional stops)
       act(() => {
@@ -700,7 +730,7 @@ describe('useVoiceInput', () => {
 
       // Start recording
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 
@@ -714,9 +744,7 @@ describe('useVoiceInput', () => {
       const onTranscription = vi.fn();
       const { result, unmount } = renderHook(() => useVoiceInput(onTranscription));
 
-      act(() => {
-        result.current.startWakeWordListener();
-      });
+      await startWakeWordListener(result);
 
       expect(result.current.wakeWordEnabled).toBe(true);
 
@@ -745,11 +773,12 @@ describe('useVoiceInput', () => {
 
       // Rapid toggle
       await act(async () => {
-        result.current.startWakeWordListener();
+        await result.current.startWakeWordListener();
+        await vi.advanceTimersByTimeAsync(300);
         result.current.stopWakeWordListener();
-        result.current.startWakeWordListener();
+        await result.current.startWakeWordListener();
+        await vi.advanceTimersByTimeAsync(300);
         result.current.stopWakeWordListener();
-        await vi.runAllTimersAsync();
       });
 
       expect(result.current.voiceState).toBe('idle');
@@ -761,15 +790,13 @@ describe('useVoiceInput', () => {
       const { result } = renderHook(() => useVoiceInput(onTranscription));
 
       // Start wake word
-      act(() => {
-        result.current.startWakeWordListener();
-      });
+      await startWakeWordListener(result);
 
       expect(result.current.voiceState).toBe('listening');
 
       // Start recording
       await act(async () => {
-        result.current.startRecording();
+        await result.current.startRecording();
         await vi.runAllTimersAsync();
       });
 

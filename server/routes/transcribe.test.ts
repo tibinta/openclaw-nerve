@@ -15,6 +15,7 @@ describe('transcribe routes', () => {
     sttProvider?: string;
     openaiKey?: string;
     language?: string;
+    localText?: string;
   } = {}) {
     const mockConfig: Record<string, unknown> = {
       auth: false, port: 3000, host: '127.0.0.1', sslPort: 3443,
@@ -50,7 +51,7 @@ describe('transcribe routes', () => {
       transcribe: vi.fn(async () => ({ ok: true, text: 'openai transcription' })),
     }));
     vi.doMock('../services/whisper-local.js', () => ({
-      transcribeLocal: vi.fn(async () => ({ ok: true, text: 'local transcription' })),
+      transcribeLocal: vi.fn(async () => ({ ok: true, text: overrides.localText ?? 'local transcription' })),
       isModelAvailable: vi.fn((model?: string) => !model || model === 'small.en'),
       getActiveModel: vi.fn(() => 'small.en'),
       setWhisperModel: vi.fn(async (model: string) => {
@@ -90,6 +91,15 @@ describe('transcribe routes', () => {
       const res = await app.request('/api/transcribe/config');
       const json = (await res.json()) as Record<string, unknown>;
       expect(json.modelReady).toBe(true);
+    });
+  });
+
+  describe('POST /api/transcribe', () => {
+    it('returns empty text for no-speech placeholders', async () => {
+      mockDeps({ localText: '[BLANK_AUDIO]' });
+      const { normalizeTranscribeResponseText } = await import('./transcribe.js');
+      expect(normalizeTranscribeResponseText('[BLANK_AUDIO]')).toBe('');
+      expect({ text: normalizeTranscribeResponseText('[BLANK_AUDIO]') }).toEqual({ text: '' });
     });
   });
 
