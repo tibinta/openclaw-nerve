@@ -37,6 +37,7 @@ interface SettingsContextValue {
   continuousVoiceEnabled: boolean;
   toggleContinuousVoice: () => void;
   speak: (text: string) => Promise<void>;
+  isTtsSpeaking: boolean;
   panelRatio: number;
   setPanelRatio: (ratio: number) => void;
   telemetryVisible: boolean;
@@ -161,7 +162,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const selectedTtsModel = ttsProvider === 'xiaomi'
     ? (ttsModel || ttsVoiceConfig?.xiaomi?.model)
     : (ttsModel || ttsVoiceConfig?.openai?.model);
-  const { speak } = useTTS(true, ttsProvider, { model: selectedTtsModel || undefined, voice: selectedTtsVoice || undefined });
+  const { speak, isSpeaking: isTtsSpeaking } = useTTS(true, ttsProvider, { model: selectedTtsModel || undefined, voice: selectedTtsVoice || undefined });
   const wakeWordToggleRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -396,6 +397,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     continuousVoiceEnabled,
     toggleContinuousVoice,
     speak,
+    isTtsSpeaking,
     panelRatio,
     setPanelRatio,
     telemetryVisible,
@@ -419,7 +421,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     sttProvider, changeSttProvider, sttInputMode, changeSttInputMode, sttModel, changeSttModel,
     wakeWordEnabled, handleToggleWakeWord, handleWakeWordState,
     liveTranscriptionPreview, toggleLiveTranscriptionPreview, continuousVoiceEnabled, toggleContinuousVoice,
-    speak, panelRatio, setPanelRatio, telemetryVisible, toggleTelemetry,
+    speak, isTtsSpeaking, panelRatio, setPanelRatio, telemetryVisible, toggleTelemetry,
     eventsVisible, toggleEvents, logVisible, toggleLog, theme, setTheme, font, setFont,
     fontSize, setFontSize, editorFontSize, setEditorFontSize, kanbanVisible, toggleKanbanVisible,
   ]);

@@ -279,7 +279,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   // Tab completion for session names
   const { sessions, agentName: ctxAgentName } = useSessionContext();
-  const { liveTranscriptionPreview, sttInputMode, sttProvider, continuousVoiceEnabled, toggleContinuousVoice } = useSettings();
+  const { liveTranscriptionPreview, sttInputMode, sttProvider, continuousVoiceEnabled, toggleContinuousVoice, isTtsSpeaking } = useSettings();
   const getSessionLabels = useMemo(() => {
     // Build a closure that returns current session labels
     const labels = sessions.map((s) => {
@@ -505,16 +505,27 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     onSend('[voice] ' + text);
   }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? 1100 : undefined, continuousVoiceEnabled);
   const wasGeneratingRef = useRef(isGenerating);
+  const pendingLiveVoiceRestartRef = useRef(false);
 
   useEffect(() => {
     const wasGenerating = wasGeneratingRef.current;
     wasGeneratingRef.current = isGenerating;
-    if (!continuousVoiceEnabled || isGenerating || !wasGenerating || voiceState !== 'idle') return;
+    if (!continuousVoiceEnabled) {
+      pendingLiveVoiceRestartRef.current = false;
+      return;
+    }
+    if (isGenerating || voiceState !== 'idle') return;
+    if (wasGenerating) {
+      pendingLiveVoiceRestartRef.current = true;
+    }
+    if (!pendingLiveVoiceRestartRef.current || isTtsSpeaking) return;
     const id = window.setTimeout(() => {
+      if (isTtsSpeaking) return;
+      pendingLiveVoiceRestartRef.current = false;
       void startRecording();
     }, 700);
     return () => window.clearTimeout(id);
-  }, [continuousVoiceEnabled, isGenerating, startRecording, voiceState]);
+  }, [continuousVoiceEnabled, isGenerating, isTtsSpeaking, startRecording, voiceState]);
 
   const handleVoiceButton = useCallback(() => {
     clearVoiceError();

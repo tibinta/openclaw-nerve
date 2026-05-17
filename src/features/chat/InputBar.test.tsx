@@ -65,6 +65,7 @@ vi.mock('@/contexts/SettingsContext', () => ({
     sttProvider: 'browser',
     continuousVoiceEnabled: false,
     toggleContinuousVoice: vi.fn(),
+    isTtsSpeaking: false,
   }),
 }));
 
@@ -151,7 +152,7 @@ describe('InputBar', () => {
                 kind: 'direct_workspace_reference',
                 canonicalPath: targetPath,
                 absolutePath: `/workspace/${targetPath}`,
-                uri: `file:///workspace/${targetPath}`,
+                uri: `/api/files/raw?path=${targetPath}`,
                 mimeType: targetPath.endsWith('.png') ? 'image/png' : 'text/plain',
                 sizeBytes: targetPath.endsWith('.png') ? 2048 : 1234,
                 originalName: targetPath.split('/').pop() || targetPath,
@@ -170,7 +171,7 @@ describe('InputBar', () => {
               kind: 'imported_workspace_reference',
               canonicalPath: `.temp/nerve-uploads/2026/03/21/${index + 1}-${file.name}`,
               absolutePath: `/workspace/.temp/nerve-uploads/2026/03/21/${index + 1}-${file.name}`,
-              uri: `file:///workspace/.temp/nerve-uploads/2026/03/21/${index + 1}-${file.name}`,
+              uri: `/api/files/raw?path=.temp/nerve-uploads/2026/03/21/${index + 1}-${file.name}`,
               mimeType: file.type || 'application/octet-stream',
               sizeBytes: file.size,
               originalName: file.name,
@@ -317,7 +318,7 @@ describe('InputBar', () => {
       reference: {
         kind: 'local_path',
         path: '/workspace/attach-me.png',
-        uri: 'file:///workspace/attach-me.png',
+        uri: '/api/files/raw?path=attach-me.png',
       },
     });
 
@@ -433,7 +434,7 @@ describe('InputBar', () => {
       reference: {
         kind: 'local_path',
         path: '/workspace/.temp/nerve-uploads/2026/03/21/1-shot.png',
-        uri: 'file:///workspace/.temp/nerve-uploads/2026/03/21/1-shot.png',
+        uri: '/api/files/raw?path=.temp/nerve-uploads/2026/03/21/1-shot.png',
       },
       preparation: {
         outcome: 'file_reference_ready',
@@ -579,7 +580,7 @@ describe('InputBar', () => {
       reference: {
         kind: 'local_path',
         path: '/workspace/.temp/nerve-uploads/2026/03/21/1-notes.txt',
-        uri: 'file:///workspace/.temp/nerve-uploads/2026/03/21/1-notes.txt',
+        uri: '/api/files/raw?path=.temp/nerve-uploads/2026/03/21/1-notes.txt',
       },
     });
   });

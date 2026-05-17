@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import { ensureAudioContext } from '@/features/voice/audio-feedback';
 
 // ─── Audio autoplay unlock ─────────────────────────────────────────────────────
@@ -76,6 +76,17 @@ async function playBlobViaAudioElement(blob: Blob): Promise<{ audio: HTMLAudioEl
   }
 }
 
+function waitForAudioElementToEnd(audio: HTMLAudioElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (audio.ended) {
+      resolve();
+      return;
+    }
+    audio.addEventListener('ended', () => resolve(), { once: true });
+    audio.addEventListener('error', () => reject(new Error('Audio playback failed')), { once: true });
+  });
+}
+
 async function playBlobViaAudioContext(blob: Blob): Promise<void> {
   ensureAudioContext();
   const AudioContextCtor = getAudioContextCtor();
@@ -109,6 +120,7 @@ async function playBlobViaAudioContext(blob: Blob): Promise<void> {
 export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', modelOrOptions?: string | TTSPlaybackOptions) {
   const currentAudio = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
   const generationRef = useRef(0);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const model = typeof modelOrOptions === 'string' ? modelOrOptions : modelOrOptions?.model;
   const voice = typeof modelOrOptions === 'string' ? undefined : modelOrOptions?.voice;
 
@@ -131,6 +143,7 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     if (!enabled || !text) return;
     cleanupAudio();
     const gen = ++generationRef.current;
+    setIsSpeaking(true);
     try {
       const blob = await fetchTTS(text, provider, { model, voice });
       // Superseded by a newer speak() call during fetch
@@ -156,7 +169,7 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
       audio.addEventListener('ended', revoke, { once: true });
       audio.addEventListener('error', () => revoke(), { once: true });
       try {
-        await audio.play();
+        await waitForAudioElementToEnd(audio);
       } catch (err) {
         revoke();
         throw err;
@@ -164,10 +177,14 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     } catch (err: unknown) {
       if (err instanceof Error && err.message === 'played-via-web-audio-fallback') return;
       console.error('[TTS] play failed:', err instanceof Error ? err.message : String(err));
+    } finally {
+      if (gen === generationRef.current) {
+        setIsSpeaking(false);
+      }
     }
   }, [enabled, provider, model, voice, cleanupAudio]);
 
-  return { speak };
+  return { speak, isSpeaking };
 }
 
 const TTS_PREFIX = '[tts: ';
