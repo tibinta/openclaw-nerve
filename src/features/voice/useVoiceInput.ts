@@ -620,6 +620,8 @@ export function useVoiceInput(
             cleaned = browserTranscript;
           } else if (sttInputModeRef.current === 'hybrid' || !browserRecognitionSupported) {
             cleaned = await transcribeWithBackend(blob);
+          } else if (autoStopAfterSilenceMsRef.current) {
+            cleaned = '';
           } else {
             throw new Error('Browser speech recognition did not produce a transcript');
           }

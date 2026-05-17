@@ -556,6 +556,28 @@ describe('useVoiceInput', () => {
       expect(onTranscription).toHaveBeenCalledWith('second turn text');
     });
 
+    it('treats no-speech live browser turns as quiet empty turns', async () => {
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'browser', 500));
+
+      await act(async () => {
+        await result.current.startRecording();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      act(() => {
+        result.current.stopAndTranscribe();
+      });
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      expect(result.current.voiceState).toBe('idle');
+      expect(result.current.error).toBeNull();
+      expect(onTranscription).not.toHaveBeenCalled();
+    });
+
     it('does not resume wake mode after live voice transcription', async () => {
       localStorage.setItem('nerve:wakeWordEnabled', 'true');
       const onTranscription = vi.fn();
