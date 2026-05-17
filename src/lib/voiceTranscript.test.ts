@@ -10,6 +10,8 @@ describe('normalizeVoiceTranscript', () => {
     '[SILENCE]',
     '[blank audio]',
     '[no speech]',
+    'blank audio',
+    'no speech',
     'blank_audio',
     'no-speech',
     'NO_SPEECH',

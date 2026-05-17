@@ -217,6 +217,7 @@ export function useVoiceInput(
   languageRef.current = language;
   const wakeTriggeredRef = useRef(false);
   const browserTranscriptRef = useRef('');
+  const lastNonEmptyTranscriptRef = useRef('');
   // Track intentional stops to avoid restart loops
   const intentionalStopRef = useRef(false);
   // Mode: 'wake' = listening for wake word, 'stop' = listening for stop/cancel phrases
@@ -247,6 +248,7 @@ export function useVoiceInput(
 
   const resetBrowserTranscript = useCallback(() => {
     browserTranscriptRef.current = '';
+    lastNonEmptyTranscriptRef.current = '';
   }, []);
 
   // Start or restart the single recognition instance
@@ -294,8 +296,11 @@ export function useVoiceInput(
             full += event.results[j][0].transcript;
           }
           const cleaned = cleanTranscript(full, stopPhrasesRegexRef.current);
-          browserTranscriptRef.current = cleaned;
-          setInterimTranscript(cleaned);
+          if (cleaned) {
+            browserTranscriptRef.current = cleaned;
+            lastNonEmptyTranscriptRef.current = cleaned;
+            setInterimTranscript(cleaned);
+          }
         }
 
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -402,11 +407,11 @@ export function useVoiceInput(
       setVoiceState('recording');
       // Now start listening for stop phrases
       ensureRecognitionRef.current('stop');
-    } catch (err) {
-      console.error('Mic access denied:', err);
-      const msg = err instanceof DOMException && err.name === 'NotAllowedError'
-        ? 'Microphone permission denied'
-        : 'Failed to access microphone';
+      } catch (err) {
+        console.error('Mic access denied:', err);
+        const msg = err instanceof DOMException && err.name === 'NotAllowedError'
+          ? 'Microphone permission denied'
+          : 'Failed to access microphone';
       setError(msg);
       if (wakeWordEnabledRef.current) {
         setVoiceState('listening');
@@ -491,6 +496,10 @@ export function useVoiceInput(
           } else {
             throw new Error('Browser speech recognition did not produce a transcript');
           }
+        }
+
+        if (!cleaned && lastNonEmptyTranscriptRef.current) {
+          cleaned = lastNonEmptyTranscriptRef.current;
         }
 
         if (cleaned) onTranscriptionRef.current(cleaned);

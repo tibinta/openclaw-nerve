@@ -30,11 +30,11 @@ export function normalizeVoiceTranscript(text: string): string {
   const surface = normalizeSurface(text);
   if (!surface) return '';
 
-  const { candidate, wrapped } = unwrapPlaceholder(surface);
+  const { candidate } = unwrapPlaceholder(surface);
   const compact = candidate.replace(/[\s_-]+/g, '').toUpperCase();
-  if (!NO_SPEECH_PLACEHOLDERS.has(compact)) return surface;
-
-  if (wrapped || candidate === candidate.toUpperCase() || /[_-]/.test(candidate)) return '';
+  if (NO_SPEECH_PLACEHOLDERS.has(compact)) {
+    return '';
+  }
 
   return surface;
 }

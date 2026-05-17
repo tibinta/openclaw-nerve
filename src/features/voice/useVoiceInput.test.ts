@@ -595,6 +595,29 @@ describe('useVoiceInput', () => {
       expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
     });
 
+    it('should keep the last real browser transcript when a blank sentinel arrives later', async () => {
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'hybrid'));
+
+      await act(async () => {
+        await result.current.startRecording();
+        await vi.runAllTimersAsync();
+      });
+
+      act(() => {
+        mockRecognition?.simulateResult('hello there');
+        mockRecognition?.simulateResult('[BLANK_AUDIO]');
+        result.current.stopAndTranscribe();
+      });
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      expect(onTranscription).toHaveBeenCalledWith('hello there');
+      expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(false);
+    });
+
     it('does not send text when the backend returns an empty transcript', async () => {
       const fetchMock = globalThis.fetch as Mock;
       fetchMock.mockImplementation((input: string | URL) => {
