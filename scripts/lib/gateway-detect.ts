@@ -5,15 +5,16 @@
  * This avoids requiring users to manually copy-paste the token during setup.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync, readdirSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import type { ExecSyncOptions } from 'node:child_process';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 
 const HOME = process.env.HOME || os.homedir();
 const OPENCLAW_CONFIG = join(HOME, '.openclaw', 'openclaw.json');
+const STALE_PAIRED_TMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 interface OpenClawConfig {
   gateway?: {
@@ -339,6 +340,32 @@ function repairPairedDeviceScopes(device: {
   return changed;
 }
 
+function writeJsonFileAtomically(filePath: string, value: unknown, mode = 0o600): void {
+  const tmpPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+  // Pairing repair can run while the gateway reads paired.json. A sibling temp
+  // file plus rename keeps the old valid JSON visible until the new file is
+  // complete, so a power cut or concurrent read does not see a half-written file.
+  writeFileSync(tmpPath, JSON.stringify(value, null, 2) + '\n', { mode });
+  renameSync(tmpPath, filePath);
+}
+
+function cleanupStalePairedJsonTemps(pairedPath: string, maxAgeMs = STALE_PAIRED_TMP_MAX_AGE_MS): void {
+  const dir = dirname(pairedPath);
+  const prefix = `${basename(pairedPath)}.`;
+  const now = Date.now();
+  try {
+    for (const entry of readdirSync(dir)) {
+      if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue;
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+      if (now - stat.mtimeMs < maxAgeMs) continue;
+      unlinkSync(fullPath);
+    }
+  } catch {
+    // Best-effort only. Setup must not fail just because an old temp sidecar is busy.
+  }
+}
+
 /**
  * Bootstrap paired.json from scratch on a fresh install.
  * Reads the gateway's own device identity and creates the paired file
@@ -396,7 +423,8 @@ function bootstrapPairedJson(): { ok: boolean; message: string; needsRestart: bo
     if (!existsSync(devicesDir)) {
       mkdirSync(devicesDir, { recursive: true, mode: 0o700 });
     }
-    writeFileSync(pairedPath, JSON.stringify(paired, null, 2) + '\n', { mode: 0o600 });
+    writeJsonFileAtomically(pairedPath, paired);
+    cleanupStalePairedJsonTemps(pairedPath);
 
     // Create matching device-auth.json so the CLI can connect
     const deviceAuth = {
@@ -464,7 +492,8 @@ export function fixGatewayDeviceScopes(opts: {
 
     const pairedChanged = repairPairedDeviceScopes(targetDevice);
     if (pairedChanged) {
-      writeFileSync(pairedPath, JSON.stringify(paired, null, 2) + '\n');
+      writeJsonFileAtomically(pairedPath, paired);
+      cleanupStalePairedJsonTemps(pairedPath);
     }
 
     // Also fix the CLI's own identity file — without this the gateway sees a
@@ -714,7 +743,8 @@ export function prePairNerveDevice(gatewayToken?: string): { ok: boolean; messag
         return { ok: true, message: 'Nerve device already paired', needsRestart: false };
       }
 
-      writeFileSync(pairedPath, JSON.stringify(paired, null, 2) + '\n');
+      writeJsonFileAtomically(pairedPath, paired);
+      cleanupStalePairedJsonTemps(pairedPath);
       const fieldsLabel = changedFields.length > 0 ? ` (${[...new Set(changedFields)].join(', ')})` : '';
       return {
         ok: true,
@@ -745,7 +775,8 @@ export function prePairNerveDevice(gatewayToken?: string): { ok: boolean; messag
       approvedAtMs: now,
     };
 
-    writeFileSync(pairedPath, JSON.stringify(paired, null, 2) + '\n');
+    writeJsonFileAtomically(pairedPath, paired);
+    cleanupStalePairedJsonTemps(pairedPath);
     return { ok: true, message: `Pre-paired Nerve device ${deviceId.substring(0, 12)}…`, needsRestart: true };
   } catch (err) {
     return {

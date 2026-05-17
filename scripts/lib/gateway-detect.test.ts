@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -464,6 +464,40 @@ describe('gateway detection and repair', () => {
     expect(paired['nerve-device'].tokens.operator.token).toBe('test-token');
     expect(paired['other-device'].scopes).toEqual(['operator.read']);
     expect(paired['other-device'].tokens.operator.scopes).toEqual(['operator.read']);
+  });
+
+  it('writes paired device repairs through a temp file and cleans stale temp sidecars', async () => {
+    const pairedPath = path.join(tempHome, '.openclaw', 'devices', 'paired.json');
+    const staleTempPath = path.join(tempHome, '.openclaw', 'devices', 'paired.json.stale.tmp');
+    writeFileSync(staleTempPath, '{"old":true}\n');
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-19T23:15:00Z').getTime());
+
+    writeFileSync(pairedPath, JSON.stringify({
+      'gateway-device': {
+        deviceId: 'gateway-device',
+        scopes: FULL_OPERATOR_SCOPES,
+        tokens: { operator: { token: 'gateway-token', scopes: FULL_OPERATOR_SCOPES } },
+      },
+      'nerve-device': {
+        deviceId: 'nerve-device',
+        scopes: ['operator.read'],
+        displayName: 'Nerve UI',
+        platform: 'web',
+        clientId: 'webchat-ui',
+        clientMode: 'webchat',
+        tokens: { operator: { token: 'old-token', scopes: ['operator.read'] } },
+      },
+    }, null, 2));
+
+    const { mod } = await importGatewayDetect();
+    const result = mod.prePairNerveDevice('test-token');
+    const paired = JSON.parse(readFileSync(pairedPath, 'utf8'));
+    const tempFiles = readdirSync(path.dirname(pairedPath)).filter((entry) => entry.startsWith('paired.json.') && entry.endsWith('.tmp'));
+
+    expect(result.ok).toBe(true);
+    expect(paired['nerve-device'].tokens.operator.token).toBe('test-token');
+    expect(existsSync(staleTempPath)).toBe(false);
+    expect(tempFiles).toEqual([]);
   });
 
   it('repairs only the explicitly targeted identity and does not broaden every paired device', async () => {
