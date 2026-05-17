@@ -556,6 +556,28 @@ describe('useVoiceInput', () => {
       expect(onTranscription).toHaveBeenCalledWith('second turn text');
     });
 
+    it('does not resume wake mode after live voice transcription', async () => {
+      localStorage.setItem('nerve:wakeWordEnabled', 'true');
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'local', 500, true));
+
+      await act(async () => {
+        await result.current.startRecording();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      act(() => {
+        result.current.stopAndTranscribe();
+      });
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      expect(result.current.voiceState).toBe('idle');
+      expect(onTranscription).toHaveBeenCalledWith('transcribed text');
+    });
+
     it('should handle transcription API errors gracefully', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       (globalThis.fetch as Mock).mockResolvedValue({

@@ -503,7 +503,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     setDraftText('');
     onSend('[voice] ' + text);
-  }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? 1100 : undefined);
+  }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? 1100 : undefined, continuousVoiceEnabled);
   const wasGeneratingRef = useRef(isGenerating);
 
   useEffect(() => {

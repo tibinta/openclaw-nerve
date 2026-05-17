@@ -166,6 +166,7 @@ export function useVoiceInput(
   phrasesVersion: number = 0,
   sttInputMode: STTInputMode = 'hybrid',
   autoStopAfterSilenceMs?: number,
+  suppressWakeWordResume: boolean = false,
 ) {
   const [state, setState] = useState<VoiceState>('idle');
   const stateRef = useRef<VoiceState>('idle');
@@ -182,6 +183,8 @@ export function useVoiceInput(
   sttInputModeRef.current = sttInputMode;
   const autoStopAfterSilenceMsRef = useRef(autoStopAfterSilenceMs);
   autoStopAfterSilenceMsRef.current = autoStopAfterSilenceMs;
+  const suppressWakeWordResumeRef = useRef(suppressWakeWordResume);
+  suppressWakeWordResumeRef.current = suppressWakeWordResume;
 
   // Single persistent recognition instance
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -534,7 +537,7 @@ export function useVoiceInput(
           ? 'Microphone permission denied'
           : 'Failed to access microphone';
       setError(msg);
-      if (wakeWordEnabledRef.current) {
+      if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
         setVoiceState('listening');
         ensureRecognitionRef.current('wake');
       }
@@ -555,7 +558,7 @@ export function useVoiceInput(
       mediaRecorderRef.current.stop();
     }
     stopStream();
-    if (wakeWordEnabledRef.current) {
+    if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
       setVoiceState('listening');
       ensureRecognitionRef.current('wake');
     } else {
@@ -635,7 +638,7 @@ export function useVoiceInput(
         resetBrowserTranscript();
       }
       // Resume wake word listener
-      if (wakeWordEnabledRef.current) {
+      if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
         setVoiceState('listening');
         ensureRecognitionRef.current('wake');
       } else {
