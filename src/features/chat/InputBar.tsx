@@ -506,16 +506,22 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? liveVoicePauseMs : undefined, continuousVoiceEnabled);
   const wasGeneratingRef = useRef(isGenerating);
   const pendingLiveVoiceRestartRef = useRef(false);
+  const previousVoiceStateRef = useRef(voiceState);
 
   useEffect(() => {
     const wasGenerating = wasGeneratingRef.current;
     wasGeneratingRef.current = isGenerating;
+    const previousVoiceState = previousVoiceStateRef.current;
+    previousVoiceStateRef.current = voiceState;
     if (!continuousVoiceEnabled) {
       pendingLiveVoiceRestartRef.current = false;
       return;
     }
     if (isGenerating || voiceState !== 'idle') return;
-    if (wasGenerating) {
+    if (wasGenerating || previousVoiceState === 'transcribing') {
+      // Live voice can finish a quiet-pause transcription before the outgoing
+      // chat request flips into generating. Mark a restart here too, so a
+      // second dictation after a short break is not lost.
       pendingLiveVoiceRestartRef.current = true;
     }
     if (!pendingLiveVoiceRestartRef.current || isTtsSpeaking) return;

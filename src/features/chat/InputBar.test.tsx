@@ -4,6 +4,21 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { InputBar, type InputBarHandle, resetInputBarComposerSnapshotForTests } from './InputBar';
 import { compressImage } from './image-compress';
 
+const voiceInputMockState = vi.hoisted(() => ({
+  voiceState: 'idle' as 'idle' | 'listening' | 'recording' | 'transcribing',
+  startRecording: vi.fn(),
+  stopAndTranscribe: vi.fn(),
+  discardRecording: vi.fn(),
+  toggleWakeWord: vi.fn(),
+  clearError: vi.fn(),
+}));
+
+const settingsMockState = vi.hoisted(() => ({
+  continuousVoiceEnabled: false,
+  isTtsSpeaking: false,
+  toggleContinuousVoice: vi.fn(),
+}));
+
 vi.mock('./image-compress', () => ({
   compressImage: vi.fn(async (file: File) => ({
     base64: `mock-${file.name}`,
@@ -22,15 +37,15 @@ vi.mock('./image-compress', () => ({
 
 vi.mock('@/features/voice/useVoiceInput', () => ({
   useVoiceInput: () => ({
-    voiceState: 'idle',
+    voiceState: voiceInputMockState.voiceState,
     interimTranscript: '',
     wakeWordEnabled: false,
-    toggleWakeWord: vi.fn(),
-    startRecording: vi.fn(),
-    stopAndTranscribe: vi.fn(),
-    discardRecording: vi.fn(),
+    toggleWakeWord: voiceInputMockState.toggleWakeWord,
+    startRecording: voiceInputMockState.startRecording,
+    stopAndTranscribe: voiceInputMockState.stopAndTranscribe,
+    discardRecording: voiceInputMockState.discardRecording,
     error: null,
-    clearError: vi.fn(),
+    clearError: voiceInputMockState.clearError,
   }),
 }));
 
@@ -63,10 +78,10 @@ vi.mock('@/contexts/SettingsContext', () => ({
     liveTranscriptionPreview: false,
     sttInputMode: 'browser',
     sttProvider: 'browser',
-    continuousVoiceEnabled: false,
-    toggleContinuousVoice: vi.fn(),
+    continuousVoiceEnabled: settingsMockState.continuousVoiceEnabled,
+    toggleContinuousVoice: settingsMockState.toggleContinuousVoice,
     liveVoicePauseMs: 1800,
-    isTtsSpeaking: false,
+    isTtsSpeaking: settingsMockState.isTtsSpeaking,
   }),
 }));
 
@@ -93,6 +108,15 @@ describe('InputBar', () => {
 
   beforeEach(() => {
     resetInputBarComposerSnapshotForTests();
+    voiceInputMockState.voiceState = 'idle';
+    voiceInputMockState.startRecording.mockClear();
+    voiceInputMockState.stopAndTranscribe.mockClear();
+    voiceInputMockState.discardRecording.mockClear();
+    voiceInputMockState.toggleWakeWord.mockClear();
+    voiceInputMockState.clearError.mockClear();
+    settingsMockState.continuousVoiceEnabled = false;
+    settingsMockState.isTtsSpeaking = false;
+    settingsMockState.toggleContinuousVoice.mockClear();
 
     uploadConfigResponse = {
       twoModeEnabled: true,
@@ -273,6 +297,22 @@ describe('InputBar', () => {
     expect(clickSpy).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu', { name: 'Attachment actions' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Browse by path/i })).not.toBeInTheDocument();
+  });
+
+  it('restarts live voice after a quiet-pause transcription settles before generation flips', async () => {
+    vi.useFakeTimers();
+    settingsMockState.continuousVoiceEnabled = true;
+    voiceInputMockState.voiceState = 'transcribing';
+
+    const { rerender } = render(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+    voiceInputMockState.voiceState = 'idle';
+    rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+    await vi.advanceTimersByTimeAsync(700);
+
+    expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it('stages workspace file add-to-chat requests as server_path file references', async () => {
