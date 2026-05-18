@@ -413,6 +413,10 @@ function ApiKeyInput({
 
 /** Available models per provider. */
 const PROVIDER_MODELS: Record<TTSProvider, { value: string; label: string }[]> = {
+  holler: [
+    { value: '12', label: 'Fast stream' },
+    { value: '16', label: 'Best quality' },
+  ],
   openai: [
     { value: '', label: 'gpt-4o-mini-tts (default)' },
     { value: 'tts-1', label: 'tts-1' },
@@ -426,6 +430,15 @@ const PROVIDER_MODELS: Record<TTSProvider, { value: string; label: string }[]> =
   ],
   edge: [],
 };
+
+const HOLLER_VOICES = [
+  { value: 'nora', label: 'Nora — warm woman' },
+  { value: 'tessa', label: 'Tessa — bright woman' },
+  { value: 'kit', label: 'Kit — calm neutral' },
+  { value: 'dakota', label: 'Dakota — steady man' },
+  { value: 'joe', label: 'Joe — upbeat man' },
+  { value: 'oliver', label: 'Oliver — deep man' },
+];
 
 /** Settings section for notification sounds, TTS provider/model, and wake-word toggle. */
 export function AudioSettings({
@@ -729,6 +742,14 @@ export function AudioSettings({
           <div className="flex gap-2">
             <button
               type="button"
+              onClick={() => onTtsProviderChange('holler')}
+              data-active={ttsProvider === 'holler'}
+              className="shell-chip min-h-11 flex-1 justify-center rounded-2xl px-3 py-2 text-sm font-medium"
+            >
+              Holler
+            </button>
+            <button
+              type="button"
               onClick={() => onTtsProviderChange('openai')}
               data-active={ttsProvider === 'openai'}
               className="shell-chip min-h-11 flex-1 justify-center rounded-2xl px-3 py-2 text-sm font-medium"
@@ -760,7 +781,7 @@ export function AudioSettings({
               Xiaomi Mimo
             </button>
           </div>
-          <p className="cockpit-field-hint px-1">Choose the voice engine first, then tune the model and speaking style below.</p>
+          <p className="cockpit-field-hint px-1">Choose the voice engine first, then tune the voice below.</p>
 
           {langState?.language && langState.language !== 'en' && ttsProvider === 'replicate' && !langState.providers.qwen3 && (
             <div className="rounded-[18px] border border-orange/30 bg-orange/6 px-3 py-3 text-orange/85">
@@ -795,9 +816,16 @@ export function AudioSettings({
             <p className="mt-1 text-xs text-muted-foreground">Select the synthesis model exposed by the active provider.</p>
           </div>
           <InlineSelect
-            value={ttsProvider === 'xiaomi' ? (ttsModel || config?.xiaomi.model || '') : ttsModel}
+            value={
+              ttsProvider === 'xiaomi'
+                ? (ttsModel || config?.xiaomi.model || '')
+                : ttsProvider === 'holler'
+                  ? (ttsModel || config?.holler.nCodebooks || '12')
+                  : ttsModel
+            }
             onChange={(value) => {
               onTtsModelChange(value);
+              if (ttsProvider === 'holler') updateField('holler', 'nCodebooks', value);
               if (ttsProvider === 'xiaomi') updateField('xiaomi', 'model', value);
             }}
             options={models}
@@ -838,6 +866,31 @@ export function AudioSettings({
                 value={config.openai.instructions}
                 onChange={(v) => updateField('openai', 'instructions', v)}
                 placeholder="Describe how the voice should sound..."
+              />
+            </>
+          )}
+
+          {ttsProvider === 'holler' && (
+            <>
+              <div className="cockpit-row items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm font-medium text-foreground">Voice</span>
+                  <p className="mt-1 text-xs text-muted-foreground">Use a fast local Holler voice for reply playback.</p>
+                </div>
+                <InlineSelect
+                  value={config.holler.voice}
+                  onChange={(v) => updateField('holler', 'voice', v)}
+                  options={HOLLER_VOICES}
+                  ariaLabel="Holler Voice"
+                  triggerClassName={`${INLINE_SELECT_TRIGGER_CLASS} min-w-[220px]`}
+                  menuClassName={`${INLINE_SELECT_MENU_CLASS} min-w-[240px]`}
+                />
+              </div>
+              <ExpandableInput
+                label="Holler Server"
+                value={config.holler.baseUrl}
+                onChange={(v) => updateField('holler', 'baseUrl', v)}
+                placeholder="http://127.0.0.1:8100"
               />
             </>
           )}

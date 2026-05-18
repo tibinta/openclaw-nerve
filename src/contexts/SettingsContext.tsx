@@ -13,6 +13,7 @@ const MAX_LIVE_VOICE_PAUSE_MS = 5000;
 interface TTSVoiceConfigSnapshot {
   openai?: { voice?: string; model?: string };
   edge?: { voice?: string };
+  holler?: { voice?: string; nCodebooks?: string };
   qwen?: { speaker?: string };
   xiaomi?: { voice?: string; model?: string };
 }
@@ -66,6 +67,7 @@ interface SettingsContextValue {
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 const FONT_REFRESH_STORAGE_KEY = 'nerve:font-refresh-20260312';
 const KANBAN_VISIBILITY_STORAGE_KEY = 'nerve:workspace:kanban-visible';
+const HOLLER_DEFAULT_MIGRATION_KEY = 'nerve:holler-default-tts-20260518';
 
 const ALLOWED_FONT_SIZES = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24]);
 const ALLOWED_EDITOR_FONT_SIZES = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24]);
@@ -104,9 +106,22 @@ function resolveInitialFont(): FontName {
   return saved && fontNames.includes(saved as FontName) ? saved as FontName : 'instrument-sans';
 }
 
+function resolveInitialTtsProvider(): TTSProvider {
+  const hasMigrated = localStorage.getItem(HOLLER_DEFAULT_MIGRATION_KEY) === 'true';
+  if (!hasMigrated) {
+    // Holler is now the preferred local voice path. We switch existing browsers
+    // once, then future user provider changes are respected by the migration key.
+    localStorage.setItem(HOLLER_DEFAULT_MIGRATION_KEY, 'true');
+    localStorage.setItem('oc-tts-provider', 'holler');
+    return 'holler';
+  }
+
+  return migrateTTSProvider(localStorage.getItem('oc-tts-provider') || 'holler');
+}
+
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [soundEnabled, setSoundEnabled] = useState(localStorage.getItem('oc-sound') === 'true');
-  const [ttsProvider, setTtsProvider] = useState<TTSProvider>(() => migrateTTSProvider(localStorage.getItem('oc-tts-provider') || 'edge'));
+  const [ttsProvider, setTtsProvider] = useState<TTSProvider>(resolveInitialTtsProvider);
   const [ttsModel, setTtsModelState] = useState(() => localStorage.getItem('oc-tts-model') || '');
   const [ttsVoiceConfig, setTtsVoiceConfig] = useState<TTSVoiceConfigSnapshot | null>(null);
   const [sttProvider, setSttProviderState] = useState<STTProvider>(() => {
@@ -168,9 +183,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const selectedTtsVoice =
     ttsProvider === 'openai' ? ttsVoiceConfig?.openai?.voice :
       ttsProvider === 'edge' ? ttsVoiceConfig?.edge?.voice :
-        ttsProvider === 'xiaomi' ? ttsVoiceConfig?.xiaomi?.voice :
-          ttsVoiceConfig?.qwen?.speaker;
-  const selectedTtsModel = ttsProvider === 'xiaomi'
+        ttsProvider === 'holler' ? ttsVoiceConfig?.holler?.voice :
+          ttsProvider === 'xiaomi' ? ttsVoiceConfig?.xiaomi?.voice :
+            ttsVoiceConfig?.qwen?.speaker;
+  const selectedTtsModel = ttsProvider === 'holler'
+    ? (ttsModel || ttsVoiceConfig?.holler?.nCodebooks)
+    : ttsProvider === 'xiaomi'
     ? (ttsModel || ttsVoiceConfig?.xiaomi?.model)
     : (ttsModel || ttsVoiceConfig?.openai?.model);
   const { speak, isSpeaking: isTtsSpeaking } = useTTS(true, ttsProvider, { model: selectedTtsModel || undefined, voice: selectedTtsVoice || undefined });
@@ -316,7 +334,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const toggleTtsProvider = useCallback(() => {
     setTtsProvider(prev => {
-      const order: TTSProvider[] = ['openai', 'replicate', 'xiaomi', 'edge'];
+      const order: TTSProvider[] = ['holler', 'edge', 'openai', 'replicate', 'xiaomi'];
       const next = order[(order.indexOf(prev) + 1) % order.length]!;
       localStorage.setItem('oc-tts-provider', next);
       return next;

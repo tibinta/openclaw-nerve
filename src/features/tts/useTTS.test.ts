@@ -104,9 +104,13 @@ describe('migrateTTSProvider', () => {
     expect(migrateTTSProvider('xiaomi')).toBe('xiaomi');
   });
 
-  it('should default unknown values to "openai"', () => {
-    expect(migrateTTSProvider('unknown')).toBe('openai');
-    expect(migrateTTSProvider('')).toBe('openai');
+  it('should keep "holler" as-is', () => {
+    expect(migrateTTSProvider('holler')).toBe('holler');
+  });
+
+  it('should default unknown values to "holler"', () => {
+    expect(migrateTTSProvider('unknown')).toBe('holler');
+    expect(migrateTTSProvider('')).toBe('holler');
   });
 });
 

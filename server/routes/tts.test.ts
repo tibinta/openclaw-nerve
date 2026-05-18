@@ -19,6 +19,8 @@ describe('TTS routes', () => {
     openaiResult?: { ok: boolean; buf?: Buffer; message?: string; status?: number };
     replicateResult?: { ok: boolean; buf?: Buffer; message?: string; status?: number };
     xiaomiResult?: { ok: boolean; buf?: Buffer; message?: string; status?: number; contentType?: string };
+    hollerResult?: { ok: boolean; buf?: Buffer; message?: string; status?: number; contentType?: string };
+    hollerStream?: Response | { ok: false; message: string; status: number };
   } = {}) {
     vi.doMock('../lib/config.js', () => ({
       config: {
@@ -57,10 +59,25 @@ describe('TTS routes', () => {
         overrides.xiaomiResult || { ok: true, buf: Buffer.from('RIFFdemo'), contentType: 'audio/wav' }
       ),
     }));
+    vi.doMock('../services/holler-tts.js', () => ({
+      synthesizeHoller: vi.fn(async () =>
+        overrides.hollerResult || { ok: true, buf: Buffer.from('RIFFholler'), contentType: 'audio/wav' }
+      ),
+      streamHollerSpeech: vi.fn(async () =>
+        overrides.hollerStream || new Response(new ReadableStream(), {
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Audio-Format': 'float32-pcm',
+            'X-Audio-Sample-Rate': '24000',
+          },
+        })
+      ),
+    }));
     vi.doMock('../lib/tts-config.js', () => ({
       getTTSConfig: vi.fn(() => ({
         openai: { voice: 'alloy', model: 'tts-1', instructions: '' },
         edge: { voice: 'en-US-JennyNeural' },
+        holler: { baseUrl: 'http://127.0.0.1:8100', voice: 'nora', nCodebooks: '12', temperature: '0.7' },
         qwen: {},
         xiaomi: { model: 'mimo-v2-tts', voice: 'mimo_default', style: 'Happy' },
       })),
@@ -98,8 +115,20 @@ describe('TTS routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('falls back to edge TTS when no API keys set', async () => {
+    it('uses Holler by default when no explicit provider is set', async () => {
       mockDeps();
+      const app = await buildApp();
+      const res = await app.request('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Hello world' }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toBe('audio/wav');
+    });
+
+    it('falls back to Edge when default Holler is unavailable', async () => {
+      mockDeps({ hollerResult: { ok: false, message: 'Holler unavailable', status: 502 } });
       const app = await buildApp();
       const res = await app.request('/api/tts', {
         method: 'POST',
@@ -144,6 +173,19 @@ describe('TTS routes', () => {
       expect(res.headers.get('Content-Type')).toBe('audio/wav');
     });
 
+    it('streams explicit Holler PCM audio', async () => {
+      mockDeps();
+      const app = await buildApp();
+      const res = await app.request('/api/tts/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Hello', provider: 'holler', voice: 'nora' }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('X-Audio-Format')).toBe('float32-pcm');
+      expect(res.headers.get('X-Audio-Sample-Rate')).toBe('24000');
+    });
+
     it('honors explicit Xiaomi provider even when other keys exist', async () => {
       mockDeps({ openaiKey: 'sk-test', replicateToken: 'r8-test', mimoKey: 'sk-mimo' });
       const app = await buildApp();
@@ -167,13 +209,13 @@ describe('TTS routes', () => {
       expect(res.status).toBe(502);
     });
 
-    it('returns error from provider failure', async () => {
+    it('returns error from explicit provider failure', async () => {
       mockDeps({ edgeResult: { ok: false, message: 'Edge TTS failed', status: 500 } });
       const app = await buildApp();
       const res = await app.request('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'Hello' }),
+        body: JSON.stringify({ text: 'Hello', provider: 'edge' }),
       });
       expect(res.status).toBe(500);
     });
@@ -198,6 +240,7 @@ describe('TTS routes', () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
       expect(json).toHaveProperty('openai');
+      expect(json).toHaveProperty('holler');
       expect(json).toHaveProperty('edge');
     });
   });
@@ -232,6 +275,17 @@ describe('TTS routes', () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ xiaomi: { model: 'mimo-v2-tts', voice: 'default_en', style: 'Happy' } }),
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('accepts valid Holler config patch', async () => {
+      mockDeps();
+      const app = await buildApp();
+      const res = await app.request('/api/tts/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ holler: { voice: 'nora', nCodebooks: '12' } }),
       });
       expect(res.status).toBe(200);
     });

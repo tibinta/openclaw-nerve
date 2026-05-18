@@ -1,7 +1,7 @@
 /**
  * TTS voice configuration — reads/writes a JSON config file.
  *
- * All voice-related settings (OpenAI, Qwen/Replicate, Edge) live here
+ * All voice-related settings (Holler, OpenAI, Qwen/Replicate, Edge) live here
  * instead of env vars or hardcoded values. On first run, default settings
  * are written to `<PROJECT_ROOT>/tts-config.json`. Subsequent reads merge
  * the on-disk config with defaults so new fields are always present.
@@ -46,6 +46,17 @@ export interface TTSVoiceConfig {
     /** Voice name (e.g. en-US-AriaNeural, en-GB-SoniaNeural) */
     voice: string;
   };
+  /** Holler local TTS settings */
+  holler: {
+    /** Local Holler server URL */
+    baseUrl: string;
+    /** Holler voice name */
+    voice: string;
+    /** Encodec codebook count: lower starts faster, higher can sound richer */
+    nCodebooks: string;
+    /** Sampling temperature */
+    temperature: string;
+  };
   /** Xiaomi MiMo TTS settings */
   xiaomi: {
     /** Xiaomi model name */
@@ -73,6 +84,12 @@ const DEFAULTS: TTSVoiceConfig = {
   },
   edge: {
     voice: 'en-GB-SoniaNeural',
+  },
+  holler: {
+    baseUrl: 'http://127.0.0.1:8100',
+    voice: 'nora',
+    nCodebooks: '12',
+    temperature: '0.7',
   },
   xiaomi: {
     model: 'mimo-v2-tts',

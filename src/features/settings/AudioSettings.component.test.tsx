@@ -15,6 +15,7 @@ vi.mock('@/features/tts/useTTSConfig', () => ({
   useTTSConfig: () => ({
     config: {
       edge: { voice: 'en-GB-SoniaNeural' },
+      holler: { baseUrl: 'http://127.0.0.1:8100', voice: 'nora', nCodebooks: '12', temperature: '0.7' },
       openai: { model: 'tts-1', voice: 'alloy', instructions: '' },
       qwen: { mode: 'voice_design', language: 'English', speaker: 'Serena', voiceDescription: '', styleInstruction: '' },
       xiaomi: { model: 'mimo-v2-tts', voice: 'mimo_default', style: '' },
@@ -177,6 +178,31 @@ describe('AudioSettings', () => {
   });
 
   describe('Xiaomi Mimo output settings', () => {
+    it('renders Holler as the first provider button', async () => {
+      render(<AudioSettings {...baseProps} section="output" ttsProvider="holler" ttsModel="12" />);
+      expect(await screen.findByRole('button', { name: 'Holler' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Holler' })).toHaveAttribute('data-active', 'true');
+    });
+
+    it('renders Holler model and warm woman voice selectors', async () => {
+      render(<AudioSettings {...baseProps} section="output" ttsProvider="holler" ttsModel="12" />);
+
+      expect(await screen.findByLabelText('TTS Model')).toHaveValue('12');
+      expect(screen.getByLabelText('Holler Voice')).toHaveValue('nora');
+      expect(screen.getByRole('option', { name: 'Fast stream' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Nora — warm woman' })).toBeInTheDocument();
+    });
+
+    it('updates Holler voice and codebook setting', async () => {
+      render(<AudioSettings {...baseProps} section="output" ttsProvider="holler" ttsModel="12" />);
+
+      fireEvent.change(await screen.findByLabelText('TTS Model'), { target: { value: '16' } });
+      expect(updateField).toHaveBeenCalledWith('holler', 'nCodebooks', '16');
+
+      fireEvent.change(screen.getByLabelText('Holler Voice'), { target: { value: 'tessa' } });
+      expect(updateField).toHaveBeenCalledWith('holler', 'voice', 'tessa');
+    });
+
     it('renders a Xiaomi Mimo provider button', async () => {
       render(<AudioSettings {...baseProps} section="output" ttsProvider="xiaomi" ttsModel="" />);
       expect(await screen.findByRole('button', { name: 'Xiaomi Mimo' })).toBeInTheDocument();

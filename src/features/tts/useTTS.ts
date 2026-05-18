@@ -14,7 +14,7 @@ if (typeof document !== 'undefined') {
   events.forEach(e => document.addEventListener(e, handler, { capture: true, once: false }));
 }
 
-export type TTSProvider = 'openai' | 'replicate' | 'edge' | 'xiaomi';
+export type TTSProvider = 'holler' | 'openai' | 'replicate' | 'edge' | 'xiaomi';
 
 /** @deprecated Use 'replicate' instead. Kept for migration. */
 export type LegacyTTSProvider = 'qwen';
@@ -22,8 +22,8 @@ export type LegacyTTSProvider = 'qwen';
 /** Migrate legacy provider names to current ones. */
 export function migrateTTSProvider(provider: string): TTSProvider {
   if (provider === 'qwen') return 'replicate';
-  if (provider === 'openai' || provider === 'replicate' || provider === 'edge' || provider === 'xiaomi') return provider;
-  return 'openai';
+  if (provider === 'holler' || provider === 'openai' || provider === 'replicate' || provider === 'edge' || provider === 'xiaomi') return provider;
+  return 'holler';
 }
 
 export interface TTSPlaybackOptions {
@@ -61,6 +61,17 @@ async function fetchTTS(text: string, provider: TTSProvider = 'openai', options:
   const ct = resp.headers.get('Content-Type') || 'audio/mpeg';
   const blob = new Blob([arrayBuffer], { type: ct });
   return blob;
+}
+
+async function fetchTTSWithFallback(text: string, provider: TTSProvider = 'holler', options: TTSPlaybackOptions = {}): Promise<Blob> {
+  try {
+    return await fetchTTS(text, provider, options);
+  } catch (err) {
+    if (provider !== 'holler') throw err;
+    // Keep replies audible if the local Holler server is not running yet.
+    console.warn('[TTS] Holler blob fallback failed; trying Edge:', err instanceof Error ? err.message : String(err));
+    return fetchTTS(text, 'edge', options);
+  }
 }
 
 async function playBlobViaAudioElement(blob: Blob): Promise<{ audio: HTMLAudioElement; url: string }> {
@@ -111,6 +122,74 @@ async function playBlobViaAudioContext(blob: Blob): Promise<void> {
   });
 }
 
+async function playHollerPcmStream(text: string, options: TTSPlaybackOptions = {}): Promise<void> {
+  ensureAudioContext();
+  const AudioContextCtor = getAudioContextCtor();
+  if (!AudioContextCtor) throw new Error('AudioContext is not available');
+  const context = new AudioContextCtor({ sampleRate: 24000 });
+  if (context.state === 'suspended') await context.resume();
+
+  const resp = await fetch('/api/tts/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(buildTTSRequestBody(text, 'holler', options)),
+  });
+  if (!resp.ok || !resp.body) {
+    await context.close().catch(() => undefined);
+    throw new Error(`Holler stream failed: ${resp.status}`);
+  }
+
+  const reader = resp.body.getReader();
+  const sampleRate = Number(resp.headers.get('X-Audio-Sample-Rate')) || 24000;
+  let nextStartTime = context.currentTime + 0.04;
+  let pending = new Uint8Array(0);
+  const sources: AudioBufferSourceNode[] = [];
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+
+      const merged = new Uint8Array(pending.byteLength + value.byteLength);
+      merged.set(pending, 0);
+      merged.set(value, pending.byteLength);
+
+      const alignedBytes = merged.byteLength - (merged.byteLength % 4);
+      if (alignedBytes === 0) {
+        pending = merged;
+        continue;
+      }
+
+      const chunkBytes = merged.slice(0, alignedBytes);
+      pending = merged.slice(alignedBytes);
+      const floats = new Float32Array(chunkBytes.buffer, chunkBytes.byteOffset, chunkBytes.byteLength / 4);
+      const audioBuffer = context.createBuffer(1, floats.length, sampleRate);
+      audioBuffer.copyToChannel(floats, 0);
+
+      const source = context.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(context.destination);
+      source.start(nextStartTime);
+      sources.push(source);
+      nextStartTime += audioBuffer.duration;
+    }
+
+    const waitMs = Math.max(0, (nextStartTime - context.currentTime) * 1000) + 120;
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+  } finally {
+    sources.forEach((source) => {
+      try {
+        source.disconnect();
+      } catch {
+        // Already ended.
+      }
+    });
+    await context.close().catch(() => undefined);
+  }
+}
+
 /**
  * Hook that provides a `speak` function for text-to-speech playback.
  *
@@ -145,7 +224,17 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     const gen = ++generationRef.current;
     setIsSpeaking(true);
     try {
-      const blob = await fetchTTS(text, provider, { model, voice });
+      if (provider === 'holler') {
+        try {
+          await playHollerPcmStream(text, { model, voice });
+          return;
+        } catch (err) {
+          if (gen !== generationRef.current) return;
+          console.warn('[TTS] Holler stream failed; trying fallback audio:', err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      const blob = await fetchTTSWithFallback(text, provider, { model, voice });
       // Superseded by a newer speak() call during fetch
       if (gen !== generationRef.current) return;
       const { audio, url } = await playBlobViaAudioElement(blob).catch(async (err) => {

@@ -81,6 +81,33 @@ describe('getTTSConfig', () => {
     expect(cfg.xiaomi.style).toBe('');
   });
 
+  it('returns Holler defaults when config file is missing', async () => {
+    const mod = await loadTtsModule({
+      language: 'en',
+      edgeVoiceGender: 'female',
+      storedVoice: 'en-US-JennyNeural',
+    });
+
+    const cfg = mod.getTTSConfig();
+    expect(cfg.holler.baseUrl).toBe('http://127.0.0.1:8100');
+    expect(cfg.holler.voice).toBe('nora');
+    expect(cfg.holler.nCodebooks).toBe('12');
+    expect(cfg.holler.temperature).toBe('0.7');
+  });
+
+  it('deep-merges Holler patches without dropping defaults', async () => {
+    const mod = await loadTtsModule({
+      language: 'en',
+      edgeVoiceGender: 'female',
+      storedVoice: 'en-US-JennyNeural',
+    });
+
+    const cfg = mod.updateTTSConfig({ holler: { voice: 'tessa' } });
+    expect(cfg.holler.voice).toBe('tessa');
+    expect(cfg.holler.baseUrl).toBe('http://127.0.0.1:8100');
+    expect(cfg.holler.nCodebooks).toBe('12');
+  });
+
   it('deep-merges Xiaomi patches without dropping defaults', async () => {
     const mod = await loadTtsModule({
       language: 'en',

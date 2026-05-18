@@ -156,6 +156,13 @@ export function createCommands(actions: CommandActions): Command[] {
     },
     // TTS commands
     {
+      id: 'tts-holler',
+      label: 'TTS: Switch to Holler',
+      action: () => actions.onTtsProviderChange('holler' as TTSProvider),
+      category: 'voice',
+      keywords: ['tts', 'voice', 'speech', 'holler', 'local', 'apple silicon'],
+    },
+    {
       id: 'tts-openai',
       label: 'TTS: Switch to OpenAI',
       action: () => actions.onTtsProviderChange('openai' as TTSProvider),

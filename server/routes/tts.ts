@@ -1,16 +1,17 @@
 /**
  * POST /api/tts — Text-to-speech synthesis.
  *
- * Supports OpenAI TTS, Replicate (Qwen, etc.), and Edge TTS (free, zero-config).
+ * Supports Holler local TTS, OpenAI TTS, Replicate (Qwen, etc.), Edge TTS (free, zero-config), and Xiaomi Mimo.
  * Body: { text: string, provider?: string, model?: string, voice?: string }
  * Response: audio/mpeg binary
  *
  * Provider selection priority:
  *  - Explicit provider choice is always honoured
+ *  - "holler" → local Holler TTS (fast Apple Silicon path, no key)
  *  - "openai" → OpenAI TTS (requires OPENAI_API_KEY)
  *  - "replicate" → Replicate-hosted models (requires REPLICATE_API_TOKEN)
  *  - "edge" → Microsoft Edge Read-Aloud TTS (free, no key needed)
- *  - Auto fallback: openai (if key) → replicate (if key) → edge (always available)
+ *  - Auto fallback: holler → openai (if key) → replicate (if key) → edge (always available)
  *
  * Backward compat: provider "qwen" is treated as replicate + model "qwen-tts".
  */
@@ -26,6 +27,7 @@ import { synthesizeOpenAI } from '../services/openai-tts.js';
 import { synthesizeReplicate } from '../services/replicate-tts.js';
 import { synthesizeEdge } from '../services/edge-tts.js';
 import { synthesizeXiaomi } from '../services/xiaomi-tts.js';
+import { streamHollerSpeech, synthesizeHoller } from '../services/holler-tts.js';
 import { rateLimitTTS, rateLimitGeneral } from '../middleware/rate-limit.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -41,7 +43,7 @@ const ttsSchema = z.object({
     .refine((s) => s.trim().length > 0, 'Text cannot be empty or whitespace'),
   voice: z.string().optional(),
   // Accept both old ("qwen") and new ("replicate") values
-  provider: z.enum(['openai', 'replicate', 'qwen', 'edge', 'xiaomi']).optional(),
+  provider: z.enum(['holler', 'openai', 'replicate', 'qwen', 'edge', 'xiaomi']).optional(),
   model: z.string().optional(),
 });
 
@@ -72,7 +74,9 @@ app.post(
       // Voice is passed through — each provider resolves its own default from config
       const voice = rawVoice;
 
-      // Resolve effective provider: explicit > openai (if key) > replicate (if key) > edge
+      // Resolve effective provider: explicit > holler > openai (if key) > replicate (if key) > edge.
+      // Holler is local and recoverable; if it is absent, the provider error path below falls back.
+      const useHoller = provider === 'holler' || !provider;
       const useXiaomi = provider === 'xiaomi';
       const useReplicate =
         provider === 'replicate' ||
@@ -80,7 +84,9 @@ app.post(
       const useEdge =
         provider === 'edge' ||
         (!provider && !config.openaiApiKey && !config.replicateApiToken);
-      const effectiveProvider = useXiaomi
+      const effectiveProvider = useHoller
+        ? 'holler'
+        : useXiaomi
         ? 'xiaomi'
         : useEdge
           ? 'edge'
@@ -89,12 +95,17 @@ app.post(
             : 'openai';
       console.log(`[tts] provider=${effectiveProvider} voice=${voice} text="${text.slice(0, 50)}..."`);
 
-      const xiaomiStyle = effectiveProvider === 'xiaomi' ? getTTSConfig().xiaomi.style : '';
+      const ttsConfig = getTTSConfig();
+      const xiaomiStyle = effectiveProvider === 'xiaomi' ? ttsConfig.xiaomi.style : '';
+      const hollerSettings =
+        effectiveProvider === 'holler'
+          ? `${ttsConfig.holler.baseUrl}:${ttsConfig.holler.nCodebooks}:${ttsConfig.holler.temperature}`
+          : '';
 
-      // Cache key includes provider + model + voice and Xiaomi style for proper isolation
+      // Cache key includes provider + model + voice and provider-specific style/server knobs for proper isolation.
       const hash = crypto
         .createHash('md5')
-        .update(`${effectiveProvider}:${model || ''}:${voice || ''}:${xiaomiStyle}:${text}`)
+        .update(`${effectiveProvider}:${model || ''}:${voice || ''}:${xiaomiStyle}:${hollerSettings}:${text}`)
         .digest('hex');
 
       const cached = getTtsCache(hash);
@@ -105,7 +116,14 @@ app.post(
       }
 
       let result;
-      if (effectiveProvider === 'xiaomi') {
+      if (effectiveProvider === 'holler') {
+        result = await synthesizeHoller(text, voice);
+        // If the local Holler server is down, keep voice replies working through Edge.
+        if (!result.ok) {
+          console.warn('[tts] Holler failed; falling back to Edge:', result.message);
+          result = await synthesizeEdge(text, voice);
+        }
+      } else if (effectiveProvider === 'xiaomi') {
         result = await synthesizeXiaomi(text, { model, voice });
       } else if (effectiveProvider === 'edge') {
         result = await synthesizeEdge(text, voice);
@@ -129,6 +147,33 @@ app.post(
   },
 );
 
+app.post(
+  '/api/tts/stream',
+  rateLimitTTS,
+  zValidator('json', ttsSchema, (result, c) => {
+    if (!result.success) {
+      return c.text(result.error.issues[0]?.message || 'Invalid request', 400);
+    }
+  }),
+  async (c) => {
+    try {
+      const { text, voice: rawVoice, provider: rawProvider } = c.req.valid('json');
+      const provider = rawProvider === 'qwen' ? 'replicate' : rawProvider || 'holler';
+
+      if (provider !== 'holler') {
+        return c.text('Streaming is only available for Holler TTS', 400);
+      }
+
+      const result = await streamHollerSpeech(text, rawVoice);
+      if (result instanceof Response) return result;
+      return c.text(result.message, result.status as ContentfulStatusCode);
+    } catch (err) {
+      console.error('[tts-stream] error:', (err as Error).message || err);
+      return c.text('TTS stream failed', 500);
+    }
+  },
+);
+
 // ---------------------------------------------------------------------------
 // TTS voice config API — read & update tts-config.json
 // ---------------------------------------------------------------------------
@@ -143,6 +188,7 @@ const TTS_CONFIG_SCHEMA: Record<string, string[]> = {
   qwen: ['mode', 'language', 'speaker', 'voiceDescription', 'styleInstruction'],
   openai: ['model', 'voice', 'instructions'],
   edge: ['voice'],
+  holler: ['baseUrl', 'voice', 'nCodebooks', 'temperature'],
   xiaomi: ['model', 'voice', 'style'],
 };
 
