@@ -507,6 +507,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const wasGeneratingRef = useRef(isGenerating);
   const pendingLiveVoiceRestartRef = useRef(false);
   const previousVoiceStateRef = useRef(voiceState);
+  const latestLiveVoiceStateRef = useRef({ isGenerating, isTtsSpeaking, voiceState, continuousVoiceEnabled });
+  latestLiveVoiceStateRef.current = { isGenerating, isTtsSpeaking, voiceState, continuousVoiceEnabled };
 
   useEffect(() => {
     const wasGenerating = wasGeneratingRef.current;
@@ -526,10 +528,18 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     if (!pendingLiveVoiceRestartRef.current || isTtsSpeaking) return;
     const id = window.setTimeout(() => {
-      if (isTtsSpeaking) return;
+      const latest = latestLiveVoiceStateRef.current;
+      if (
+        !latest.continuousVoiceEnabled ||
+        latest.isGenerating ||
+        latest.isTtsSpeaking ||
+        latest.voiceState !== 'idle'
+      ) {
+        return;
+      }
       pendingLiveVoiceRestartRef.current = false;
       void startRecording();
-    }, 700);
+    }, previousVoiceState === 'transcribing' ? 1400 : 700);
     return () => window.clearTimeout(id);
   }, [continuousVoiceEnabled, isGenerating, isTtsSpeaking, startRecording, voiceState]);
 

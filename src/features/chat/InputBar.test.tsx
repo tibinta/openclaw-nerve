@@ -309,6 +309,29 @@ describe('InputBar', () => {
     voiceInputMockState.voiceState = 'idle';
     rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
 
+    await vi.advanceTimersByTimeAsync(1400);
+
+    expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('does not restart live voice during the send/generation handoff after transcription', async () => {
+    vi.useFakeTimers();
+    settingsMockState.continuousVoiceEnabled = true;
+    voiceInputMockState.voiceState = 'transcribing';
+
+    const { rerender } = render(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+    voiceInputMockState.voiceState = 'idle';
+    rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+    await vi.advanceTimersByTimeAsync(500);
+    rerender(<InputBar onSend={vi.fn()} isGenerating={true} />);
+    await vi.advanceTimersByTimeAsync(1400);
+
+    expect(voiceInputMockState.startRecording).not.toHaveBeenCalled();
+
+    rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
     await vi.advanceTimersByTimeAsync(700);
 
     expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
