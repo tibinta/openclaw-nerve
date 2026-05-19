@@ -242,6 +242,26 @@ describe('TTS routes', () => {
       expect(json).toHaveProperty('openai');
       expect(json).toHaveProperty('holler');
       expect(json).toHaveProperty('edge');
+      expect(json.defaults).toMatchObject({ ttsProvider: 'holler', ttsVoice: 'nora' });
+      expect(Array.isArray(json.providers)).toBe(true);
+    });
+  });
+
+  describe('GET /api/voice/providers', () => {
+    it('links runtime providers with Nora first and default', async () => {
+      mockDeps();
+      const app = await buildApp();
+      const res = await app.request('/api/voice/providers');
+      expect(res.status).toBe(200);
+      const json = await res.json() as {
+        defaults: { ttsProvider: string; ttsVoice: string; sttProvider: string };
+        tts: Array<{ id: string; voices?: Array<{ id: string; default?: boolean }> }>;
+        stt: Array<{ id: string; language?: string; realtime?: boolean }>;
+      };
+      const holler = json.tts.find((provider) => provider.id === 'holler');
+      expect(json.defaults).toMatchObject({ ttsProvider: 'holler', ttsVoice: 'nora', sttProvider: 'browser' });
+      expect(holler?.voices?.[0]).toMatchObject({ id: 'nora', default: true });
+      expect(json.stt.find((provider) => provider.id === 'browser')).toMatchObject({ language: 'en', realtime: true });
     });
   });
 

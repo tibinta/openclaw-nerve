@@ -29,6 +29,7 @@ import { synthesizeEdge } from '../services/edge-tts.js';
 import { synthesizeXiaomi } from '../services/xiaomi-tts.js';
 import { streamHollerSpeech, synthesizeHoller } from '../services/holler-tts.js';
 import { rateLimitTTS, rateLimitGeneral } from '../middleware/rate-limit.js';
+import { getVoiceProviderRegistry } from '../lib/voice-providers.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 const app = new Hono();
@@ -178,9 +179,18 @@ app.post(
 // TTS voice config API — read & update tts-config.json
 // ---------------------------------------------------------------------------
 
+/** GET /api/voice/providers — runtime registry for TTS + speech providers. */
+app.get('/api/voice/providers', rateLimitGeneral, (c) => {
+  return c.json(getVoiceProviderRegistry());
+});
+
 /** GET /api/tts/config — return current TTS voice config */
 app.get('/api/tts/config', rateLimitGeneral, (c) => {
-  return c.json(getTTSConfig());
+  return c.json({
+    ...getTTSConfig(),
+    providers: getVoiceProviderRegistry().tts,
+    defaults: getVoiceProviderRegistry().defaults,
+  });
 });
 
 /** Allowed top-level keys and their allowed child keys (all must be strings) */

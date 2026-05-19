@@ -15,6 +15,7 @@ import { transcribe as transcribeOpenAI } from '../services/openai-whisper.js';
 import { transcribeLocal, isModelAvailable, getActiveModel, setWhisperModel, getDownloadProgress, getSystemInfo } from '../services/whisper-local.js';
 import { rateLimitTranscribe, rateLimitGeneral } from '../middleware/rate-limit.js';
 import { normalizeVoiceTranscript } from '../lib/voice-transcript.js';
+import { getVoiceProviderRegistry } from '../lib/voice-providers.js';
 
 const MAX_FILE_SIZE = config.limits.transcribe; // 12 MB
 
@@ -96,6 +97,8 @@ app.get('/api/transcribe/config', (c) => {
   const { hasGpu } = getSystemInfo();
   return c.json({
     provider: config.sttProvider,
+    defaultProvider: 'browser',
+    providers: getVoiceProviderRegistry().stt,
     model,
     language: config.language,
     modelReady: config.sttProvider === 'local' ? isModelAvailable() : true,
@@ -121,8 +124,17 @@ app.put('/api/transcribe/config', async (c) => {
     const messages: string[] = [];
 
     // Switch provider
-    if (body.provider === 'local' || body.provider === 'openai') {
+    if (body.provider === 'browser') {
+      // Browser English is a realtime frontend speech provider. The backend
+      // stays on local Whisper so unsupported browsers can recover safely.
+      updateConfig('sttProvider', 'local');
+      updateConfig('language', 'en');
+      await writeEnvKey('STT_PROVIDER', 'local');
+      await writeEnvKey('NERVE_LANGUAGE', 'en');
+      messages.push('Provider set to browser English');
+    } else if (body.provider === 'local' || body.provider === 'openai') {
       updateConfig('sttProvider', body.provider);
+      await writeEnvKey('STT_PROVIDER', body.provider);
       messages.push(`Provider set to ${body.provider}`);
     }
 
@@ -149,6 +161,8 @@ app.put('/api/transcribe/config', async (c) => {
 
     return c.json({
       provider: config.sttProvider,
+      defaultProvider: 'browser',
+      providers: getVoiceProviderRegistry().stt,
       model: getActiveModel(),
       language: config.language,
       message: messages.join(', ') || 'No changes',

@@ -44,6 +44,10 @@ describe('transcribe routes', () => {
     vi.doMock('../lib/env-file.js', () => ({
       writeEnvKey: vi.fn(async () => {}),
     }));
+    vi.doMock('../lib/voice-providers.js', async () => {
+      const actual = await vi.importActual<typeof import('../lib/voice-providers.js')>('../lib/voice-providers.js');
+      return actual;
+    });
     vi.doMock('../lib/language.js', () => ({
       isLanguageSupported: vi.fn(() => true),
     }));
@@ -78,6 +82,10 @@ describe('transcribe routes', () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
       expect(json.provider).toBe('local');
+      expect(json.defaultProvider).toBe('browser');
+      expect(json.providers).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'browser', language: 'en', realtime: true }),
+      ]));
       expect(json.model).toBe('small.en');
       expect(json.language).toBe('en');
       expect(json).toHaveProperty('availableModels');
@@ -122,6 +130,21 @@ describe('transcribe routes', () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
       expect(json.provider).toBe('openai');
+    });
+
+    it('accepts browser English as realtime speech provider with local fallback', async () => {
+      mockDeps({ sttProvider: 'openai', openaiKey: 'sk-test' });
+      const app = await buildApp();
+      const res = await app.request('/api/transcribe/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'browser' }),
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.provider).toBe('local');
+      expect(json.language).toBe('en');
+      expect(json.defaultProvider).toBe('browser');
     });
 
     it('rejects unsupported language', async () => {

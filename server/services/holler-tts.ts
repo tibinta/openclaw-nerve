@@ -6,6 +6,7 @@
  * when Holler is not installed, still downloading, or asleep.
  */
 import { getTTSConfig } from '../lib/tts-config.js';
+import { DEFAULT_HOLLER_VOICE } from '../lib/voice-providers.js';
 
 export interface HollerTTSResult {
   ok: true;
@@ -37,7 +38,7 @@ function buildPayload(text: string, voice?: string): Record<string, string | num
   const cfg = getTTSConfig().holler;
   return {
     text,
-    voice: voice || cfg.voice || 'nora',
+    voice: voice || cfg.voice || DEFAULT_HOLLER_VOICE,
     temperature: parseTemperature(cfg.temperature),
     n_codebooks: parseCodebooks(cfg.nCodebooks),
     continue: false,
@@ -83,7 +84,7 @@ export async function synthesizeHoller(text: string, voice?: string): Promise<Ho
   const cfg = getTTSConfig().holler;
   const url = new URL(`${normalizeBaseUrl(cfg.baseUrl)}/tts`);
   url.searchParams.set('text', text);
-  url.searchParams.set('voice', voice || cfg.voice || 'nora');
+  url.searchParams.set('voice', voice || cfg.voice || DEFAULT_HOLLER_VOICE);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);

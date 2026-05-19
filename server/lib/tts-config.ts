@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { getEdgeTtsVoice, getQwen3Language, getFallbackInfo, resolveLanguage } from './language.js';
+import { DEFAULT_HOLLER_CODEBOOKS, DEFAULT_HOLLER_VOICE } from './voice-providers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -87,8 +88,8 @@ const DEFAULTS: TTSVoiceConfig = {
   },
   holler: {
     baseUrl: 'http://127.0.0.1:8100',
-    voice: 'nora',
-    nCodebooks: '12',
+    voice: DEFAULT_HOLLER_VOICE,
+    nCodebooks: DEFAULT_HOLLER_CODEBOOKS,
     temperature: '0.7',
   },
   xiaomi: {
