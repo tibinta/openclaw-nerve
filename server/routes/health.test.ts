@@ -1,4 +1,4 @@
-/** Tests for the GET /health endpoint and its gateway probe. */
+/** Tests for the health endpoints and their gateway probe. */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 
@@ -67,5 +67,18 @@ describe('GET /health', () => {
     const callArgs = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('/health');
     expect(callArgs[1]).toHaveProperty('signal');
+  });
+
+  it('should serve the public API health alias', async () => {
+    // Keep stale /api/health probes from producing noisy 404s.
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+
+    const app = await importHealthApp();
+    const res = await app.request('/api/health');
+    expect(res.status).toBe(200);
+
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.status).toBe('ok');
+    expect(json.gateway).toBe('ok');
   });
 });

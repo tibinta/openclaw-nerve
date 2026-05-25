@@ -1,14 +1,16 @@
 /**
- * GET /health — Health check endpoint.
- * Includes optional gateway connectivity probe.
+ * GET /health and /api/health — health check endpoints.
+ * The `/api/health` alias keeps stale external probes harmless while `/health`
+ * remains the documented canonical endpoint.
  */
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { config } from '../lib/config.js';
 
 const app = new Hono();
 
-app.get('/health', async (c) => {
+const getHealth = async (c: Context) => {
   let gateway: 'ok' | 'unreachable' = 'unreachable';
   try {
     const res = await fetch(`${config.gatewayUrl}/health`, {
@@ -20,6 +22,9 @@ app.get('/health', async (c) => {
   }
 
   return c.json({ status: 'ok', uptime: process.uptime(), gateway });
-});
+};
+
+app.get('/health', getHealth);
+app.get('/api/health', getHealth);
 
 export default app;
