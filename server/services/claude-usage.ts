@@ -33,6 +33,8 @@ export interface RawClaudeLimits {
   error?: string;
 }
 
+let didWarnAboutPtySpawnFailure = false;
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /** Strip ANSI/OSC/CSI escape sequences and carriage returns from PTY output. */
@@ -103,6 +105,10 @@ function hasTrustPrompt(clean: string): boolean {
     lower.includes('quick safety check') ||
     lower.includes('accessing workspace')
   );
+}
+
+function isPtySpawnFailure(error: unknown): boolean {
+  return error instanceof Error && error.message === 'posix_spawnp failed.';
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -237,7 +243,17 @@ export async function getClaudeUsage(): Promise<RawClaudeLimits> {
           : null,
     };
   } catch (error) {
-    console.error('Error fetching Claude usage via PTY:', error);
+    if (isPtySpawnFailure(error)) {
+      // node-pty can fail to allocate a PTY under local resource pressure.
+      // Keep the dashboard calm by returning the normal unavailable state
+      // and logging one short warning instead of a stack trace on every poll.
+      if (!didWarnAboutPtySpawnFailure) {
+        didWarnAboutPtySpawnFailure = true;
+        console.warn('Claude usage unavailable: PTY spawn failed; showing fallback limits state.');
+      }
+    } else {
+      console.error('Error fetching Claude usage via PTY:', error);
+    }
     return {
       available: false,
       error: error instanceof Error ? error.message : 'Unknown error',
