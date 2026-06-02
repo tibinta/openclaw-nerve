@@ -35,6 +35,8 @@ export interface GatewayFileWithContent extends GatewayFileEntry {
 const DEFAULT_TIMEOUT_MS = 10_000;
 const CONNECT_TIMEOUT_MS = 6_000;
 const RECONNECT_DELAY_MS = 3_000;
+const GATEWAY_STARTING_RETRY_ATTEMPTS = 5;
+const GATEWAY_STARTING_RETRY_DELAY_MS = 750;
 const METHOD_CACHE_TTLS_MS: Record<string, number> = {
   'sessions.list': 5_000,
   'agents.files.list': 5_000,
@@ -186,6 +188,15 @@ function getCachedResponse(cacheKey: string): unknown | null {
   return entry.value;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isGatewayStartingError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  return /gateway starting;\s*retry shortly/i.test(message);
+}
+
 export function resetGatewayRpcCacheForTesting(): void {
   inFlightCalls.clear();
   responseCache.clear();
@@ -224,6 +235,9 @@ function ensureConnection(): void {
     connectResolve = resolve;
     connectReject = reject;
   });
+  // Startup rejections are retried by gatewayRpcCall; attach a passive handler
+  // here so Node never treats a short-lived connect rejection as process-fatal.
+  connectPromise.catch(() => undefined);
   const wsUrl = getGatewayWsUrl();
 
   const socket = new WebSocket(wsUrl, {
@@ -289,7 +303,13 @@ function ensureConnection(): void {
         if (msg.ok === false) {
           call.reject(new Error(msg.error?.message || 'RPC error'));
         } else {
-          call.resolve(msg.payload ?? msg.result ?? msg);
+          call.resolve(
+            Object.prototype.hasOwnProperty.call(msg, 'payload')
+              ? msg.payload
+              : Object.prototype.hasOwnProperty.call(msg, 'result')
+                ? msg.result
+                : msg,
+          );
         }
         return;
       }
@@ -354,38 +374,54 @@ export async function gatewayRpcCall(
     if (inFlight) return inFlight;
   }
 
-  // Ensure connection exists
-  ensureConnection();
+  const sendOnce = async (): Promise<unknown> => {
+    // Ensure connection exists
+    ensureConnection();
 
-  // Wait for connection if not yet connected
-  if (!connected && connectPromise) {
-    await connectPromise;
-  }
-
-  const callPromise = new Promise<unknown>((resolve, reject) => {
-    const reqId = randomUUID();
-
-    const timer = setTimeout(() => {
-      pending.delete(reqId);
-      if (cacheKey) {
-        const cached = getCachedResponse(cacheKey);
-        if (cached !== null) {
-          resolve(cached);
-          return;
-        }
-      }
-      reject(new Error(`Gateway RPC timeout after ${timeoutMs}ms calling ${method}`));
-    }, timeoutMs);
-
-    pending.set(reqId, { resolve, reject, timer });
-
-    const sent = wsSend(JSON.stringify({ type: 'req', id: reqId, method, params }));
-    if (!sent) {
-      pending.delete(reqId);
-      clearTimeout(timer);
-      reject(new Error('Gateway connection not ready'));
+    // Wait for connection if not yet connected
+    if (!connected && connectPromise) {
+      await connectPromise;
     }
-  });
+
+    return new Promise<unknown>((resolve, reject) => {
+      const reqId = randomUUID();
+
+      const timer = setTimeout(() => {
+        pending.delete(reqId);
+        if (cacheKey) {
+          const cached = getCachedResponse(cacheKey);
+          if (cached !== null) {
+            resolve(cached);
+            return;
+          }
+        }
+        reject(new Error(`Gateway RPC timeout after ${timeoutMs}ms calling ${method}`));
+      }, timeoutMs);
+
+      pending.set(reqId, { resolve, reject, timer });
+
+      const sent = wsSend(JSON.stringify({ type: 'req', id: reqId, method, params }));
+      if (!sent) {
+        pending.delete(reqId);
+        clearTimeout(timer);
+        reject(new Error('Gateway connection not ready'));
+      }
+    });
+  };
+
+  const callPromise = (async () => {
+    for (let attempt = 0; attempt <= GATEWAY_STARTING_RETRY_ATTEMPTS; attempt++) {
+      try {
+        return await sendOnce();
+      } catch (err) {
+        if (!isGatewayStartingError(err) || attempt >= GATEWAY_STARTING_RETRY_ATTEMPTS) throw err;
+        // The gateway can reject admin clients while it is still booting.
+        // Wait briefly and retry instead of crashing the Nerve request path.
+        await sleep(GATEWAY_STARTING_RETRY_DELAY_MS * (attempt + 1));
+      }
+    }
+    throw new Error('Gateway connection not ready');
+  })();
 
   if (cacheKey) {
     inFlightCalls.set(cacheKey, callPromise);

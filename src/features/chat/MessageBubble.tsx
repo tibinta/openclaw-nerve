@@ -132,6 +132,18 @@ function MessageBubbleInner({ msg, index, isCollapsed, isMemoryCollapsed, memory
     }
     return text;
   })();
+  const hasRenderableBody = Boolean(
+    displayContent.trim()
+    || msg.charts?.length
+    || msg.extractedImages?.length
+    || msg.images?.length
+    || msg.uploadAttachments?.length,
+  );
+  // Final guard: history should normalize these, but the renderer still gives
+  // empty assistant records a calm label instead of showing a blank success.
+  const safeDisplayContent = displayContent.trim() || !isAssistant || hasRenderableBody
+    ? displayContent
+    : 'No text';
 
   // Generate preview: first non-empty line, truncated, for system/event messages
   const systemPreview = isSystem && msg.rawText
@@ -220,7 +232,7 @@ function MessageBubbleInner({ msg, index, isCollapsed, isMemoryCollapsed, memory
           ) : (
             <div className="text-muted-foreground/70 text-[0.8rem] flex-1 min-w-0 msg-body-intermediate">
               <Suspense fallback={<span className="text-muted-foreground text-xs">…</span>}>
-                <MarkdownRenderer content={displayContent} searchQuery={searchQuery} suppressImages={isAssistant} onOpenWorkspacePath={onOpenWorkspacePath} pathLinkPrefixes={pathLinkPrefixes} />
+                <MarkdownRenderer content={safeDisplayContent} searchQuery={searchQuery} suppressImages={isAssistant} onOpenWorkspacePath={onOpenWorkspacePath} pathLinkPrefixes={pathLinkPrefixes} />
               </Suspense>
             </div>
           )}
@@ -284,9 +296,9 @@ function MessageBubbleInner({ msg, index, isCollapsed, isMemoryCollapsed, memory
                 Voice
               </span>
             )}
-            {displayContent && (
+            {safeDisplayContent && (
               <Suspense fallback={<div className="text-muted-foreground text-xs">Loading…</div>}>
-                <MarkdownRenderer content={displayContent} searchQuery={searchQuery} suppressImages={isAssistant} onOpenWorkspacePath={onOpenWorkspacePath} pathLinkPrefixes={pathLinkPrefixes} />
+                <MarkdownRenderer content={safeDisplayContent} searchQuery={searchQuery} suppressImages={isAssistant} onOpenWorkspacePath={onOpenWorkspacePath} pathLinkPrefixes={pathLinkPrefixes} />
               </Suspense>
             )}
           </div>
@@ -349,6 +361,8 @@ export const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
   if (prev.msg.pending !== next.msg.pending) return false;
   if (prev.msg.failed !== next.msg.failed) return false;
   if (prev.msg.streaming !== next.msg.streaming) return false;
+  if (prev.msg.errorMessage !== next.msg.errorMessage) return false;
+  if (prev.msg.stopReason !== next.msg.stopReason) return false;
   
   // Collapse states
   if (prev.isCollapsed !== next.isCollapsed) return false;

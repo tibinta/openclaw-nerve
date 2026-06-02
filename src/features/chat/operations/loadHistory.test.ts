@@ -195,6 +195,39 @@ describe('splitToolCallMessage', () => {
     expect(result).toHaveLength(0);
   });
 
+  it('labels empty aborted assistant timeout records instead of rendering a blank bubble', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: '' }],
+      stopReason: 'aborted',
+      errorMessage: 'LLM idle timeout (120s): no response from model',
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Timed out');
+    expect(result[0].stopReason).toBe('aborted');
+    expect(result[0].errorMessage).toContain('idle timeout');
+  });
+
+  it('labels empty aborted assistant context overflow records as context full', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: '',
+      stopReason: 'aborted',
+      errorMessage: 'context window overflow recovery failed: already_compacted_recently',
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Context full');
+  });
+
+  it('labels plain empty assistant records as no text', () => {
+    const msg: ChatMessage = { role: 'assistant', content: '' };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('No text');
+  });
+
   it('handles thinking blocks', () => {
     const msg: ChatMessage = {
       role: 'assistant',

@@ -110,6 +110,26 @@ function extractRenderableMedia(content: ContentBlock[], context: MediaAttachmen
     .filter((attachment): attachment is UploadAttachmentDescriptor => attachment !== null)
 }
 
+function chatFailureMeta(m: ChatMessage): Pick<ChatMsg, 'errorMessage' | 'stopReason'> {
+  return {
+    ...(m.errorMessage ? { errorMessage: m.errorMessage } : {}),
+    ...(m.stopReason ? { stopReason: m.stopReason } : {}),
+  };
+}
+
+function emptyAssistantStatus(m: ChatMessage): string | null {
+  if (m.role !== 'assistant') return null;
+
+  const failureText = `${m.stopReason || ''} ${m.errorMessage || ''}`.toLowerCase();
+  if (/\bcontext\b|overflow|already_compacted|compacted_recently|context window/.test(failureText)) {
+    return 'Context full';
+  }
+  if (/\btimeout\b|timed out|idle timeout|aborted/.test(failureText)) {
+    return 'Timed out';
+  }
+  return 'No text';
+}
+
 // ─── RPC type alias ────────────────────────────────────────────────────────────
 type RpcFn = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -289,6 +309,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
             role: 'assistant',
             html: renderToolResults(renderMarkdown(cleaned)),
             rawText: cleaned,
+            ...chatFailureMeta(m),
             timestamp,
             streaming: false,
             ...(charts.length > 0 ? { charts } : {}),
@@ -307,6 +328,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
               role: 'assistant',
               html: renderMarkdown(thinkingContent),
               rawText: thinkingContent,
+              ...chatFailureMeta(m),
               timestamp,
               isThinking: true,
             });
@@ -363,6 +385,20 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
         }
       }
 
+      if (result.length === 0) {
+        const fallbackText = emptyAssistantStatus(m);
+        if (fallbackText) {
+          result.push({
+            role: 'assistant',
+            html: renderToolResults(renderMarkdown(fallbackText)),
+            rawText: fallbackText,
+            ...chatFailureMeta(m),
+            timestamp,
+            streaming: false,
+          });
+        }
+      }
+
       return result;
     }
   }
@@ -402,6 +438,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
           role: seg.role as ChatMsgRole,
           html: renderToolResults(renderMarkdown(chartCleaned)),
           rawText: chartCleaned,
+          ...chatFailureMeta(m),
           timestamp,
           streaming: false,
           ...(charts.length > 0 ? { charts } : {}),
@@ -432,11 +469,22 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
   const sysNotif = m.role === 'user' ? detectSystemNotification(rawText) : { match: false, label: '' };
 
   const mediaAttachments = [...(uploadAttachments ?? []), ...contentAttachments];
+  const hasRenderableContent = Boolean(
+    text.trim()
+    || charts.length > 0
+    || extractedImages.length > 0
+    || contentImages.length > 0
+    || mediaAttachments.length > 0,
+  );
+  // A failed assistant turn can be persisted with empty text; show a small
+  // recovery status so Nerve never presents a blank bubble as a valid reply.
+  const visibleText = hasRenderableContent ? text : (emptyAssistantStatus(m) ?? text);
 
   return [{
     role: m.role as ChatMsgRole,
-    html: renderToolResults(renderMarkdown(text)),
-    rawText: text,
+    html: renderToolResults(renderMarkdown(visibleText)),
+    rawText: visibleText,
+    ...chatFailureMeta(m),
     timestamp,
     streaming: false,
     ...(charts.length > 0 ? { charts } : {}),

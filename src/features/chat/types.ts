@@ -110,6 +110,10 @@ export interface ChatMsg {
   role: ChatMsgRole;
   html: string;
   rawText: string;
+  /** Gateway failure text kept for diagnosis, never shown verbatim by default. */
+  errorMessage?: string;
+  /** Gateway stop reason, e.g. aborted after timeout or context overflow. */
+  stopReason?: string;
   timestamp: Date;
   streaming?: boolean;
   collapsed?: boolean;

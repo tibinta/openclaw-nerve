@@ -52,7 +52,7 @@ describe('gateway-rpc (persistent WebSocket)', () => {
   let rpcHandler: (method: string, params: unknown) => unknown;
   let lastConnectParams: unknown = null;
   let lastRequestOrigin: string | undefined;
-  let connectMode: 'accept' | 'reject' | 'close' = 'accept';
+  let connectMode: 'accept' | 'reject' | 'reject-starting-once' | 'close' = 'accept';
 
   beforeAll(async () => {
     rpcHandler = () => ({});
@@ -77,6 +77,11 @@ describe('gateway-rpc (persistent WebSocket)', () => {
           lastConnectParams = msg.params;
           if (connectMode === 'reject') {
             ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: false, error: { message: 'connect rejected by test server' } }));
+            return;
+          }
+          if (connectMode === 'reject-starting-once') {
+            connectMode = 'accept';
+            ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: false, error: { message: 'gateway starting; retry shortly' } }));
             return;
           }
           if (connectMode === 'close') {
@@ -190,6 +195,11 @@ describe('gateway-rpc (persistent WebSocket)', () => {
       expect(result).toEqual({ result: 'ok' });
     });
 
+    it('returns null when the gateway explicitly sends a null payload', async () => {
+      rpcHandler = () => null;
+      await expect(gatewayRpcCall('test.null', {})).resolves.toBeNull();
+    });
+
     it('rejects on RPC error response', async () => {
       rpcHandler = () => { throw new Error('not found'); };
       await expect(gatewayRpcCall('test.fail', {})).rejects.toThrow('not found');
@@ -265,6 +275,18 @@ describe('gateway-rpc (persistent WebSocket)', () => {
       connectMode = 'reject';
       const { gatewayRpcCall } = await importFreshGatewayRpc();
       await expect(gatewayRpcCall('test.method', {})).rejects.toThrow('connect rejected by test server');
+    });
+
+    it('retries a gateway-starting connect rejection before sending the RPC', async () => {
+      connectMode = 'reject-starting-once';
+      rpcHandler = (method, params) => {
+        expect(method).toBe('test.method');
+        expect(params).toEqual({ ok: true });
+        return { recovered: true };
+      };
+
+      const { gatewayRpcCall } = await importFreshGatewayRpc();
+      await expect(gatewayRpcCall('test.method', { ok: true })).resolves.toEqual({ recovered: true });
     });
 
     it('rejects when the socket closes before connect completes', async () => {

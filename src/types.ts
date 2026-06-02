@@ -119,6 +119,8 @@ export interface ChatMessage {
   role: ChatMessageRole;
   content: string | ContentBlock[];
   text?: string;
+  errorMessage?: string;
+  stopReason?: string;
   timestamp?: string | number;
   createdAt?: string | number;
   ts?: string | number;
