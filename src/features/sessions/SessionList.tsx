@@ -27,6 +27,30 @@ import { Button } from '@/components/ui/button';
 import { AlertTriangle, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { SpawnAgentDialog } from './SpawnAgentDialog';
 
+function isSessionRunning(
+  session: Session,
+  sessionKey: string,
+  busyState: Record<string, boolean>,
+  isGrowingSubagent: boolean,
+): boolean {
+  if (session.hasActiveRun === false) {
+    // The gateway can leave old sessions labelled "running" after model
+    // timeout or overload. hasActiveRun=false is the recovery signal.
+    return false;
+  }
+
+  return Boolean(
+    busyState[sessionKey]
+    || session.state === 'running'
+    || session.agentState === 'running'
+    || session.busy
+    || session.processing
+    || session.status === 'running'
+    || session.status === 'busy'
+    || isGrowingSubagent,
+  );
+}
+
 interface SessionListProps {
   sessions: Session[];
   currentSession: string;
@@ -266,7 +290,8 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     const isRootAgent = node.kind === 'family' || isTopLevelAgentSessionKey(sessionKey);
     const label = node.displayLabel?.trim() || resolveSidebarLabel(node.session, agentName, agents, node.kind, node.familyId);
     const isGrowing = growingSessions[sessionKey] ?? false;
-    const running = busyState[sessionKey] || node.session.state === 'running' || node.session.agentState === 'running' || node.session.busy || node.session.processing || node.session.status === 'running' || node.session.status === 'busy' || (isGrowing && isSubagent);
+    const running = isSessionRunning(node.session, sessionKey, busyState, isGrowing && isSubagent);
+    const granularStatus = node.session.hasActiveRun === false ? undefined : agentStatus?.[sessionKey];
     const activationKey = normalizeSessionKey(node.selectKey || sessionKey);
     const isActive = activationKey === normalizeSessionKey(currentSession);
     const currentTokens = node.session.totalTokens || 0;
@@ -294,7 +319,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
         isRenaming={allowActions && renamingKey === sessionKey}
         renameValue={renameValue}
         renameInputRef={renameInputRef}
-        granularStatus={allowActions ? agentStatus?.[sessionKey] : undefined}
+        granularStatus={allowActions ? granularStatus : undefined}
         onSelect={onSelect}
         onToggleExpand={handleToggleExpand}
         onDelete={allowActions && onDelete ? handleSetDeleteTarget : undefined}

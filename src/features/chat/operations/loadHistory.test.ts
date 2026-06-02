@@ -209,6 +209,43 @@ describe('splitToolCallMessage', () => {
     expect(result[0].errorMessage).toContain('idle timeout');
   });
 
+  it('labels overloaded empty assistant errors as service busy', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: '',
+      stopReason: 'error',
+      errorMessage: 'proxy_overloaded: codex-lb is temporarily overloaded during http_bridge_response_create_gate',
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Service busy');
+    expect(result[0].stopReason).toBe('error');
+  });
+
+  it('replaces assistant failure placeholders with a calm status', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: '[assistant turn failed before producing content]',
+      stopReason: 'error',
+      errorMessage: 'proxy_overloaded: codex-lb is temporarily overloaded',
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Service busy');
+  });
+
+  it('labels unknown empty assistant errors as run failed', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: '',
+      stopReason: 'error',
+      errorMessage: 'provider runtime failure',
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Run failed');
+  });
+
   it('labels empty aborted assistant context overflow records as context full', () => {
     const msg: ChatMessage = {
       role: 'assistant',

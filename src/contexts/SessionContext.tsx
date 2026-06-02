@@ -87,17 +87,27 @@ interface SessionContextValue {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-function isSessionActivelyBusy(session: Session | undefined, granularBusy: boolean): boolean {
+export function isSessionActivelyBusy(session: Session | undefined, granularBusy: boolean): boolean {
   if (!session) return false;
   if (granularBusy) return true;
+  if (session.hasActiveRun === true) return true;
 
   const state = String(session.state ?? '').toLowerCase();
   const agentState = String(session.agentState ?? '').toLowerCase();
+  const status = String(session.status ?? '').toLowerCase();
+
+  if (session.hasActiveRun === false) {
+    // Gateway stores can keep "running" after provider timeout/overload.
+    // The explicit active-run marker is safer, so the UI recovers instead of
+    // trapping the user behind a stale working state.
+    return false;
+  }
 
   return session.busy === true
     || session.processing === true
     || SESSION_BUSY_STATES.has(state)
-    || SESSION_BUSY_STATES.has(agentState);
+    || SESSION_BUSY_STATES.has(agentState)
+    || SESSION_BUSY_STATES.has(status);
 }
 
 function isProtectedRootSessionKey(sessionKey: string): boolean {

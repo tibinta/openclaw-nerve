@@ -124,10 +124,20 @@ function emptyAssistantStatus(m: ChatMessage): string | null {
   if (/\bcontext\b|overflow|already_compacted|compacted_recently|context window/.test(failureText)) {
     return 'Context full';
   }
+  if (/proxy_overloaded|overloaded|service is temporarily|temporarily overloaded|\b503\b/.test(failureText)) {
+    return 'Service busy';
+  }
   if (/\btimeout\b|timed out|idle timeout|aborted/.test(failureText)) {
     return 'Timed out';
   }
+  if (/\berror\b|failed|failure/.test(failureText)) {
+    return 'Run failed';
+  }
   return 'No text';
+}
+
+function isAssistantFailurePlaceholder(text: string): boolean {
+  return /^\[assistant turn failed before producing content\]$/i.test(text.trim());
 }
 
 // ─── RPC type alias ────────────────────────────────────────────────────────────
@@ -469,8 +479,9 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
   const sysNotif = m.role === 'user' ? detectSystemNotification(rawText) : { match: false, label: '' };
 
   const mediaAttachments = [...(uploadAttachments ?? []), ...contentAttachments];
+  const failurePlaceholder = isAssistant && isAssistantFailurePlaceholder(text);
   const hasRenderableContent = Boolean(
-    text.trim()
+    (text.trim() && !failurePlaceholder)
     || charts.length > 0
     || extractedImages.length > 0
     || contentImages.length > 0

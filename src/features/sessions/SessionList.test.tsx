@@ -63,6 +63,34 @@ describe('SessionList live tree', () => {
     expect(screen.getByText('STREAMING')).toBeInTheDocument();
   });
 
+  it('does not show a stale running badge when the gateway has no active run', () => {
+    const sessions: Session[] = [
+      {
+        sessionKey: 'agent:jane:imessage:direct:+447494722196',
+        label: 'Jane direct',
+        status: 'running',
+        state: 'running',
+        busy: true,
+        processing: true,
+        hasActiveRun: false,
+        updatedAt: Date.now(),
+      },
+    ];
+
+    renderSessionList({
+      sessions,
+      busyState: { 'agent:jane:imessage:direct:+447494722196': true },
+      agentStatus: {
+        'agent:jane:imessage:direct:+447494722196': { status: 'THINKING', since: Date.now() },
+      },
+    });
+
+    expect(screen.getAllByText('IDLE')).toHaveLength(2);
+    expect(screen.getAllByText(/Idle · just now/i)).toHaveLength(2);
+    expect(screen.queryByText('WORKING')).not.toBeInTheDocument();
+    expect(screen.queryByText('THINKING')).not.toBeInTheDocument();
+  });
+
   it('shows configured agents in a fallback section when there are no live sessions', () => {
     const agents: GatewayAgentRegistration[] = [
       { id: 'jane', name: 'Jane' },

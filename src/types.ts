@@ -19,6 +19,7 @@ export interface Session {
   agentState?: string;
   busy?: boolean;
   processing?: boolean;
+  hasActiveRun?: boolean;
   status?: string;
   lastActivity?: string | number;
   updatedAt?: number;

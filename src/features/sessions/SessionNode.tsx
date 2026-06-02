@@ -96,10 +96,10 @@ function relativeTime(timestamp: number | string | undefined): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-function describeActivity(session: TreeNode['session'], granularStatus?: GranularAgentState): string {
+function describeActivity(session: TreeNode['session'], running: boolean, granularStatus?: GranularAgentState): string {
   const tool = granularStatus?.toolDescription?.trim() || granularStatus?.toolName?.trim();
   if (tool) return tool;
-  if (session.processing || session.busy || session.state === 'running' || session.agentState === 'running' || session.status === 'running' || session.status === 'busy') {
+  if (running) {
     return 'Working';
   }
   if (session.thinking?.trim()) return session.thinking.trim();
@@ -221,7 +221,7 @@ export const SessionNode = memo(function SessionNode({
 
   // Indentation: 14px per depth level
   const indent = depth * 14;
-  const activity = describeActivity(session, granularStatus);
+  const activity = describeActivity(session, running, granularStatus);
   const lastInteraction = relativeTime(session.updatedAt ?? session.lastActivity);
 
   return (

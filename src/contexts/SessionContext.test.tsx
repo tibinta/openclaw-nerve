@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
-import { SessionProvider, useSessionContext } from './SessionContext';
+import { SessionProvider, isSessionActivelyBusy, useSessionContext } from './SessionContext';
 import { getSessionKey, type GatewayEvent } from '@/types';
 import { JANE_DIRECT_CHAT_SESSION_KEY } from '@/features/sessions/sessionKeys';
 
@@ -178,6 +178,25 @@ describe('SessionContext', () => {
       if (url.includes('/api/sessions/delete-all')) return Promise.resolve(jsonResponse({ ok: true, deleted: 2, failed: [] }));
       return Promise.resolve(jsonResponse({}));
     }) as typeof fetch;
+  });
+
+  it('treats stale running sessions as idle when there is no active run', () => {
+    expect(isSessionActivelyBusy({
+      sessionKey: 'agent:jane:main',
+      status: 'running',
+      state: 'running',
+      hasActiveRun: false,
+      busy: true,
+      processing: true,
+    }, false)).toBe(false);
+  });
+
+  it('keeps active-run sessions busy even if the stored status is stale', () => {
+    expect(isSessionActivelyBusy({
+      sessionKey: 'agent:jane:main',
+      status: 'idle',
+      hasActiveRun: true,
+    }, false)).toBe(true);
   });
 
   it('calls agents.create when spawning a root agent', async () => {
