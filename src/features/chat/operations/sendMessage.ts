@@ -122,8 +122,10 @@ export async function sendChatMessage(params: {
   attachments?: Array<Pick<ImageAttachment, 'mimeType' | 'content'>>;
   uploadPayload?: OutgoingUploadPayload;
   idempotencyKey: string;
+  thinking?: string;
+  fastMode?: boolean;
 }): Promise<ChatSendAck> {
-  const { rpc, sessionKey, text, images, attachments, uploadPayload, idempotencyKey } = params;
+  const { rpc, sessionKey, text, images, attachments, uploadPayload, idempotencyKey, thinking, fastMode } = params;
 
   const messageWithManifest = appendUploadManifest(text, uploadPayload);
 
@@ -140,6 +142,12 @@ export async function sendChatMessage(params: {
       mimeType: i.mimeType,
       content: i.content,
     }));
+  }
+  if (thinking) {
+    rpcParams.thinking = thinking;
+  }
+  if (fastMode) {
+    rpcParams.fastMode = true;
   }
 
   const ackRaw = await rpc('chat.send', rpcParams);

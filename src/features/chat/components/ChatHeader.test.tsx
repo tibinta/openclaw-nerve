@@ -25,8 +25,10 @@ const defaultMockHook = {
   ],
   selectedModel: 'gpt-4',
   selectedEffort: 'balanced',
+  fastReplyMode: false,
   handleModelChange: vi.fn(),
   handleEffortChange: vi.fn(),
+  handleFastReplyModeChange: vi.fn(),
   controlsDisabled: false,
   uiError: null,
 };
@@ -184,6 +186,30 @@ describe('ChatHeader', () => {
     );
 
     expect(screen.getByRole('button', { name: /stop generating/i })).toBeInTheDocument();
+  });
+
+  it('shows and toggles the no-thinking fast reply button', () => {
+    const mockUseModelEffort = vi.mocked(useModelEffort);
+    const handleFastReplyModeChange = vi.fn();
+    mockUseModelEffort.mockReturnValue({
+      ...defaultMockHook,
+      handleFastReplyModeChange,
+    });
+
+    render(
+      <ChatHeader
+        onReset={mockOnReset}
+        onAbort={mockOnAbort}
+        isGenerating={false}
+      />
+    );
+
+    const fastButton = screen.getByRole('button', { name: /no thinking fast replies/i });
+    expect(fastButton).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(fastButton);
+
+    expect(handleFastReplyModeChange).toHaveBeenCalledWith(true);
   });
 
   it('shows reset button when not generating', () => {

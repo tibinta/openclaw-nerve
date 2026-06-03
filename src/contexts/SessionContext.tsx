@@ -1023,7 +1023,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const msg = err instanceof Error ? err.message : String(err);
         if (!msg.includes('already exists')) throw err;
       }
-      const thinkingLevel = opts.thinking && opts.thinking !== 'off' ? opts.thinking : null;
+      const thinkingLevel = opts.thinking || null;
 
       await rpc('sessions.patch', {
         key: sessionKey,
@@ -1038,6 +1038,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         message: opts.task,
         deliver: false,
         idempotencyKey,
+        ...(opts.thinking ? { thinking: opts.thinking } : {}),
       });
 
       await refreshSessions();

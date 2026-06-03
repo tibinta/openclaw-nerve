@@ -45,6 +45,7 @@ import {
   createFallbackRunId,
   updateHighestSeq,
 } from '@/features/chat/operations';
+import { readFastReplyMode } from '@/features/chat/fastReply';
 import { generateMsgId } from '@/features/chat/types';
 import type { ImageAttachment, ChatMsg, OutgoingUploadPayload } from '@/features/chat/types';
 import type { RecoveryReason, RunState } from '@/features/chat/operations';
@@ -57,7 +58,7 @@ import { useChatTTS } from '@/hooks/useChatTTS';
 // ─── Exported types (consumed by features/chat components) ──────────────────────
 
 /** Processing stages for enhanced thinking indicator */
-export type ProcessingStage = 'thinking' | 'tool_use' | 'streaming' | null;
+export type ProcessingStage = 'thinking' | 'fast' | 'tool_use' | 'streaming' | null;
 
 /** A single entry in the activity log */
 export interface ActivityLogEntry {
@@ -327,7 +328,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         if (type === 'lifecycle_start') {
           setIsGenerating(true);
-          streamHook.setProcessingStage('thinking');
+          streamHook.setProcessingStage(readFastReplyMode(currentSessionRef.current) ? 'fast' : 'thinking');
           streamHook.setLastEventTimestamp(Date.now());
           return;
         }
@@ -393,7 +394,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         if (type === 'agent_state' && agentState) {
           const stage = deriveProcessingStage(agentState);
-          if (stage) streamHook.setProcessingStage(stage);
+          if (stage) {
+            // In fast reply mode the gateway can still emit generic
+            // "processing" states; keep the UI honest and avoid "Thinking".
+            streamHook.setProcessingStage(stage === 'thinking' && readFastReplyMode(currentSessionRef.current) ? 'fast' : stage);
+          }
         }
         return;
       }
@@ -431,9 +436,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         setIsGenerating(true);
         ttsHook.resetPlayedSounds();
-        streamHook.setProcessingStage('thinking');
+        const fastReplyMode = readFastReplyMode(currentSessionRef.current);
+        streamHook.setProcessingStage(fastReplyMode ? 'fast' : 'thinking');
         streamHook.setActivityLog([]);
-        streamHook.startThinking(runId);
+        if (fastReplyMode) {
+          streamHook.resetThinking();
+        } else {
+          streamHook.startThinking(runId);
+        }
         return;
       }
 
@@ -628,7 +638,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     msgHook.setMessages((prev: ChatMsg[]) => [...prev, userMsg]);
     setIsGenerating(true);
     streamHook.setStream((prev: ChatStreamState) => ({ ...prev, html: '', runId: undefined }));
-    streamHook.setProcessingStage('thinking');
+    const fastReplyMode = readFastReplyMode(effectiveSessionKey);
+    streamHook.setProcessingStage(fastReplyMode ? 'fast' : 'thinking');
 
     const idempotencyKey = crypto.randomUUID ? crypto.randomUUID() : 'ik-' + Date.now();
     try {
@@ -639,6 +650,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         images,
         uploadPayload,
         idempotencyKey,
+        thinking: fastReplyMode ? 'off' : undefined,
+        fastMode: fastReplyMode,
       });
 
       if (ack.runId) {
@@ -646,7 +659,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         run.status = ack.status;
         run.finalized = false;
         activeRunIdRef.current = ack.runId;
-        streamHook.startThinking(ack.runId);
+        if (fastReplyMode) {
+          streamHook.resetThinking();
+        } else {
+          streamHook.startThinking(ack.runId);
+        }
       }
 
       // Confirm the message (functional updater to avoid race after await)

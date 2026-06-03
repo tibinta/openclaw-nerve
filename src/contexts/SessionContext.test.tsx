@@ -436,6 +436,43 @@ describe('SessionContext', () => {
     expect(spawnRouteCalled).toBe(false);
   });
 
+  it('root spawn preserves explicit thinking off for the session and first message', async () => {
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return { sessions: [{ sessionKey: 'agent:main:main', label: 'Main' }] };
+      }
+      return {};
+    });
+
+    function SpawnRootOff() {
+      const { spawnSession } = useSessionContext();
+      return (
+        <button
+          data-testid="spawn-root-off"
+          onClick={() => spawnSession({ kind: 'root', agentName: 'FastAgent', task: 'hi', thinking: 'off' })}
+        />
+      );
+    }
+
+    render(<SessionProvider><SpawnRootOff /></SessionProvider>);
+    await waitFor(() => expect(rpcMock).toHaveBeenCalled());
+
+    await act(async () => {
+      screen.getByTestId('spawn-root-off').click();
+    });
+
+    await waitFor(() => {
+      expect(rpcMock).toHaveBeenCalledWith('sessions.patch', expect.objectContaining({
+        key: 'agent:fastagent:main',
+        thinkingLevel: 'off',
+      }));
+      expect(rpcMock).toHaveBeenCalledWith('chat.send', expect.objectContaining({
+        sessionKey: 'agent:fastagent:main',
+        thinking: 'off',
+      }));
+    });
+  });
+
   it('keeps Jane direct selected even when only the Jane root and legacy main are in the first tiny snapshot', async () => {
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'sessions.list') {

@@ -50,7 +50,7 @@ export function ProcessingIndicator({
   // Description line: tool description during tool_use, "Reasoning..." during thinking
   const descriptionText =
     currentToolDescription ??
-    (stage === 'thinking' ? 'Reasoning...' : null);
+    (stage === 'thinking' ? 'Reasoning...' : stage === 'fast' ? 'Replying...' : null);
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3">
@@ -61,6 +61,9 @@ export function ProcessingIndicator({
           <span className={`text-[0.667rem] ${stage === 'tool_use' ? 'text-green' : 'text-primary'}`}>◆</span>
           {stage === 'thinking' && (
             <span className="cockpit-badge animate-pulse" data-tone="primary">Thinking</span>
+          )}
+          {stage === 'fast' && (
+            <span className="cockpit-badge" data-tone="primary">Fast</span>
           )}
           {stage === 'tool_use' && (
             <span className="cockpit-badge" data-tone="success">Using tools</span>

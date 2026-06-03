@@ -13,6 +13,7 @@ import { useGateway } from '@/contexts/GatewayContext';
 import { useSessionContext } from '@/contexts/SessionContext';
 import { getSessionKey } from '@/types';
 import { getSessionType } from '@/features/sessions/sessionTree';
+import { readFastReplyMode, writeFastReplyMode } from '@/features/chat/fastReply';
 
 /**
  * Duration (ms) after an optimistic model/effort change during which we ignore
@@ -121,8 +122,10 @@ export interface UseModelEffortReturn {
   effortOptions: { value: string; label: string }[];
   selectedModel: string;
   selectedEffort: string;
+  fastReplyMode: boolean;
   handleModelChange: (next: string) => Promise<void>;
   handleEffortChange: (next: string) => Promise<void>;
+  handleFastReplyModeChange: (next: boolean) => Promise<void>;
   controlsDisabled: boolean;
   uiError: string | null;
 }
@@ -169,6 +172,7 @@ export function useModelEffort(): UseModelEffortReturn {
       return 'low';
     }
   });
+  const [fastReplyMode, setFastReplyMode] = useState<boolean>(() => readFastReplyMode(currentSession));
   const [prevEffortSource, setPrevEffortSource] = useState<string | null>(null);
 
   // Resolve current session's model.
@@ -192,6 +196,19 @@ export function useModelEffort(): UseModelEffortReturn {
     if (raw && EFFORT_OPTIONS.includes(raw as EffortLevel)) return raw as EffortLevel;
     return null;
   }, [sessions, currentSession]);
+
+  const currentSessionFastReply = useMemo(() => {
+    const s = sessions.find(sess => getSessionKey(sess) === currentSession);
+    return typeof s?.fastMode === 'boolean' ? s.fastMode : null;
+  }, [sessions, currentSession]);
+
+  useEffect(() => {
+    const next = currentSessionFastReply ?? readFastReplyMode(currentSession);
+    setFastReplyMode(next);
+    if (currentSessionFastReply !== null) {
+      writeFastReplyMode(currentSession, currentSessionFastReply);
+    }
+  }, [currentSession, currentSessionFastReply]);
 
   // Sync model dropdown when switching sessions (setState-during-render pattern)
   //
@@ -451,35 +468,106 @@ export function useModelEffort(): UseModelEffortReturn {
     setUiError(null);
 
     const prev = selectedEffort;
+    const prevFastReplyMode = fastReplyMode;
     const nextEffort = next as EffortLevel;
+    const shouldDisableFastReply = nextEffort !== 'off' && fastReplyMode;
+
     setSelectedEffort(nextEffort);
+    if (shouldDisableFastReply) {
+      setFastReplyMode(false);
+      writeFastReplyMode(currentSession, false);
+    }
     effortLockUntilRef.current = Date.now() + OPTIMISTIC_LOCK_MS;
     try { localStorage.setItem(getEffortKey(currentSession), nextEffort); } catch { /* ignore */ }
 
     try {
-      const thinkingValue = nextEffort === 'off' ? null : nextEffort;
+      // `off` is a real OpenClaw thinking level. Sending null lets the gateway
+      // inherit defaults, which can bring reasoning back after the user chose off.
+      const patchParams = {
+        key: currentSession,
+        thinkingLevel: nextEffort,
+        ...(shouldDisableFastReply ? { fastMode: false } : {}),
+      };
       try {
-        await rpc('sessions.patch', { key: currentSession, thinkingLevel: thinkingValue });
+        await rpc('sessions.patch', patchParams);
       } catch (wsErr) {
         // WS failed — effort doesn't have an HTTP fallback (session_status
         // doesn't support thinkingLevel), so retry WS once after a short delay
         console.info('[useModelEffort] WS effort change failed, retrying:', (wsErr as Error).message);
         await new Promise(r => setTimeout(r, 1000));
-        await rpc('sessions.patch', { key: currentSession, thinkingLevel: thinkingValue });
+        await rpc('sessions.patch', patchParams);
       }
       if (currentSession) {
-        updateSession(currentSession, { thinkingLevel: nextEffort });
+        updateSession(currentSession, {
+          thinkingLevel: nextEffort,
+          ...(shouldDisableFastReply ? { fastMode: false } : {}),
+        });
       }
       setTimeout(() => { effortLockUntilRef.current = 0; }, CONFIRM_POLL_DELAY_MS);
     } catch (err) {
       const errMsg = (err as Error).message || 'Unknown error';
       console.warn('[useModelEffort] All effort change attempts failed:', errMsg);
       setSelectedEffort(prev);
+      setFastReplyMode(prevFastReplyMode);
       effortLockUntilRef.current = 0;
       try { localStorage.setItem(getEffortKey(currentSession), prev); } catch { /* ignore */ }
+      writeFastReplyMode(currentSession, prevFastReplyMode);
       setUiError(`Effort: ${errMsg}`);
     }
-  }, [controlsDisabled, selectedEffort, rpc, currentSession, updateSession]);
+  }, [controlsDisabled, selectedEffort, fastReplyMode, rpc, currentSession, updateSession]);
+
+  const handleFastReplyModeChange = useCallback(async (next: boolean) => {
+    if (controlsDisabled) return;
+    setUiError(null);
+
+    const prevFastReplyMode = fastReplyMode;
+    const prevEffort = selectedEffort;
+
+    setFastReplyMode(next);
+    writeFastReplyMode(currentSession, next);
+
+    if (next) {
+      setSelectedEffort('off');
+      effortLockUntilRef.current = Date.now() + OPTIMISTIC_LOCK_MS;
+      try { localStorage.setItem(getEffortKey(currentSession), 'off'); } catch { /* ignore */ }
+    }
+
+    try {
+      const patchParams = {
+        key: currentSession,
+        fastMode: next,
+        ...(next ? { thinkingLevel: 'off' as EffortLevel } : {}),
+      };
+
+      try {
+        await rpc('sessions.patch', patchParams);
+      } catch (wsErr) {
+        // Fast mode is a session hint; retry once so a reconnect blip does not
+        // leave the button visually on while the gateway missed the patch.
+        console.info('[useModelEffort] WS fast reply change failed, retrying:', (wsErr as Error).message);
+        await new Promise(r => setTimeout(r, 1000));
+        await rpc('sessions.patch', patchParams);
+      }
+
+      if (currentSession) {
+        updateSession(currentSession, {
+          fastMode: next,
+          ...(next ? { thinkingLevel: 'off' } : {}),
+        });
+      }
+
+      setTimeout(() => { effortLockUntilRef.current = 0; }, CONFIRM_POLL_DELAY_MS);
+    } catch (err) {
+      const errMsg = (err as Error).message || 'Unknown error';
+      console.warn('[useModelEffort] Fast reply change failed:', errMsg);
+      setFastReplyMode(prevFastReplyMode);
+      setSelectedEffort(prevEffort);
+      effortLockUntilRef.current = 0;
+      writeFastReplyMode(currentSession, prevFastReplyMode);
+      try { localStorage.setItem(getEffortKey(currentSession), prevEffort); } catch { /* ignore */ }
+      setUiError(`Fast: ${errMsg}`);
+    }
+  }, [controlsDisabled, currentSession, fastReplyMode, rpc, selectedEffort, updateSession]);
 
   const modelOptions = useMemo(
     () => modelOptionsList.map((m) => ({ value: m.id, label: m.label })),
@@ -496,8 +584,10 @@ export function useModelEffort(): UseModelEffortReturn {
     effortOptions,
     selectedModel,
     selectedEffort,
+    fastReplyMode,
     handleModelChange,
     handleEffortChange,
+    handleFastReplyModeChange,
     controlsDisabled,
     uiError,
   };

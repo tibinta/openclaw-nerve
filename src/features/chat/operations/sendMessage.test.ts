@@ -246,6 +246,24 @@ describe('sendChatMessage', () => {
     expect(callParams.attachments[0].content).toBe('b64');
   });
 
+  it('sends explicit no-thinking fast reply hints when requested', async () => {
+    const rpc = vi.fn().mockResolvedValue({});
+
+    await sendChatMessage({
+      rpc,
+      sessionKey: 's1',
+      text: 'quick reply',
+      idempotencyKey: 'k1',
+      thinking: 'off',
+      fastMode: true,
+    });
+
+    expect(rpc).toHaveBeenCalledWith('chat.send', expect.objectContaining({
+      thinking: 'off',
+      fastMode: true,
+    }));
+  });
+
   it('injects sanitized upload manifest data into outgoing message body', async () => {
     const rpc = vi.fn().mockResolvedValue({});
 

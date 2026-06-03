@@ -1,6 +1,6 @@
 interface HeartbeatPulseProps {
   lastEventTimestamp: number;
-  stage?: 'thinking' | 'tool_use' | 'streaming' | null;
+  stage?: 'thinking' | 'fast' | 'tool_use' | 'streaming' | null;
 }
 
 /**

@@ -27,6 +27,7 @@ export interface Session {
   model?: string;
   thinking?: string;
   thinkingLevel?: string;
+  fastMode?: boolean;
   totalTokens?: number;
   contextTokens?: number;
   parentId?: string;  // from gateway API (v2026.2.9+)

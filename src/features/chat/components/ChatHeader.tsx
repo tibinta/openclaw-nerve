@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Cpu, Gauge, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronDown, ChevronUp, Cpu, Gauge, PanelLeftClose, PanelLeftOpen, Zap } from 'lucide-react';
 import { InlineSelect } from '@/components/ui/InlineSelect';
 import { useModelEffort } from './useModelEffort';
 
@@ -36,8 +36,10 @@ export function ChatHeader({
     effortOptions,
     selectedModel,
     selectedEffort,
+    fastReplyMode,
     handleModelChange,
     handleEffortChange,
+    handleFastReplyModeChange,
     controlsDisabled,
     uiError,
   } = useModelEffort();
@@ -129,6 +131,19 @@ export function ChatHeader({
             options={effortOptions}
           />
         </div>
+        <button
+          type="button"
+          onClick={() => void handleFastReplyModeChange(!fastReplyMode)}
+          aria-label="No thinking fast replies"
+          aria-pressed={fastReplyMode}
+          title={controlsDisabled ? 'Connect to gateway to change fast replies' : 'No thinking fast replies'}
+          disabled={controlsDisabled}
+          className="cockpit-toolbar-button min-h-11 px-3 sm:min-h-9 sm:px-3"
+          data-active={fastReplyMode ? 'true' : 'false'}
+        >
+          <Zap size={14} aria-hidden="true" />
+          <span className="hidden sm:inline">Fast</span>
+        </button>
         {isGenerating && (
           <button
             onClick={onAbort}

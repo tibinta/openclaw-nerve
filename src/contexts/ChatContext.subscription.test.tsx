@@ -9,6 +9,7 @@ describe('ChatContext subscription stability', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   async function setup() {
@@ -105,6 +106,37 @@ describe('ChatContext subscription stability', () => {
     expect(rpcMock).toHaveBeenCalledWith('chat.send', expect.objectContaining({
       sessionKey: JANE_DIRECT_CHAT_SESSION_KEY,
       message: expect.any(String),
+    }));
+  });
+
+  it('passes no-thinking fast reply hints when the session preference is on', async () => {
+    localStorage.setItem(`oc-fast-reply-${JANE_DIRECT_CHAT_SESSION_KEY}`, 'true');
+    const { ChatProvider, useChat, rpcMock } = await setup();
+
+    let send: ((text: string, images?: ImageAttachment[]) => Promise<void>) | null = null;
+
+    function Consumer() {
+      const chat = useChat();
+      useEffect(() => {
+        send = chat.handleSend;
+      }, [chat]);
+      return null;
+    }
+
+    render(
+      <ChatProvider>
+        <Consumer />
+      </ChatProvider>,
+    );
+
+    await act(async () => {
+      await send!('fast hello');
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.send', expect.objectContaining({
+      sessionKey: JANE_DIRECT_CHAT_SESSION_KEY,
+      thinking: 'off',
+      fastMode: true,
     }));
   });
 });

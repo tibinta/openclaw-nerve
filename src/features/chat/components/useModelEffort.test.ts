@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 
 const { mockUseGateway, mockUseSessionContext } = vi.hoisted(() => ({
   mockUseGateway: vi.fn(),
@@ -128,6 +128,84 @@ describe('useModelEffort', () => {
     const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[][] } };
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/gateway/models'))).toBe(true);
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/gateway/session-info'))).toBe(false);
+  });
+
+  it('sends effort off as an explicit thinking level instead of null', async () => {
+    const rpc = vi.fn().mockResolvedValue({});
+    const updateSession = vi.fn();
+    const sessionKey = 'agent:main:main';
+
+    mockUseGateway.mockReturnValue({
+      rpc,
+      connectionState: 'connected',
+      model: 'zai/glm-4.7',
+      thinking: 'medium',
+    });
+
+    mockUseSessionContext.mockReturnValue({
+      currentSession: sessionKey,
+      sessions: [
+        { key: sessionKey, model: 'zai/glm-4.7', thinkingLevel: 'medium' },
+      ],
+      updateSession,
+    });
+
+    const { result } = renderHook(() => useModelEffort());
+
+    await act(async () => {
+      await result.current.handleEffortChange('off');
+    });
+
+    expect(rpc).toHaveBeenCalledWith('sessions.patch', expect.objectContaining({
+      key: sessionKey,
+      thinkingLevel: 'off',
+    }));
+    expect(rpc).not.toHaveBeenCalledWith('sessions.patch', expect.objectContaining({
+      thinkingLevel: null,
+    }));
+    expect(updateSession).toHaveBeenCalledWith(sessionKey, expect.objectContaining({
+      thinkingLevel: 'off',
+    }));
+  });
+
+  it('turns fast replies on by setting fastMode and effort off together', async () => {
+    const rpc = vi.fn().mockResolvedValue({});
+    const updateSession = vi.fn();
+    const sessionKey = 'agent:jane:direct';
+
+    mockUseGateway.mockReturnValue({
+      rpc,
+      connectionState: 'connected',
+      model: 'zai/glm-4.7',
+      thinking: 'medium',
+    });
+
+    mockUseSessionContext.mockReturnValue({
+      currentSession: sessionKey,
+      sessions: [
+        { key: sessionKey, model: 'zai/glm-4.7', thinkingLevel: 'medium' },
+      ],
+      updateSession,
+    });
+
+    const { result } = renderHook(() => useModelEffort());
+
+    await act(async () => {
+      await result.current.handleFastReplyModeChange(true);
+    });
+
+    expect(result.current.fastReplyMode).toBe(true);
+    expect(result.current.selectedEffort).toBe('off');
+    expect(localStorage.getItem(`oc-fast-reply-${sessionKey}`)).toBe('true');
+    expect(rpc).toHaveBeenCalledWith('sessions.patch', expect.objectContaining({
+      key: sessionKey,
+      fastMode: true,
+      thinkingLevel: 'off',
+    }));
+    expect(updateSession).toHaveBeenCalledWith(sessionKey, expect.objectContaining({
+      fastMode: true,
+      thinkingLevel: 'off',
+    }));
   });
 });
 
