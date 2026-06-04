@@ -55,4 +55,46 @@ describe('CronsTab', () => {
     expect(screen.getByText(/local install shortcut/i)).toBeInTheDocument();
     expect(screen.queryByText(/no scheduled tasks yet/i)).not.toBeInTheDocument();
   });
+
+  it('shows live and disabled jobs in separate groups', () => {
+    mockUseCrons.mockReturnValue({
+      jobs: [
+        {
+          id: 'live-1',
+          name: 'Morning digest',
+          enabled: true,
+          scheduleKind: 'every',
+          everyMs: 300000,
+          payloadKind: 'agentTurn',
+          message: 'Check inbox',
+        },
+        {
+          id: 'off-1',
+          name: 'Nightly summary',
+          enabled: false,
+          scheduleKind: 'every',
+          everyMs: 86400000,
+          payloadKind: 'systemEvent',
+          message: 'Send summary',
+        },
+      ],
+      isLoading: false,
+      error: null,
+      cronWarning: null,
+      fetchJobs: vi.fn(),
+      toggleJob: vi.fn(),
+      runJob: vi.fn(),
+      fetchRuns: vi.fn(),
+      addJob: vi.fn(),
+      updateJob: vi.fn(),
+      deleteJob: vi.fn(),
+    });
+
+    render(<CronsTab />);
+
+    expect(screen.getAllByText('Live').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Off').length).toBeGreaterThan(0);
+    expect(screen.getByText('Morning digest')).toBeInTheDocument();
+    expect(screen.getByText('Nightly summary')).toBeInTheDocument();
+  });
 });

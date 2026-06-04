@@ -10,12 +10,15 @@ export interface CronDelivery {
   mode: string;
   channel?: string;
   to?: string;
+  bestEffort?: boolean;
 }
 
 export interface CronJob {
   id: string;
   name?: string;
   label?: string;
+  description?: string;
+  agentId?: string;
   enabled: boolean;
   // Schedule (normalized)
   scheduleKind: 'every' | 'cron' | 'at';
@@ -27,16 +30,26 @@ export interface CronJob {
   payloadKind: 'agentTurn' | 'systemEvent';
   message?: string;       // agentTurn message or systemEvent text
   model?: string;
+  thinking?: string;
+  timeoutSeconds?: number;
   sessionTarget?: 'main' | 'isolated';
   sessionKey?: string;
   // Delivery
   delivery?: CronDelivery;
+  wakeMode?: string;
+  deleteAfterRun?: boolean;
+  clearAgentOverride?: boolean;
+  accountId?: string;
+  lightContext?: boolean;
+  failureAlerts?: string;
+  bestEffortDelivery?: boolean;
   // State
   nextRun?: string;
   lastRun?: string;
   lastStatus?: string;
   lastError?: string;
   lastDeliveryStatus?: string;
+  raw?: Record<string, unknown>;
 }
 
 export interface CronRun {
@@ -67,6 +80,12 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
   const payload = (j.payload || {}) as Record<string, unknown>;
   const state = (j.state || {}) as Record<string, unknown>;
   const delivery = (j.delivery || undefined) as CronDelivery | undefined;
+  const sessionTarget = (j.sessionTarget as string) === 'main' || (j.sessionTarget as string) === 'isolated'
+    ? (j.sessionTarget as 'main' | 'isolated')
+    : undefined;
+  const agentId = typeof j.agentId === 'string' && j.agentId.trim().length > 0
+    ? j.agentId.trim()
+    : undefined;
 
   const scheduleKind = (sched.kind as string) || (sched.everyMs ? 'every' : sched.expr ? 'cron' : sched.at ? 'at' : 'every');
 
@@ -74,6 +93,8 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
     id: (j.id || j.jobId || '') as string,
     name: (j.name || j.label || '') as string,
     label: (j.label || j.name || '') as string,
+    description: typeof j.description === 'string' ? j.description : undefined,
+    agentId,
     enabled: (j.enabled as boolean) ?? true,
     // Schedule
     scheduleKind: scheduleKind as CronJob['scheduleKind'],
@@ -85,16 +106,32 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
     payloadKind: (payload.kind as string) === 'systemEvent' ? 'systemEvent' : 'agentTurn',
     message: (payload.message || payload.text || '') as string,
     model: payload.model as string | undefined,
-    sessionTarget:
-      (j.sessionTarget as string) === 'main' || (j.sessionTarget as string) === 'isolated'
-        ? (j.sessionTarget as 'main' | 'isolated')
-        : undefined,
+    thinking: typeof payload.thinking === 'string' ? payload.thinking : typeof j.thinking === 'string' ? j.thinking : undefined,
+    timeoutSeconds:
+      typeof payload.timeoutSeconds === 'number'
+        ? payload.timeoutSeconds
+        : typeof j.timeoutSeconds === 'number'
+          ? j.timeoutSeconds
+          : undefined,
+    sessionTarget,
     sessionKey:
       typeof j.sessionKey === 'string' && j.sessionKey.trim().length > 0
         ? j.sessionKey
         : undefined,
     // Delivery
     delivery: delivery?.mode ? delivery : undefined,
+    wakeMode: typeof j.wakeMode === 'string' ? j.wakeMode : undefined,
+    deleteAfterRun: typeof j.deleteAfterRun === 'boolean' ? j.deleteAfterRun : undefined,
+    clearAgentOverride: typeof j.clearAgentOverride === 'boolean' ? j.clearAgentOverride : undefined,
+    accountId: typeof j.accountId === 'string' ? j.accountId : undefined,
+    lightContext: typeof j.lightContext === 'boolean' ? j.lightContext : undefined,
+    failureAlerts: typeof j.failureAlerts === 'string' ? j.failureAlerts : undefined,
+    bestEffortDelivery:
+      typeof j.bestEffortDelivery === 'boolean'
+        ? j.bestEffortDelivery
+        : typeof delivery?.bestEffort === 'boolean'
+          ? delivery.bestEffort
+          : undefined,
     // State
     nextRun: state.nextRunAtMs
       ? new Date(state.nextRunAtMs as number).toISOString()
@@ -105,6 +142,7 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
     lastStatus: state.lastStatus as string | undefined,
     lastError: state.lastError as string | undefined,
     lastDeliveryStatus: state.lastDeliveryStatus as string | undefined,
+    raw: j,
   };
 }
 
@@ -173,7 +211,7 @@ export function useCrons() {
       const res = await fetch('/api/crons');
       const data = await res.json() as { ok: boolean; result?: { jobs?: unknown[]; details?: { jobs?: unknown[] } }; error?: string };
       if (!data.ok) throw new Error(data.error || 'Failed to fetch crons');
-      const rawJobs = data.result?.jobs || data.result?.details?.jobs || (Array.isArray(data.result) ? data.result : []);
+      const rawJobs = extractCronJobsFromResult(data.result);
       if (seq === fetchSeqRef.current) {
         setJobs((rawJobs as Record<string, unknown>[]).map(normalizeCronJob));
         setError(null);
@@ -336,4 +374,31 @@ export function useCrons() {
   const activeCount = jobs.filter(j => j.enabled).length;
 
   return { jobs, isLoading, error, cronWarning, activeCount, fetchJobs, toggleJob, runJob, fetchRuns, addJob, updateJob, deleteJob };
+}
+
+function extractCronJobsFromResult(result: unknown): Record<string, unknown>[] {
+  const r = result as {
+    jobs?: unknown;
+    details?: { jobs?: unknown };
+    content?: Array<{ type?: string; text?: string }>;
+  };
+
+  if (Array.isArray(r?.jobs)) return r.jobs as Record<string, unknown>[];
+  if (Array.isArray(r?.details?.jobs)) return r.details.jobs as Record<string, unknown>[];
+
+  if (Array.isArray(r?.content)) {
+    for (const item of r.content) {
+      if (item?.type !== 'text' || typeof item.text !== 'string') continue;
+      try {
+        const parsed = JSON.parse(item.text) as { jobs?: unknown };
+        if (Array.isArray(parsed.jobs)) return parsed.jobs as Record<string, unknown>[];
+      } catch {
+        // Keep scanning other content items. The gateway sometimes wraps JSON
+        // in explanatory text, and we do not want one malformed block to hide
+        // the real cron list.
+      }
+    }
+  }
+
+  return Array.isArray(result) ? result as Record<string, unknown>[] : [];
 }

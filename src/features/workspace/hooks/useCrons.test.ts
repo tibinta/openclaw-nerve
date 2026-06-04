@@ -69,6 +69,55 @@ describe('normalizeCronJob', () => {
   });
 });
 
+describe('useCrons list parsing', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    gatewayMocks.connectionState = 'disconnected';
+    gatewayMocks.subscribe.mockReset();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('reads jobs from content text when the gateway wraps the list payload', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              jobs: [{
+                id: 'cron-content',
+                enabled: false,
+                schedule: { kind: 'every', everyMs: 60000 },
+                payload: { kind: 'systemEvent', text: 'Reminder' },
+                state: { lastRunAtMs: 2500 },
+              }],
+            }),
+          }],
+        },
+      }),
+    }) as typeof fetch;
+
+    const { result } = renderHook(() => useCrons());
+
+    await act(async () => {
+      await flushPromises();
+    });
+
+    expect(result.current.jobs).toHaveLength(1);
+    expect(result.current.jobs[0]?.id).toBe('cron-content');
+    expect(result.current.jobs[0]?.enabled).toBe(false);
+    expect(result.current.jobs[0]?.lastRun).toBe(new Date(2500).toISOString());
+  });
+});
+
 describe('getCronWarning', () => {
   it('returns a short remediation summary for the known cron tool unavailable error', () => {
     expect(

@@ -54,7 +54,7 @@ const cronJobSchema = z.object({
     model: z.string().max(200).optional(),
     thinkingLevel: z.string().max(50).optional(),
     channel: z.string().max(200).optional(),
-  }),
+  }).passthrough(),
 });
 
 const cronPatchSchema = z.object({
@@ -72,7 +72,7 @@ const cronPatchSchema = z.object({
     model: z.string().max(200).optional(),
     thinkingLevel: z.string().max(50).optional(),
     channel: z.string().max(200).optional(),
-  }),
+  }).passthrough(),
 });
 
 const app = new Hono();

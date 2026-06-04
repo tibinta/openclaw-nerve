@@ -341,6 +341,7 @@ export function CronsTab() {
 
   const toolbarSummary = useMemo(() => {
     const enabledJobs = jobs.filter((job) => job.enabled);
+    const disabledJobs = jobs.filter((job) => !job.enabled);
     const failedCount = enabledJobs.filter((job) => {
       const status = job.lastStatus?.toLowerCase();
       return Boolean(status) && !['success', 'ok', 'finished'].includes(status!);
@@ -354,13 +355,15 @@ export function CronsTab() {
     return {
       failedCount,
       enabledCount: enabledJobs.length,
+      disabledCount: disabledJobs.length,
+      totalCount: jobs.length,
       nextRelative,
     };
   }, [jobs]);
 
   const hasToolbarMeta = toolbarSummary.failedCount > 0
     || Boolean(toolbarSummary.nextRelative)
-    || toolbarSummary.enabledCount > 0;
+    || toolbarSummary.totalCount > 0;
 
   const handleAdd = useCallback(() => {
     setDialogMode('create');
@@ -402,6 +405,16 @@ export function CronsTab() {
                       {toolbarSummary.failedCount} failed
                     </span>
                   )}
+                  {toolbarSummary.enabledCount > 0 && (
+                    <span className="cockpit-badge min-h-6 px-2 text-[0.667rem]" data-tone="success">
+                      {toolbarSummary.enabledCount} live
+                    </span>
+                  )}
+                  {toolbarSummary.disabledCount > 0 && (
+                    <span className="cockpit-badge min-h-6 px-2 text-[0.667rem]" data-tone="warning">
+                      {toolbarSummary.disabledCount} off
+                    </span>
+                  )}
                   {toolbarSummary.nextRelative ? (
                     <div className="shell-panel flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1">
                       <span className="cockpit-kicker shrink-0 text-[0.5rem] tracking-[0.16em]">
@@ -412,10 +425,6 @@ export function CronsTab() {
                         {toolbarSummary.nextRelative}
                       </span>
                     </div>
-                  ) : toolbarSummary.enabledCount > 0 ? (
-                    <span className="cockpit-badge min-h-6 px-2 text-[0.667rem]" data-tone="success">
-                      {toolbarSummary.enabledCount} live
-                    </span>
                   ) : (
                     <span className="text-[0.7rem] text-muted-foreground">
                       No live crons
@@ -519,24 +528,56 @@ export function CronsTab() {
             </div>
           )}
 
-          {jobs.map(job => {
-          return (
-            <CronRow
-              key={job.id}
-              job={job}
-              onToggle={toggleJob}
-              onRun={handleRun}
-              onDelete={deleteJob}
-              onEdit={handleEdit}
-              onFetchRuns={fetchRuns}
-            />
-          );
-          })}
+          {jobs.length > 0 && (
+            <div className="space-y-4">
+              {jobs.some((job) => job.enabled) && (
+                <div className="space-y-2">
+                  <div className="cockpit-kicker text-[0.6rem] tracking-[0.18em] text-muted-foreground">
+                    Live
+                  </div>
+                  <div className="space-y-2">
+                    {jobs.filter((job) => job.enabled).map((job) => (
+                      <CronRow
+                        key={job.id}
+                        job={job}
+                        onToggle={toggleJob}
+                        onRun={handleRun}
+                        onDelete={deleteJob}
+                        onEdit={handleEdit}
+                        onFetchRuns={fetchRuns}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {jobs.some((job) => !job.enabled) && (
+                <div className="space-y-2">
+                  <div className="cockpit-kicker text-[0.6rem] tracking-[0.18em] text-muted-foreground">
+                    Off
+                  </div>
+                  <div className="space-y-2">
+                    {jobs.filter((job) => !job.enabled).map((job) => (
+                      <CronRow
+                        key={job.id}
+                        job={job}
+                        onToggle={toggleJob}
+                        onRun={handleRun}
+                        onDelete={deleteJob}
+                        onEdit={handleEdit}
+                        onFetchRuns={fetchRuns}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
       <CronDialog
-        key={`${dialogMode}-${editingJob?.id ?? 'new'}`}
+        key={`${dialogMode}-${editingJob?.id ?? 'new'}-${dialogOpen ? 'open' : 'closed'}`}
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
         onSubmit={handleDialogSubmit}

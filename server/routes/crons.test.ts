@@ -69,6 +69,54 @@ describe('cron routes', () => {
     });
   });
 
+  it('preserves extra cron fields when creating a cron', async () => {
+    const { app, invokeGatewayTool } = await buildApp();
+
+    const res = await app.request('/api/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job: {
+          name: 'Memory Dreaming Promotion',
+          description: 'Daily promotion run',
+          agentId: 'main',
+          enabled: true,
+          schedule: { kind: 'every', everyMs: 86400000 },
+          payload: { kind: 'systemEvent', text: 'Post reminder' },
+          delivery: { mode: 'announce', bestEffort: true, channel: 'slack', to: '#ops' },
+          sessionTarget: 'main',
+          sessionKey: 'agent:main:main',
+          wakeMode: 'now',
+          deleteAfterRun: true,
+          clearAgentOverride: true,
+          accountId: 'acc-123',
+          lightContext: true,
+          thinkingLevel: 'medium',
+          failureAlerts: 'off',
+          bestEffortDelivery: true,
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(invokeGatewayTool).toHaveBeenCalledWith('cron', {
+      action: 'add',
+      job: expect.objectContaining({
+        name: 'Memory Dreaming Promotion',
+        description: 'Daily promotion run',
+        delivery: { mode: 'announce', bestEffort: true, channel: 'slack', to: '#ops' },
+        wakeMode: 'now',
+        deleteAfterRun: true,
+        clearAgentOverride: true,
+        accountId: 'acc-123',
+        lightContext: true,
+        thinkingLevel: 'medium',
+        failureAlerts: 'off',
+        bestEffortDelivery: true,
+      }),
+    });
+  });
+
   it('derives agentId from sessionKey when updating a cron', async () => {
     const { app, invokeGatewayTool } = await buildApp();
 
