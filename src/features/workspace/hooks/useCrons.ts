@@ -3,6 +3,8 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useGateway } from '@/contexts/GatewayContext';
+import type { GatewayEvent } from '@/types';
 
 export interface CronDelivery {
   mode: string;
@@ -49,6 +51,11 @@ const CRON_TOOL_UNAVAILABLE_RE = /tool not available:\s*cron/i;
 
 export const CRON_GATEWAY_TOOL_ALLOWLIST = ['cron', 'gateway', 'sessions_spawn'] as const;
 export const CRON_WARNING_SUMMARY = 'This gateway does not expose cron management, so Nerve can’t load or edit crons right now.';
+const CRON_EVENT_REFRESH_DELAY_MS = 1500;
+
+interface FetchJobsOptions {
+  silent?: boolean;
+}
 
 export function getCronWarning(error: string | null | undefined): string | null {
   if (!error || !CRON_TOOL_UNAVAILABLE_RE.test(error)) return null;
@@ -101,13 +108,52 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
   };
 }
 
+function getEventSessionKey(msg: GatewayEvent): string {
+  const payload = msg.payload as { sessionKey?: unknown } | undefined;
+  return typeof payload?.sessionKey === 'string' ? payload.sessionKey : '';
+}
+
+function isCronSessionLifecycleEvent(msg: GatewayEvent): boolean {
+  const sessionKey = getEventSessionKey(msg);
+  if (!sessionKey.includes(':cron:')) return false;
+
+  const payload = msg.payload as {
+    state?: unknown;
+    stream?: unknown;
+    data?: { phase?: unknown };
+  } | undefined;
+
+  if (msg.event === 'chat') {
+    const state = String(payload?.state ?? '').toLowerCase();
+    return ['started', 'final', 'error', 'aborted'].includes(state);
+  }
+
+  if (msg.event === 'agent' && payload?.stream === 'lifecycle') {
+    const phase = String(payload.data?.phase ?? '').toLowerCase();
+    return ['start', 'end', 'error'].includes(phase);
+  }
+
+  return false;
+}
+
+function shouldRefreshCronsForEvent(msg: GatewayEvent): boolean {
+  return msg.type === 'event' && (
+    msg.event.startsWith('cron')
+    || isCronSessionLifecycleEvent(msg)
+  );
+}
+
 /** Hook to list, create, update, delete, and toggle cron jobs via the gateway API. */
 export function useCrons() {
+  const { connectionState, subscribe } = useGateway();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cronWarning, setCronWarning] = useState<string | null>(null);
   const fetchedRef = useRef(false);
+  const fetchSeqRef = useRef(0);
+  const fetchJobsRef = useRef<(options?: FetchJobsOptions) => Promise<void>>(async () => {});
+  const eventRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setErrorState = useCallback((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
@@ -115,22 +161,40 @@ export function useCrons() {
     setCronWarning(getCronWarning(message));
   }, []);
 
-  const fetchJobs = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    setCronWarning(null);
+  const fetchJobs = useCallback(async (options: FetchJobsOptions = {}) => {
+    const seq = ++fetchSeqRef.current;
+    const silent = options.silent === true;
+    if (!silent) {
+      setIsLoading(true);
+      setError(null);
+      setCronWarning(null);
+    }
     try {
       const res = await fetch('/api/crons');
       const data = await res.json() as { ok: boolean; result?: { jobs?: unknown[]; details?: { jobs?: unknown[] } }; error?: string };
       if (!data.ok) throw new Error(data.error || 'Failed to fetch crons');
       const rawJobs = data.result?.jobs || data.result?.details?.jobs || (Array.isArray(data.result) ? data.result : []);
-      setJobs((rawJobs as Record<string, unknown>[]).map(normalizeCronJob));
+      if (seq === fetchSeqRef.current) {
+        setJobs((rawJobs as Record<string, unknown>[]).map(normalizeCronJob));
+        setError(null);
+        setCronWarning(null);
+      }
     } catch (err) {
-      setErrorState(err);
+      // Live cron events can arrive while the gateway is busy. Keep the last
+      // valid list on screen and only show errors for user-driven refreshes.
+      if (!silent && seq === fetchSeqRef.current) {
+        setErrorState(err);
+      }
     } finally {
-      setIsLoading(false);
+      if (!silent && seq === fetchSeqRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [setErrorState]);
+
+  useEffect(() => {
+    fetchJobsRef.current = fetchJobs;
+  }, [fetchJobs]);
 
   // Auto-fetch on first mount so activeCount is available immediately (e.g. for tab badge)
   useEffect(() => {
@@ -139,6 +203,31 @@ export function useCrons() {
       fetchJobs();
     }
   }, [fetchJobs]);
+
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+
+    const unsubscribe = subscribe((msg) => {
+      if (!shouldRefreshCronsForEvent(msg)) return;
+
+      if (eventRefreshTimerRef.current) {
+        clearTimeout(eventRefreshTimerRef.current);
+      }
+
+      eventRefreshTimerRef.current = setTimeout(() => {
+        eventRefreshTimerRef.current = null;
+        void fetchJobsRef.current({ silent: true });
+      }, CRON_EVENT_REFRESH_DELAY_MS);
+    });
+
+    return () => {
+      unsubscribe();
+      if (eventRefreshTimerRef.current) {
+        clearTimeout(eventRefreshTimerRef.current);
+        eventRefreshTimerRef.current = null;
+      }
+    };
+  }, [connectionState, subscribe]);
 
   const toggleJob = useCallback(async (id: string, enabled: boolean) => {
     try {

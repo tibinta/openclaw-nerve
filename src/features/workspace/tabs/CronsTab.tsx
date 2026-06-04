@@ -142,6 +142,13 @@ function CronRow({ job, onToggle, onRun, onDelete, onEdit, onFetchRuns }: {
     }
   }, [expanded, job.id, onFetchRuns, onRun]);
 
+  useEffect(() => {
+    if (!expanded || !job.lastRun) return;
+    // Scheduled runs can finish while the row is already open. Re-read the
+    // persisted run ledger so Nerve shows the final cron text without reload.
+    void onFetchRuns(job.id).then(setRuns);
+  }, [expanded, job.id, job.lastRun, onFetchRuns]);
+
   const handleDeleteClick = useCallback(() => {
     if (confirmingDelete) {
       clearTimeout(deleteTimerRef.current);
@@ -430,7 +437,7 @@ export function CronsTab() {
               </button>
               <button
                 type="button"
-                onClick={fetchJobs}
+                onClick={() => void fetchJobs()}
                 disabled={isLoading}
                 aria-label="Refresh crons"
                 title="Refresh crons"
