@@ -6,6 +6,7 @@ import { useTabCompletion } from '@/hooks/useTabCompletion';
 import { useInputHistory } from '@/hooks/useInputHistory';
 import { useSessionContext } from '@/contexts/SessionContext';
 import { useSettings } from '@/contexts/SettingsContext';
+import { publishVoiceControlSnapshot, VOICE_CONTROL_COMMAND_EVENT } from '@/features/voice/voiceControlBridge';
 import { MAX_ATTACHMENTS } from '@/lib/constants';
 import { compressImage } from './image-compress';
 import { formatWorkspacePathAddToChat, mergeAddToChatText } from './addToChat';
@@ -565,6 +566,21 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       discardRecording();
     }
   }, [clearVoiceError, continuousVoiceEnabled, discardRecording, startRecording, toggleContinuousVoice, voiceState]);
+
+  useEffect(() => {
+    publishVoiceControlSnapshot({ voiceState, continuousVoiceEnabled, voiceError });
+  }, [continuousVoiceEnabled, voiceError, voiceState]);
+
+  useEffect(() => {
+    const handleVoiceCommand = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail;
+      if (command === 'toggle-voice') handleVoiceButton();
+      if (command === 'toggle-live') handleContinuousVoiceButton();
+    };
+
+    window.addEventListener(VOICE_CONTROL_COMMAND_EVENT, handleVoiceCommand);
+    return () => window.removeEventListener(VOICE_CONTROL_COMMAND_EVENT, handleVoiceCommand);
+  }, [handleContinuousVoiceButton, handleVoiceButton]);
 
   // Live transcription preview: write interim transcript to textarea during recording
   useEffect(() => {

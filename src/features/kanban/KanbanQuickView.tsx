@@ -4,20 +4,20 @@
  * Self-contained: manages its own data via useKanban hook.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { ArrowRight } from 'lucide-react';
 import type { KanbanTask, TaskStatus } from './types';
 import { COLUMN_LABELS } from './types';
 import { useKanban } from './hooks/useKanban';
+import { TaskDetailDrawer } from './TaskDetailDrawer';
 import { getTaskPriorityTone, getTaskStatusTone } from './tone';
 
 /* ── Statuses shown in quick view ── */
-const QUICK_STATUSES: TaskStatus[] = ['todo', 'in-progress', 'review'];
+const QUICK_STATUSES: TaskStatus[] = ['in-progress', 'review', 'todo'];
 const MAX_ROWS = 5;
 
 interface KanbanQuickViewProps {
   onOpenBoard: () => void;
-  onOpenTask: (task: KanbanTask) => void;
 }
 
 function TaskRow({ task, onClick }: { task: KanbanTask; onClick: () => void }) {
@@ -76,8 +76,37 @@ function StatusSection({
   );
 }
 
-export function KanbanQuickView({ onOpenBoard, onOpenTask }: KanbanQuickViewProps) {
-  const { tasksByStatus, statusCounts, loading, error } = useKanban();
+export function KanbanQuickView({ onOpenBoard }: KanbanQuickViewProps) {
+  const {
+    tasks,
+    tasksByStatus,
+    statusCounts,
+    loading,
+    error,
+    updateTask,
+    deleteTask,
+    executeTask,
+    approveTask,
+    rejectTask,
+    abortTask,
+  } = useKanban();
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [selectedTaskId, tasks],
+  );
+  const subtasks = useMemo(
+    () => selectedTask ? tasks.filter((task) => task.parentTaskId === selectedTask.id) : [],
+    [selectedTask, tasks],
+  );
+  const parentTask = useMemo(
+    () => selectedTask?.parentTaskId ? tasks.find((task) => task.id === selectedTask.parentTaskId) ?? null : null,
+    [selectedTask, tasks],
+  );
+  const handleDeleteTask = useCallback(async (id: string) => {
+    await deleteTask(id);
+    setSelectedTaskId(null);
+  }, [deleteTask]);
 
   const sections = useMemo(() => {
     return QUICK_STATUSES.map(s => ({
@@ -135,11 +164,24 @@ export function KanbanQuickView({ onOpenBoard, onOpenTask }: KanbanQuickViewProp
               key={status}
               status={status}
               tasks={tasks}
-              onOpenTask={onOpenTask}
+              onOpenTask={(task) => setSelectedTaskId(task.id)}
             />
           ) : null
         )}
       </div>
+      <TaskDetailDrawer
+        task={selectedTask}
+        onClose={() => setSelectedTaskId(null)}
+        onUpdate={updateTask}
+        onDelete={handleDeleteTask}
+        parentTask={parentTask}
+        subtasks={subtasks}
+        onOpenRelatedTask={(task) => setSelectedTaskId(task.id)}
+        onExecute={executeTask}
+        onApprove={approveTask}
+        onReject={rejectTask}
+        onAbort={abortTask}
+      />
     </div>
   );
 }

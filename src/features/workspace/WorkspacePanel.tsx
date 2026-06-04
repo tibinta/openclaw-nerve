@@ -115,8 +115,6 @@ interface WorkspacePanelProps {
   compact?: boolean;
   /** Switch the app to full kanban board view. */
   onOpenBoard?: () => void;
-  /** Open a specific task in the full board view. */
-  onOpenTask?: (taskId: string) => void;
 }
 
 export function WorkspacePanel({
@@ -127,7 +125,6 @@ export function WorkspacePanel({
   remoteWorkspace = false,
   compact = false,
   onOpenBoard,
-  onOpenTask,
 }: WorkspacePanelProps) {
   const { kanbanVisible } = useSettings();
   const [activeTab, setActiveTab] = useState<TabId>(() => getInitialTab(kanbanVisible));
@@ -204,7 +201,6 @@ export function WorkspacePanel({
             {visitedTabs.has('kanban') && (
               <KanbanQuickView
                 onOpenBoard={onOpenBoard ?? (() => {})}
-                onOpenTask={(task) => onOpenTask ? onOpenTask(task.id) : onOpenBoard?.()}
               />
             )}
           </div>

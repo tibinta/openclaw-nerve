@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Mic, Radio } from 'lucide-react';
 import { ContextMeter } from './ContextMeter';
 import { UpdateBadge } from './UpdateBadge';
 import { useGateway } from '@/contexts/GatewayContext';
+import { sendVoiceControlCommand, useVoiceControlSnapshot } from '@/features/voice/voiceControlBridge';
 
 /** Props for {@link StatusBar}. */
 interface StatusBarProps {
@@ -49,6 +51,7 @@ async function fetchServerInfo(): Promise<{ serverTime?: number; gatewayStartedA
  */
 export function StatusBar({ connectionState, sessionCount, sparkline, contextTokens, contextLimit }: StatusBarProps) {
   useGateway(); // Keep gateway context connected
+  const voiceControl = useVoiceControlSnapshot();
 
   // Server time: offset between local clock and server clock
   const [serverTimeOffset, setServerTimeOffset] = useState<number | null>(null);
@@ -102,6 +105,15 @@ export function StatusBar({ connectionState, sessionCount, sparkline, contextTok
     : connectionState === 'reconnecting'
     ? 'RECONNECTING'
     : 'OFFLINE';
+  const voiceBusy = voiceControl.voiceState === 'transcribing';
+  const voiceActive = voiceControl.voiceState === 'recording' || voiceControl.continuousVoiceEnabled;
+  const voiceLabel = voiceControl.voiceState === 'recording'
+    ? 'Voice on'
+    : voiceControl.voiceState === 'transcribing'
+    ? 'Saving voice'
+    : voiceControl.continuousVoiceEnabled
+    ? 'Live on'
+    : 'Voice';
 
   // Server time = local time + offset
   const serverTime = serverTimeOffset !== null
@@ -169,6 +181,34 @@ export function StatusBar({ connectionState, sessionCount, sparkline, contextTok
         </span>
         <span className="text-[0.6rem] font-medium uppercase tracking-[0.18em] text-muted-foreground/55">v{__APP_VERSION__}</span>
         <UpdateBadge />
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => sendVoiceControlCommand('toggle-voice')}
+          disabled={voiceBusy}
+          className={`inline-flex h-8 min-w-8 cursor-pointer items-center justify-center gap-1.5 rounded-full border px-2.5 text-[0.667rem] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-50 ${
+            voiceActive ? 'border-primary/35 bg-primary/12 text-primary' : 'border-border/70 bg-background/75 text-muted-foreground hover:text-foreground'
+          }`}
+          aria-label={voiceControl.voiceState === 'recording' ? 'Send voice' : 'Start voice'}
+          title={voiceControl.voiceState === 'recording' ? 'Send voice' : 'Start voice'}
+        >
+          <Mic size={13} aria-hidden="true" />
+          <span className="hidden sm:inline">{voiceLabel}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => sendVoiceControlCommand('toggle-live')}
+          disabled={voiceBusy}
+          className={`inline-flex h-8 min-w-8 cursor-pointer items-center justify-center rounded-full border px-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-50 ${
+            voiceControl.continuousVoiceEnabled ? 'border-primary/35 bg-primary/12 text-primary' : 'border-border/70 bg-background/75 text-muted-foreground hover:text-foreground'
+          }`}
+          aria-label={voiceControl.continuousVoiceEnabled ? 'Stop live voice' : 'Start live voice'}
+          title={voiceControl.continuousVoiceEnabled ? 'Stop live voice' : 'Start live voice'}
+        >
+          <Radio size={13} aria-hidden="true" />
+        </button>
       </div>
     </div>
   );

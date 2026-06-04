@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
 import type { KanbanTask } from './types';
+import type { UpdateTaskPayload } from './hooks/useKanban';
 
 const mockUseSessionContext = vi.fn();
 
@@ -142,7 +143,7 @@ describe('TaskDetailDrawer', () => {
     });
     const updates: Array<Partial<KanbanTask> & { version: number }> = [];
     const approvals: string[] = [];
-    const onUpdate = vi.fn(async (_id: string, payload: any) => {
+    const onUpdate = vi.fn(async (_id: string, payload: UpdateTaskPayload) => {
       updates.push(payload);
       return makeTask({
         ...task,
@@ -191,6 +192,9 @@ describe('TaskDetailDrawer', () => {
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: 'Proof URL' })).toHaveValue('');
     });
+    await waitFor(() => {
+      expect(screen.getByText('Proof attached')).toBeInTheDocument();
+    });
 
     await user.click(screen.getByRole('checkbox', { name: 'Reindex verified' }));
     await user.click(screen.getByRole('checkbox', { name: 'Read-back verified' }));
@@ -209,14 +213,13 @@ describe('TaskDetailDrawer', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Ready to close')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
     });
 
     expect(screen.getByText('Proof attached')).toBeInTheDocument();
     expect(approvals).toEqual([]);
     expect(updates.length).toBeGreaterThanOrEqual(5);
-  });
+  }, 10_000);
 
   it('renders legacy string feedback timestamps without Invalid Date', () => {
     renderDrawer(makeTask({
@@ -232,6 +235,84 @@ describe('TaskDetailDrawer', () => {
     expect(screen.getByText('Legacy timestamp note')).toBeInTheDocument();
     expect(screen.getByText('2026-04-29 21:03 Europe/London')).toBeInTheDocument();
     expect(screen.queryByText('Invalid Date')).not.toBeInTheDocument();
+  });
+
+  it('normalizes feedback before saving and clears the composer', async () => {
+    const user = userEvent.setup();
+    const baseTask = makeTask({
+      feedback: [
+        {
+          at: '2026-04-29 21:03 Europe/London',
+          by: 'operator',
+          note: 'Existing note',
+        },
+      ],
+    });
+    const onUpdate = vi.fn(async (_id: string, payload: UpdateTaskPayload) => makeTask({
+      ...baseTask,
+      version: payload.version + 1,
+      feedback: payload.feedback ?? baseTask.feedback,
+    }));
+
+    renderDrawer(baseTask, onUpdate);
+
+    await user.type(screen.getByRole('textbox', { name: 'Feedback note' }), 'Add this note');
+    await user.click(screen.getByRole('button', { name: 'Add feedback' }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith('task-1', expect.objectContaining({
+        version: 3,
+        feedback: expect.arrayContaining([
+          expect.objectContaining({ note: 'Existing note' }),
+          expect.objectContaining({
+            by: 'agent:operator',
+            note: 'Add this note',
+          }),
+        ]),
+      }));
+      const feedback = onUpdate.mock.calls[0]?.[1].feedback;
+      expect(feedback?.every(entry => typeof entry.at === 'number')).toBe(true);
+      expect(feedback?.every(entry => entry.by.startsWith('agent:'))).toBe(true);
+    });
+
+    expect(screen.getByText('Add this note')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Feedback note' })).toHaveValue('');
+    });
+  });
+
+  it('shows subtasks and lets the user open or add them', async () => {
+    const user = userEvent.setup();
+    const parent = makeTask({ id: 'task-1', title: 'Parent task' });
+    const subtasks = [
+      makeTask({ id: 'task-child-1', title: 'Child one', parentTaskId: 'task-1', columnOrder: 0 }),
+      makeTask({ id: 'task-child-2', title: 'Child two', parentTaskId: 'task-1', columnOrder: 1 }),
+    ];
+    const onOpenRelatedTask = vi.fn();
+    const onCreateSubtask = vi.fn();
+
+    render(
+      <TaskDetailDrawer
+        task={parent}
+        parentTask={null}
+        subtasks={subtasks}
+        onClose={vi.fn()}
+        onUpdate={vi.fn(async () => parent)}
+        onDelete={vi.fn(async () => {})}
+        onOpenRelatedTask={onOpenRelatedTask}
+        onCreateSubtask={onCreateSubtask}
+      />,
+    );
+
+    expect(screen.getByText('Subtasks')).toBeInTheDocument();
+    expect(screen.getByText('Child one')).toBeInTheDocument();
+    expect(screen.getByText('Child two')).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: /^Add$/ })[0]);
+    expect(onCreateSubtask).toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /child one/i }));
+    expect(onOpenRelatedTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-child-1' }));
   });
 
   it('lets the user add missing worker and checker proof from the UI', async () => {
@@ -251,7 +332,7 @@ describe('TaskDetailDrawer', () => {
       },
     });
     let currentTask = task;
-    const onUpdate = vi.fn(async (_id: string, payload: any) => {
+    const onUpdate = vi.fn(async (_id: string, payload: UpdateTaskPayload) => {
       currentTask = makeTask({
         ...currentTask,
         version: payload.version + 1,

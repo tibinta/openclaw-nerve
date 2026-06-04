@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSessionContext } from '@/contexts/SessionContext';
 import { formatDateTime } from '@/lib/formatting';
-import { COLUMN_LABELS, type DelegationProof, type DelegationProofActor, type KanbanTask, type TaskStatus, type TaskPriority } from './types';
+import { COLUMN_LABELS, type DelegationProof, type DelegationProofActor, type KanbanTask, type TaskFeedback, type TaskStatus, type TaskPriority } from './types';
 import type { UpdateTaskPayload, VersionConflictError } from './hooks/useKanban';
 import { AssigneeCombobox } from './components/AssigneeCombobox';
 import { buildAssigneeOptionsForEdit } from './lib/assigneeOptions';
@@ -69,6 +69,34 @@ function buildProofActor(params: {
   };
 }
 
+function normalizeFeedbackAt(value: TaskFeedback['at']): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function normalizeFeedbackActor(value: TaskFeedback['by'] | string): `agent:${string}` {
+  if (typeof value === 'string' && value.startsWith('agent:')) return value as `agent:${string}`;
+  if (value === 'operator' || value === 'agent:operator') return 'agent:operator';
+  const cleaned = String(value || 'operator')
+    .trim()
+    .toLowerCase()
+    .replace(/^agent:/, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `agent:${cleaned || 'operator'}`;
+}
+
+function normalizeFeedbackForSave(feedback: TaskFeedback[]): Array<{ at: number; by: `agent:${string}`; note: string }> {
+  return feedback
+    .map((entry) => ({
+      at: normalizeFeedbackAt(entry.at),
+      by: normalizeFeedbackActor(entry.by),
+      note: entry.note.trim(),
+    }))
+    .filter((entry) => entry.note.length > 0);
+}
+
 interface TaskDetailDrawerProps {
   task: KanbanTask | null;
   onClose: () => void;
@@ -107,38 +135,64 @@ export function TaskDetailDrawer({
   const [editAssignee, setEditAssignee] = useState('');
   const [editVersion, setEditVersion] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [feedbackSaving, setFeedbackSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [proofPanelOpen, setProofPanelOpen] = useState(false);
   const [delegationProofState, setDelegationProofState] = useState<DelegationProof | undefined>(undefined);
+  const [feedbackEntries, setFeedbackEntries] = useState<TaskFeedback[]>([]);
+  const [feedbackDraft, setFeedbackDraft] = useState('');
   const drawerRef = useRef<HTMLDivElement>(null);
+  const activeTaskIdRef = useRef<string | null>(null);
+  const lastSyncedTaskVersionRef = useRef<number | null>(null);
+  const gateStateRef = useRef({
+    reindex_verified: false,
+    read_back_verified: false,
+    live_link_or_canvas_checked: false,
+    proof_log_updated: false,
+  });
 
   /* Populate fields when task changes */
   useEffect(() => {
     if (task) {
-      setEditTitle(task.title);
-      setEditDescription(task.description || '');
-      setEditStatus(getTaskStatus(task.status));
-      setEditPriority(getTaskPriority(task.priority));
-      setEditLabels(task.labels.join(', '));
-      setEditAssignee(task.assignee || '');
-      setEditProofUrl((task.evidence_links ?? [])[0] ?? '');
-      setProofLinks(task.evidence_links ?? []);
-      setDelegationProofState(task.delegation_proof);
-      setProofPanelOpen(task.status === 'review');
-      setGateState({
-        reindex_verified: task.proof_gate?.reindex_verified === true,
-        read_back_verified: task.proof_gate?.read_back_verified === true,
-        live_link_or_canvas_checked: task.proof_gate?.live_link_or_canvas_checked === true,
-        proof_log_updated: task.proof_gate?.proof_log_updated === true,
-      });
-      setEditVersion(task.version);
-      setError(null);
-      setDirty(false);
-      setConfirmDelete(false);
+      const taskChanged = activeTaskIdRef.current !== task.id;
+      const versionChanged = lastSyncedTaskVersionRef.current !== task.version;
+      const shouldSyncFromTask = taskChanged || (versionChanged && !dirty);
+      activeTaskIdRef.current = task.id;
+      if (shouldSyncFromTask) {
+        setEditTitle(task.title);
+        setEditDescription(task.description || '');
+        setEditStatus(getTaskStatus(task.status));
+        setEditPriority(getTaskPriority(task.priority));
+        setEditLabels(task.labels.join(', '));
+        setEditAssignee(task.assignee || '');
+        setEditProofUrl((task.evidence_links ?? [])[0] ?? '');
+        setProofLinks(task.evidence_links ?? []);
+        setDelegationProofState(task.delegation_proof);
+        setProofPanelOpen(task.status === 'review');
+        setGateState({
+          reindex_verified: task.proof_gate?.reindex_verified === true,
+          read_back_verified: task.proof_gate?.read_back_verified === true,
+          live_link_or_canvas_checked: task.proof_gate?.live_link_or_canvas_checked === true,
+          proof_log_updated: task.proof_gate?.proof_log_updated === true,
+        });
+        lastSyncedTaskVersionRef.current = task.version;
+        gateStateRef.current = {
+          reindex_verified: task.proof_gate?.reindex_verified === true,
+          read_back_verified: task.proof_gate?.read_back_verified === true,
+          live_link_or_canvas_checked: task.proof_gate?.live_link_or_canvas_checked === true,
+          proof_log_updated: task.proof_gate?.proof_log_updated === true,
+        };
+        setEditVersion(task.version);
+        setFeedbackEntries(task.feedback ?? []);
+        setError(null);
+        setDirty(false);
+        setConfirmDelete(false);
+        setFeedbackDraft('');
+      }
     }
-  }, [task]);
+  }, [task, dirty]);
 
   /* Safe close — warn on unsaved changes */
   const safeClose = useCallback(() => {
@@ -199,6 +253,46 @@ export function TaskDetailDrawer({
       setSaving(false);
     }
   }, [task, saving, editTitle, editDescription, editStatus, editPriority, editLabels, editAssignee, editVersion, onUpdate]);
+
+  const handleAddFeedback = useCallback(async () => {
+    if (!task || feedbackSaving) return;
+    const note = feedbackDraft.trim();
+    if (!note) return;
+
+    setFeedbackSaving(true);
+    setError(null);
+    try {
+      // Reuse the standard task patch path so feedback stays on the canonical task record.
+      const nextFeedback: TaskFeedback[] = [
+        ...(task.feedback ?? []),
+        {
+          at: Date.now(),
+          by: 'agent:operator',
+          note,
+        },
+      ];
+      const updated = await onUpdate(task.id, {
+        version: editVersion,
+        feedback: normalizeFeedbackForSave(nextFeedback),
+      });
+      setEditVersion(updated.version);
+      setFeedbackEntries(updated.feedback ?? nextFeedback);
+      setFeedbackDraft('');
+    } catch (err) {
+      if (err instanceof Error && err.message === 'version_conflict') {
+        const latest = (err as VersionConflictError).latest;
+        if (latest) {
+          setEditVersion(latest.version);
+          setFeedbackEntries(latest.feedback ?? []);
+        }
+        setError('Task was modified elsewhere. Refreshing feedback state. Please try again.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Feedback save failed');
+      }
+    } finally {
+      setFeedbackSaving(false);
+    }
+  }, [task, feedbackSaving, feedbackDraft, onUpdate, editVersion]);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -295,20 +389,23 @@ export function TaskDetailDrawer({
     if (!task || task.status !== 'review') return;
     setProofPanelOpen(true);
     setProofLinks(task.evidence_links ?? []);
-    setGateState({
+    const nextGate = {
       reindex_verified: task.proof_gate?.reindex_verified === true,
       read_back_verified: task.proof_gate?.read_back_verified === true,
       live_link_or_canvas_checked: task.proof_gate?.live_link_or_canvas_checked === true,
       proof_log_updated: task.proof_gate?.proof_log_updated === true,
-    });
-  }, [task?.id, task?.updatedAt, task?.version, task?.evidence_links, task?.proof_gate]);
+    };
+    gateStateRef.current = nextGate;
+    setGateState(nextGate);
+  }, [task]);
 
   const handleProofGateUpdate = useCallback((key: keyof typeof gateState, checked: boolean) => {
     if (!task) return;
     const nextGate = {
-      ...gateState,
+      ...gateStateRef.current,
       [key]: checked,
     };
+    gateStateRef.current = nextGate;
     setGateState(nextGate);
     void onUpdate(task.id, { version: editVersion, proof_gate: nextGate })
       .then((updated) => {
@@ -318,7 +415,7 @@ export function TaskDetailDrawer({
         setError(err instanceof Error ? err.message : 'Proof gate update failed');
       });
     markDirty();
-  }, [task, gateState, onUpdate, editVersion, markDirty]);
+  }, [task, onUpdate, editVersion, markDirty]);
 
   const handleDelegationProofPass = useCallback(async (role: 'worker' | 'checker') => {
     if (!task || workflowLoading) return;
@@ -767,25 +864,64 @@ export function TaskDetailDrawer({
                 </div>
               )}
 
-              {task.feedback.length > 0 && (
-                <div className="cockpit-note space-y-3">
+              <div className="cockpit-note space-y-3">
+                <div className="flex items-center justify-between gap-3">
                   <h4 className="cockpit-field-label">
                     <MessageSquare size={10} className="mr-1 inline" />
                     Feedback
                   </h4>
+                  <span className="text-[0.667rem] text-muted-foreground">
+                    Adds as Operator
+                  </span>
+                </div>
+
+                <div className="space-y-2 rounded-2xl border border-border/60 bg-background/45 p-3">
+                  <label htmlFor="kb-feedback" className="cockpit-field-label">
+                    Add note
+                  </label>
+                  <textarea
+                    id="kb-feedback"
+                    value={feedbackDraft}
+                    onChange={e => setFeedbackDraft(e.target.value)}
+                    placeholder="Write a short note..."
+                    rows={3}
+                    className="cockpit-textarea min-h-[84px]"
+                    aria-label="Feedback note"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[0.667rem] text-muted-foreground">
+                      Saves now.
+                    </span>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={handleAddFeedback}
+                      disabled={feedbackSaving || !feedbackDraft.trim()}
+                    >
+                      {feedbackSaving ? <Loader2 size={12} className="animate-spin" /> : <MessageSquare size={12} />}
+                      Add feedback
+                    </Button>
+                  </div>
+                </div>
+
+                {feedbackEntries.length > 0 ? (
                   <div className="space-y-2">
-                    {task.feedback.map((fb, i) => (
+                    {feedbackEntries.map((fb, i) => (
                       <div key={i} className="rounded-2xl border border-border/60 bg-background/45 p-3 text-xs">
                         <div className="mb-1 flex items-center justify-between text-[0.667rem] text-muted-foreground">
-                          <span>{fb.by === 'operator' ? 'Operator' : fb.by}</span>
+                          <span>{fb.by === 'operator' || fb.by === 'agent:operator' ? 'Operator' : fb.by}</span>
                           <span>{formatDateTime(fb.at)}</span>
                         </div>
                         <p className="text-foreground">{fb.note}</p>
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <p className="text-[0.733rem] text-muted-foreground">
+                    No feedback yet.
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="shrink-0 border-t border-border/60 bg-background/88 px-4 py-3 backdrop-blur-sm">

@@ -319,7 +319,6 @@ export default function App({ onLogout }: AppProps) {
 
   // View mode state (chat | kanban), persisted to localStorage
   const [viewMode, setViewModeRaw] = useState<ViewMode>(() => getInitialViewMode(kanbanVisible));
-  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const setViewMode = useCallback((mode: ViewMode) => {
     const nextMode = mode === 'kanban' && !kanbanVisible ? 'chat' : mode;
     setViewModeRaw(nextMode);
@@ -330,10 +329,6 @@ export default function App({ onLogout }: AppProps) {
 
     try { localStorage.setItem('nerve:viewMode', nextMode); } catch { /* ignore */ }
   }, [isCompactLayout, kanbanVisible, setFileBrowserCollapsed]);
-  const openTaskInBoard = useCallback((taskId: string) => {
-    setPendingTaskId(taskId);
-    setViewMode('kanban');
-  }, [setViewMode]);
   const [chatPathLinkPrefixes, setChatPathLinkPrefixes] = useState<string[]>(
     DEFAULT_CHAT_PATH_LINKS_CONFIG.prefixes,
   );
@@ -754,7 +749,6 @@ export default function App({ onLogout }: AppProps) {
               memoriesLoading={memoriesLoading}
               remoteWorkspace={remoteWorkspace}
               onOpenBoard={() => setViewMode('kanban')}
-              onOpenTask={openTaskInBoard}
             />
           </PanelErrorBoundary>
         </div>
@@ -798,7 +792,6 @@ export default function App({ onLogout }: AppProps) {
           remoteWorkspace={remoteWorkspace}
           compact
           onOpenBoard={() => setViewMode('kanban')}
-          onOpenTask={openTaskInBoard}
         />
       </PanelErrorBoundary>
     </Suspense>
@@ -975,7 +968,7 @@ export default function App({ onLogout }: AppProps) {
         {viewMode === 'kanban' && (
           <div className="shell-panel boot-panel flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden rounded-[28px]">
             <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-xs bg-background">Loading…</div>}>
-              <KanbanPanel initialTaskId={pendingTaskId} onInitialTaskConsumed={() => setPendingTaskId(null)} />
+              <KanbanPanel />
             </Suspense>
           </div>
         )}
