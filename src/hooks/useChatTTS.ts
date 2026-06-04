@@ -12,6 +12,7 @@ import type { ChatMsg } from '@/features/chat/types';
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
 export const FALLBACK_MAX_CHARS = 300;
+const TTS_DEDUPE_WINDOW_MS = 60_000;
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────────
 
@@ -57,9 +58,16 @@ export function buildConciseSpeechText(raw: string): string | null {
   return clipped ? `${clipped}…` : cleaned;
 }
 
-function speechKey(text: string, timestamp?: Date): string {
-  const timeBucket = timestamp ? Math.floor(timestamp.getTime() / 1000) : 0;
-  return `${timeBucket}:${text.trim()}`;
+function speechKey(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+function prunePlayedSpeech(played: Map<string, number>, now: number) {
+  for (const [key, lastPlayedAt] of played) {
+    if (now - lastPlayedAt > TTS_DEDUPE_WINDOW_MS) {
+      played.delete(key);
+    }
+  }
 }
 
 // ─── Hook ───────────────────────────────────────────────────────────────────────
@@ -71,7 +79,22 @@ interface UseChatTTSDeps {
 
 export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
   const voiceReplyPendingRef = useRef(false);
-  const playedSoundsRef = useRef<Set<string>>(new Set());
+  const playedSoundsRef = useRef<Map<string, number>>(new Map());
+
+  const markSpeechIfNew = useCallback((text: string) => {
+    const speechText = text.trim();
+    if (!speechText) return null;
+
+    const now = Date.now();
+    prunePlayedSpeech(playedSoundsRef.current, now);
+    const key = speechKey(speechText);
+    const lastPlayedAt = playedSoundsRef.current.get(key);
+    // Cron TTS can arrive through both websocket finals and history recovery; dedupe by spoken text.
+    if (lastPlayedAt !== undefined && now - lastPlayedAt <= TTS_DEDUPE_WINDOW_MS) return null;
+
+    playedSoundsRef.current.set(key, now);
+    return speechText;
+  }, []);
 
   /** Track whether the user sent a voice message (for TTS fallback). */
   const trackVoiceMessage = useCallback((text: string) => {
@@ -91,9 +114,8 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
   const handleFinalTTS = useCallback((finalData: FinalMessageData | null, isActiveRun: boolean) => {
     if (!isActiveRun && !voiceReplyPendingRef.current) return;
 
-    if (finalData?.ttsText && !playedSoundsRef.current.has(finalData.ttsText)) {
-      playedSoundsRef.current.add(finalData.ttsText);
-      const speechText = finalData.ttsText.trim();
+    if (finalData?.ttsText) {
+      const speechText = markSpeechIfNew(finalData.ttsText);
       if (speechText) {
         speak.current(speechText);
       }
@@ -109,18 +131,17 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
     } else if (soundEnabled.current) {
       playPing();
     }
-  }, [soundEnabled, speak]);
+  }, [markSpeechIfNew, soundEnabled, speak]);
 
   /** Speak explicit `[tts: ...]` markers from cron/background runs that are not the active chat. */
   const handleBackgroundTTS = useCallback((finalData: FinalMessageData | null) => {
     const speechText = finalData?.ttsText?.trim();
     if (!speechText) return;
 
-    const key = speechKey(speechText);
-    if (playedSoundsRef.current.has(key)) return;
-    playedSoundsRef.current.add(key);
-    speak.current(speechText);
-  }, [speak]);
+    const freshSpeechText = markSpeechIfNew(speechText);
+    if (!freshSpeechText) return;
+    speak.current(freshSpeechText);
+  }, [markSpeechIfNew, speak]);
 
   /** Recovery path: if a cron message arrives through history polling, speak its hidden marker once. */
   const handleHistoryTTS = useCallback((previous: ChatMsg[], next: ChatMsg[]) => {
@@ -133,12 +154,11 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
       if (previousKeys.has(makeHistoryMessageKey(msg))) continue;
       if (latestPreviousTs > 0 && msg.timestamp.getTime() < latestPreviousTs) continue;
 
-      const key = speechKey(speechText, msg.timestamp);
-      if (playedSoundsRef.current.has(key)) continue;
-      playedSoundsRef.current.add(key);
-      speak.current(speechText);
+      const freshSpeechText = markSpeechIfNew(speechText);
+      if (!freshSpeechText) continue;
+      speak.current(freshSpeechText);
     }
-  }, [speak]);
+  }, [markSpeechIfNew, speak]);
 
   /** Play the completion ping sound if sound is enabled. */
   const playCompletionPing = useCallback(() => {

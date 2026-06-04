@@ -160,4 +160,35 @@ describe('useChatTTS', () => {
 
     expect(speak).toHaveBeenCalledWith('Browser cron speech.');
   });
+
+  it('does not replay a cron marker when history recovery sees the same speech text', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    const previous = [] as never[];
+    const next = [{
+      msgId: 'cron-voice-recovery',
+      role: 'assistant',
+      html: 'Cron visible text',
+      rawText: 'Cron visible text',
+      ttsText: 'Alex, finish the Laura videos cleanly.',
+      timestamp: new Date('2026-06-04T16:00:05.000Z'),
+    }] as never[];
+
+    act(() => {
+      result.current.handleBackgroundTTS({
+        message: { role: 'assistant', content: 'Visible [tts: Alex, finish the Laura videos cleanly.]' } as never,
+        text: 'Visible [tts: Alex, finish the Laura videos cleanly.]',
+        ttsText: 'Alex, finish the Laura videos cleanly.',
+        charts: [],
+      });
+      result.current.handleHistoryTTS(previous, next);
+    });
+
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenCalledWith('Alex, finish the Laura videos cleanly.');
+  });
 });
