@@ -229,10 +229,24 @@ function deriveAgentIdFromSessionKey(sessionKey?: string): string | undefined {
   return match?.[1];
 }
 
-function normalizeCronTarget<T extends { sessionKey?: string; agentId?: string }>(job: T): T {
+function normalizeCronTarget<T extends { sessionKey?: string; agentId?: string; sessionTarget?: string; payload?: unknown }>(job: T): T {
   const agentId = deriveAgentIdFromSessionKey(job.sessionKey);
-  if (!agentId) return job;
-  return { ...job, agentId };
+  const normalizedAgentId = agentId ?? job.agentId;
+  const normalizedJob = agentId ? { ...job, agentId } : { ...job };
+  const payload = (normalizedJob.payload || {}) as Record<string, unknown>;
+
+  if (
+    normalizedAgentId
+    && normalizedAgentId !== 'main'
+    && normalizedJob.sessionTarget === 'main'
+    && payload.kind === 'agentTurn'
+  ) {
+    // Gateway only permits root `main` targeting for the default agent. Keep
+    // saved agent cron edits recoverable by preserving the agent and isolating the run.
+    return { ...normalizedJob, sessionTarget: 'isolated' };
+  }
+
+  return normalizedJob;
 }
 
 function isIsolatedAgentTurnCron(job: Record<string, unknown>): boolean {

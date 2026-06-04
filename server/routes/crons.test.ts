@@ -97,6 +97,35 @@ describe('cron routes', () => {
     });
   });
 
+  it('keeps non-default agent cron edits isolated when updating', async () => {
+    const { app, invokeGatewayTool } = await buildApp();
+
+    const res = await app.request('/api/crons/job-123', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patch: {
+          agentId: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+          sessionTarget: 'main',
+          sessionKey: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+          payload: { kind: 'agentTurn', message: 'Check the board.' },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(invokeGatewayTool).toHaveBeenCalledWith('cron', {
+      action: 'update',
+      jobId: 'job-123',
+      patch: {
+        agentId: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+        payload: { kind: 'agentTurn', message: 'Check the board.' },
+        sessionKey: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+        sessionTarget: 'isolated',
+      },
+    });
+  });
+
   it('runs isolated agentTurn jobs through sessions_spawn', async () => {
     const { app, invokeGatewayTool, tempHome } = await buildApp();
     invokeGatewayTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
