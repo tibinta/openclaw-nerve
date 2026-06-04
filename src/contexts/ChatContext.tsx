@@ -301,6 +301,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const currentSk = currentSessionRef.current;
       if (classified.sessionKey !== currentSk) {
         if (
+          classified.source === 'chat'
+          && classified.type === 'chat_final'
+          && classified.sessionKey?.includes(':cron:')
+        ) {
+          // Cron runs are background sessions, so they do not become the active
+          // chat. Speak explicit markers here before the normal session filter
+          // drops the frame as unrelated UI noise.
+          ttsHook.handleBackgroundTTS(extractFinalMessage(classified.chatPayload!));
+        }
+        if (
           isTopLevelAgentSessionKey(currentSk) &&
           classified.sessionKey &&
           isSubagentSessionKey(classified.sessionKey) &&
@@ -599,6 +609,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     ttsHook.playCompletionPing,
     ttsHook.resetPlayedSounds,
     ttsHook.handleFinalTTS,
+    ttsHook.handleBackgroundTTS,
     subscribe,
     rpc,
   ]);

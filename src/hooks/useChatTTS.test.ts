@@ -106,4 +106,58 @@ describe('useChatTTS', () => {
 
     expect(speak).toHaveBeenCalledWith('I will do that.');
   });
+
+  it('speaks new history messages that carry hidden TTS text', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    const previous = [{
+      msgId: 'old',
+      role: 'assistant',
+      html: 'Old',
+      rawText: 'Old',
+      timestamp: new Date('2026-06-04T16:00:00.000Z'),
+    }] as never[];
+    const next = [
+      ...previous,
+      {
+        msgId: 'cron-voice',
+        role: 'assistant',
+        html: 'Cron visible text',
+        rawText: 'Cron visible text',
+        ttsText: 'Alex, cron voice is live.',
+        timestamp: new Date('2026-06-04T16:00:05.000Z'),
+      },
+    ] as never[];
+
+    act(() => {
+      result.current.handleHistoryTTS(previous, next);
+      result.current.handleHistoryTTS(previous, next);
+    });
+
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenCalledWith('Alex, cron voice is live.');
+  });
+
+  it('speaks explicit TTS markers from background cron finals', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    act(() => {
+      result.current.handleBackgroundTTS({
+        message: { role: 'assistant', content: 'Visible [tts: Browser cron speech.]' } as never,
+        text: 'Visible [tts: Browser cron speech.]',
+        ttsText: 'Browser cron speech.',
+        charts: [],
+      });
+    });
+
+    expect(speak).toHaveBeenCalledWith('Browser cron speech.');
+  });
 });

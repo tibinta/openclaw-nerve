@@ -442,7 +442,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
     const segments = splitSystemEvents(rawText);
     if (segments.some(s => s.role === 'event')) {
       return segments.map(seg => {
-        const { cleaned: ttsStripped } = extractTTSMarkers(seg.text);
+        const { cleaned: ttsStripped, ttsText } = extractTTSMarkers(seg.text);
         const { cleaned: chartCleaned, charts } = extractChartMarkers(ttsStripped);
         return {
           role: seg.role as ChatMsgRole,
@@ -451,6 +451,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
           ...chatFailureMeta(m),
           timestamp,
           streaming: false,
+          ...(ttsText ? { ttsText } : {}),
           ...(charts.length > 0 ? { charts } : {}),
           ...(isVoice && seg.role === 'user' ? { isVoice: true } : {}),
           ...(uploadAttachments && seg.role === 'user' ? { uploadAttachments } : {}),
@@ -459,7 +460,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
     }
   }
 
-  const { cleaned: ttsStripped } = extractTTSMarkers(rawText);
+  const { cleaned: ttsStripped, ttsText } = extractTTSMarkers(rawText);
   const { cleaned: chartCleaned, charts } = extractChartMarkers(ttsStripped);
   const isAssistant = m.role === 'assistant';
   const { cleaned: text, images: extractedImages } = isAssistant
@@ -498,6 +499,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
     ...chatFailureMeta(m),
     timestamp,
     streaming: false,
+    ...(ttsText ? { ttsText } : {}),
     ...(charts.length > 0 ? { charts } : {}),
     ...(extractedImages.length > 0 ? { extractedImages } : {}),
     ...(contentImages.length > 0 ? { images: contentImages } : {}),

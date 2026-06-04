@@ -7,6 +7,7 @@
 import { useRef, useCallback, useMemo } from 'react';
 import { playPing } from '@/features/voice/audio-feedback';
 import type { FinalMessageData } from '@/features/chat/operations';
+import type { ChatMsg } from '@/features/chat/types';
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,11 @@ export function buildConciseSpeechText(raw: string): string | null {
 
   const clipped = cleaned.slice(0, 180).replace(/\s+\S*$/, '').trim();
   return clipped ? `${clipped}…` : cleaned;
+}
+
+function speechKey(text: string, timestamp?: Date): string {
+  const timeBucket = timestamp ? Math.floor(timestamp.getTime() / 1000) : 0;
+  return `${timeBucket}:${text.trim()}`;
 }
 
 // ─── Hook ───────────────────────────────────────────────────────────────────────
@@ -105,6 +111,35 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
     }
   }, [soundEnabled, speak]);
 
+  /** Speak explicit `[tts: ...]` markers from cron/background runs that are not the active chat. */
+  const handleBackgroundTTS = useCallback((finalData: FinalMessageData | null) => {
+    const speechText = finalData?.ttsText?.trim();
+    if (!speechText) return;
+
+    const key = speechKey(speechText);
+    if (playedSoundsRef.current.has(key)) return;
+    playedSoundsRef.current.add(key);
+    speak.current(speechText);
+  }, [speak]);
+
+  /** Recovery path: if a cron message arrives through history polling, speak its hidden marker once. */
+  const handleHistoryTTS = useCallback((previous: ChatMsg[], next: ChatMsg[]) => {
+    const previousKeys = new Set(previous.map((msg) => makeHistoryMessageKey(msg)));
+    const latestPreviousTs = previous.reduce((latest, msg) => Math.max(latest, msg.timestamp.getTime()), 0);
+
+    for (const msg of next) {
+      const speechText = msg.ttsText?.trim();
+      if (!speechText) continue;
+      if (previousKeys.has(makeHistoryMessageKey(msg))) continue;
+      if (latestPreviousTs > 0 && msg.timestamp.getTime() < latestPreviousTs) continue;
+
+      const key = speechKey(speechText, msg.timestamp);
+      if (playedSoundsRef.current.has(key)) continue;
+      playedSoundsRef.current.add(key);
+      speak.current(speechText);
+    }
+  }, [speak]);
+
   /** Play the completion ping sound if sound is enabled. */
   const playCompletionPing = useCallback(() => {
     if (soundEnabled.current) playPing();
@@ -114,11 +149,25 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
     trackVoiceMessage,
     resetPlayedSounds,
     handleFinalTTS,
+    handleBackgroundTTS,
+    handleHistoryTTS,
     playCompletionPing,
   }), [
     trackVoiceMessage,
     resetPlayedSounds,
     handleFinalTTS,
+    handleBackgroundTTS,
+    handleHistoryTTS,
     playCompletionPing,
   ]);
+}
+
+function makeHistoryMessageKey(msg: ChatMsg): string {
+  if (msg.msgId) return `id:${msg.msgId}`;
+  return [
+    msg.role,
+    msg.timestamp.getTime(),
+    msg.rawText,
+    msg.ttsText ?? '',
+  ].join('::');
 }

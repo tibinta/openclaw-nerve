@@ -142,6 +142,8 @@ export interface ChatMsg {
   thinkingDurationMs?: number;
   /** Whether this is a voice (STT-transcribed) message */
   isVoice?: boolean;
+  /** Hidden speech text extracted from a `[tts: ...]` marker before display cleanup. */
+  ttsText?: string;
   /** System notification (subagent/cron completion) — rendered as collapsible strip */
   isSystemNotification?: boolean;
   /** Short label for system notification strip (e.g. "Subagent completed: kb-fix-auth") */
