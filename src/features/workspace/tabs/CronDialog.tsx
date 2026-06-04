@@ -22,6 +22,19 @@ type SessionTarget = 'main' | 'isolated';
 type WakeMode = 'now' | 'nextHeartbeat';
 type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
 
+const CRON_READONLY_KEYS = new Set([
+  'id',
+  'jobId',
+  'createdAtMs',
+  'updatedAtMs',
+  'state',
+  'nextRun',
+  'lastRun',
+  'lastStatus',
+  'lastError',
+  'lastDeliveryStatus',
+]);
+
 interface CronFormState {
   name: string;
   description: string;
@@ -200,13 +213,13 @@ function SectionShell({
   className?: string;
 }) {
   return (
-    <section className={`cockpit-surface p-3.5 ${className}`}>
+    <section className={`cockpit-surface p-3 sm:p-3.5 ${className}`}>
       <div className="space-y-0.5">
         <div className="cockpit-kicker text-[0.6rem]">
           <span className="text-primary">◆</span>
           {eyebrow}
         </div>
-        <div className="text-base font-semibold tracking-[-0.03em] text-foreground">{title}</div>
+        <div className="text-[0.95rem] font-semibold text-foreground">{title}</div>
         <p className="text-[0.833rem] leading-5 text-muted-foreground">{description}</p>
       </div>
       <div className="mt-3 space-y-2.5">{children}</div>
@@ -218,10 +231,10 @@ function CronSelect(props: SelectHTMLAttributes<HTMLSelectElement>) {
   const { className = '', children, ...rest } = props;
 
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <select
         {...rest}
-        className={`cockpit-select h-11 appearance-none pr-12 text-sm ${className}`.trim()}
+        className={`cockpit-select h-11 min-w-0 appearance-none truncate pr-11 text-sm ${className}`.trim()}
       >
         {children}
       </select>
@@ -359,10 +372,15 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
       if (form.deliveryTo.trim()) delivery.to = form.deliveryTo.trim();
     }
 
+    // Preserve editable gateway fields from the existing cron, but strip
+    // readonly bookkeeping keys so the gateway never sees stale record state.
+    const preservedRaw = Object.fromEntries(
+      Object.entries(form.raw).filter(([key]) => !CRON_READONLY_KEYS.has(key)),
+    );
     const sessionKey = form.sessionKey.trim();
     const agentId = form.agentId.trim();
     const job: Record<string, unknown> = {
-      ...form.raw,
+      ...preservedRaw,
       name,
       description: form.description.trim() || undefined,
       agentId: agentId || undefined,
@@ -437,14 +455,14 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
           </div>
         </div>
 
-        <div className="grid gap-3 px-3 py-3 sm:gap-4 sm:px-4 sm:py-4 lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)]">
+        <div className="grid gap-3 px-3 py-3 sm:gap-4 sm:px-4 sm:py-4 xl:grid-cols-[minmax(360px,0.92fr)_minmax(430px,1.08fr)]">
           <div className="space-y-4">
             <SectionShell
               eyebrow="Basics"
               title="Name and state"
               description="Name the job, add a short note, and choose the agent it belongs to."
             >
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3">
                 <div className="flex flex-col gap-1">
                   <label htmlFor="cron-name" className="cockpit-field-label">Name * required</label>
                   <input
@@ -456,6 +474,9 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                     className="cockpit-input"
                   />
                 </div>
+              </div>
+
+              <div className="grid gap-3">
                 <div className="flex flex-col gap-1">
                   <label htmlFor="cron-agent-id" className="cockpit-field-label">Agent ID</label>
                   <input
@@ -497,7 +518,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
               title="When it runs"
               description="Use the timing that matches the job."
             >
-              <div className="grid gap-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(7rem,0.7fr)_minmax(0,1fr)]">
                 <div className="flex flex-col gap-1">
                   <span className="cockpit-field-label">Type</span>
                   <CronSelect
@@ -511,9 +532,9 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                   </CronSelect>
                 </div>
                 {form.scheduleKind === 'every' && (
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,0.75fr)_minmax(0,1fr)]">
+                  <>
                     <div className="flex flex-col gap-1">
-                      <label htmlFor="cron-every" className="cockpit-field-label">Every * required</label>
+                      <label htmlFor="cron-every" className="cockpit-field-label">Every *</label>
                       <input
                         id="cron-every"
                         type="number"
@@ -536,7 +557,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                         ))}
                       </CronSelect>
                     </div>
-                  </div>
+                  </>
                 )}
               </div>
 
@@ -587,7 +608,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
               title="What runs"
               description="Choose where it wakes and what it should do."
             >
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,0.85fr)]">
                 <div className="flex flex-col gap-1">
                   <span className="cockpit-field-label">Session</span>
                   <CronSelect
@@ -595,8 +616,8 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                     onChange={(e) => updateForm('sessionTarget', e.target.value as SessionTarget)}
                     aria-label="Session"
                   >
-                    <option value="main">Main posts a system event</option>
-                    <option value="isolated">Isolated runs a private agent turn</option>
+                    <option value="main">Main event</option>
+                    <option value="isolated">Private agent turn</option>
                   </CronSelect>
                 </div>
                 <div className="flex flex-col gap-1">
@@ -715,8 +736,8 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
               title="Extra controls"
               description="Keep recovery paths, routing, and model controls in one place."
             >
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="flex items-center gap-2 rounded-2xl border border-border/70 bg-background/35 px-3 py-2 text-sm text-foreground">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex min-h-11 items-center gap-2 rounded-[14px] border border-border/70 bg-background/30 px-3 text-sm text-foreground">
                   <input
                     type="checkbox"
                     checked={form.deleteAfterRun}
@@ -726,7 +747,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                   <span>Delete after run</span>
                 </label>
 
-                <label className="flex items-center gap-2 rounded-2xl border border-border/70 bg-background/35 px-3 py-2 text-sm text-foreground">
+                <label className="flex min-h-11 items-center gap-2 rounded-[14px] border border-border/70 bg-background/30 px-3 text-sm text-foreground">
                   <input
                     type="checkbox"
                     checked={form.clearAgentOverride}
@@ -737,7 +758,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                 </label>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3">
                 <div className="flex flex-col gap-1">
                   <label htmlFor="cron-session-key" className="cockpit-field-label">Session key</label>
                   <input
@@ -760,18 +781,6 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                     className="cockpit-input cockpit-input-mono"
                   />
                 </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="flex items-center gap-2 rounded-2xl border border-border/70 bg-background/35 px-3 py-2 text-sm text-foreground">
-                  <input
-                    type="checkbox"
-                    checked={form.lightContext}
-                    onChange={(e) => updateForm('lightContext', e.target.checked)}
-                    className="h-4 w-4 rounded border-border bg-background text-primary focus:ring-primary"
-                  />
-                  <span>Light context</span>
-                </label>
 
                 <div className="flex flex-col gap-1">
                   <span className="cockpit-field-label">Model</span>
@@ -788,6 +797,16 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex min-h-11 items-center gap-2 rounded-[14px] border border-border/70 bg-background/30 px-3 text-sm text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={form.lightContext}
+                    onChange={(e) => updateForm('lightContext', e.target.checked)}
+                    className="h-4 w-4 rounded border-border bg-background text-primary focus:ring-primary"
+                  />
+                  <span>Light context</span>
+                </label>
+
                 <div className="flex flex-col gap-1">
                   <span className="cockpit-field-label">Thinking</span>
                   <CronSelect
@@ -800,6 +819,9 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                     ))}
                   </CronSelect>
                 </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div className="flex flex-col gap-1">
                   <label htmlFor="cron-failure-alerts" className="cockpit-field-label">Failure alerts</label>
                   <input
@@ -816,14 +838,14 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
 
             {error && <div className="cockpit-note" data-tone="danger">{error}</div>}
 
-            <div className="flex flex-col items-stretch gap-3 rounded-[24px] border border-border/70 bg-secondary/28 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-              <p className="text-sm leading-5 text-muted-foreground">
+            <div className="flex flex-col items-stretch gap-3 rounded-[18px] border border-border/70 bg-background/30 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <p className="text-[0.833rem] leading-5 text-muted-foreground">
                 {isEdit ? 'Save when the settings look right.' : 'Create the job when the settings look right.'}
               </p>
               <button
                 type="submit"
                 disabled={submitting}
-                className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-[0_16px_34px_rgba(0,0,0,0.24)] transition-transform hover:-translate-y-px hover:bg-primary/95 disabled:cursor-not-allowed disabled:opacity-50 sm:shrink-0"
+                className="inline-flex min-h-10 items-center justify-center rounded-[14px] bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_rgba(0,0,0,0.18)] transition-transform hover:-translate-y-px hover:bg-primary/95 disabled:cursor-not-allowed disabled:opacity-50 sm:shrink-0"
               >
                 {submitting ? (isEdit ? 'Saving...' : 'Creating...') : (isEdit ? 'Save Changes' : 'Create Cron')}
               </button>
