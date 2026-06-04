@@ -81,6 +81,8 @@ const GATEWAY_RUN_TIMEOUT_MS = 60_000;
 const MANUAL_CRON_RUNS_DIR = join(config.home, '.openclaw', 'cron', 'nerve-manual-runs');
 const LOCAL_CRON_JOBS_FILE = join(config.home, '.openclaw', 'cron', 'jobs.json');
 const LOCAL_CRON_STATE_FILE = join(config.home, '.openclaw', 'cron', 'jobs-state.json');
+const LOCAL_CRON_JOBS_MIGRATED_FILE = join(config.home, '.openclaw', 'cron', 'jobs.json.migrated');
+const LOCAL_CRON_STATE_MIGRATED_FILE = join(config.home, '.openclaw', 'cron', 'jobs-state.json.migrated');
 
 interface ManualCronRunEntry {
   ts: number;
@@ -96,9 +98,24 @@ interface ManualCronRunEntry {
 }
 
 function getCronJobsFromResult(result: unknown): Record<string, unknown>[] {
-  const r = result as { jobs?: unknown; details?: { jobs?: unknown } };
+  const r = result as {
+    jobs?: unknown;
+    details?: { jobs?: unknown };
+    content?: Array<{ type?: string; text?: string }>;
+  };
   if (Array.isArray(r?.jobs)) return r.jobs as Record<string, unknown>[];
   if (Array.isArray(r?.details?.jobs)) return r.details.jobs as Record<string, unknown>[];
+  if (Array.isArray(r?.content)) {
+    for (const item of r.content) {
+      if (item?.type !== 'text' || typeof item.text !== 'string') continue;
+      try {
+        const parsed = JSON.parse(item.text) as { jobs?: unknown };
+        if (Array.isArray(parsed.jobs)) return parsed.jobs as Record<string, unknown>[];
+      } catch {
+        // Keep looking. Some gateway text items are not JSON cron payloads.
+      }
+    }
+  }
   return Array.isArray(result) ? result as Record<string, unknown>[] : [];
 }
 
@@ -141,6 +158,14 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
   }
 }
 
+async function readFirstJsonFile<T>(filePaths: string[]): Promise<T | null> {
+  for (const filePath of filePaths) {
+    const parsed = await readJsonFile<T>(filePath);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 function sortCronRunEntries(entries: Record<string, unknown>[]): Record<string, unknown>[] {
   return [...entries].sort((a, b) => {
     const aTs = Number(a.ts || a.runAtMs || 0);
@@ -178,8 +203,8 @@ async function mergeManualRunStateIntoJobs(jobs: Record<string, unknown>[]): Pro
 
 async function mergeLocalCronFallbackIntoJobs(jobs: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
   const [localJobsFile, localStateFile] = await Promise.all([
-    readJsonFile<{ jobs?: Record<string, unknown>[] }>(LOCAL_CRON_JOBS_FILE),
-    readJsonFile<{ jobs?: Record<string, { state?: Record<string, unknown> }> }>(LOCAL_CRON_STATE_FILE),
+    readFirstJsonFile<{ jobs?: Record<string, unknown>[] }>([LOCAL_CRON_JOBS_FILE, LOCAL_CRON_JOBS_MIGRATED_FILE]),
+    readFirstJsonFile<{ jobs?: Record<string, { state?: Record<string, unknown> }> }>([LOCAL_CRON_STATE_FILE, LOCAL_CRON_STATE_MIGRATED_FILE]),
   ]);
 
   const localJobs = Array.isArray(localJobsFile?.jobs) ? localJobsFile.jobs : [];
@@ -258,6 +283,9 @@ function replaceCronJobsInResult(result: unknown, jobs: Record<string, unknown>[
   }
   if (Array.isArray(result)) {
     return jobs;
+  }
+  if (r && typeof r === 'object') {
+    return syncContent({ ...r, jobs, total: jobs.length });
   }
   return result;
 }

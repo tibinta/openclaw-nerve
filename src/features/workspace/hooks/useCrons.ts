@@ -372,8 +372,9 @@ export function useCrons() {
   }, [setErrorState]);
 
   const activeCount = jobs.filter(j => j.enabled).length;
+  const totalCount = jobs.length;
 
-  return { jobs, isLoading, error, cronWarning, activeCount, fetchJobs, toggleJob, runJob, fetchRuns, addJob, updateJob, deleteJob };
+  return { jobs, isLoading, error, cronWarning, activeCount, totalCount, fetchJobs, toggleJob, runJob, fetchRuns, addJob, updateJob, deleteJob };
 }
 
 function extractCronJobsFromResult(result: unknown): Record<string, unknown>[] {

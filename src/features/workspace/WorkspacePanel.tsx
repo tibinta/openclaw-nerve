@@ -128,7 +128,7 @@ export function WorkspacePanel({
 }: WorkspacePanelProps) {
   const { kanbanVisible } = useSettings();
   const [activeTab, setActiveTab] = useState<TabId>(() => getInitialTab(kanbanVisible));
-  const { activeCount, cronWarning } = useCrons();
+  const { totalCount, cronWarning } = useCrons();
 
   const [visitedTabs, setVisitedTabs] = useState<Set<TabId>>(() => new Set([activeTab]));
 
@@ -167,7 +167,7 @@ export function WorkspacePanel({
       <WorkspaceTabs
         activeTab={activeTab}
         onTabChange={handleTabChange}
-        cronCount={activeCount || undefined}
+        cronCount={totalCount || undefined}
         kanbanCount={undefined}
         showKanban={kanbanVisible}
       />

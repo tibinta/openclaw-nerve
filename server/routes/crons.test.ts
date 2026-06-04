@@ -446,6 +446,79 @@ describe('cron routes', () => {
     expect(data.result.jobs?.find((job) => job.id === 'off-job')?.state?.lastRunAtMs).toBe(456);
   });
 
+  it('backfills disabled jobs from migrated local cron files', async () => {
+    const { app, invokeGatewayTool, tempHome } = await buildApp();
+    invokeGatewayTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+      if (tool === 'cron' && args.action === 'list') {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              jobs: [{
+                id: 'live-job',
+                name: 'Live job',
+                enabled: true,
+                schedule: { kind: 'cron', expr: '0 3 * * *' },
+                payload: { kind: 'systemEvent', text: 'Live cron' },
+                state: {},
+              }],
+              total: 1,
+            }),
+          }],
+        };
+      }
+      return { ok: true };
+    });
+
+    await fs.mkdir(join(tempHome, '.openclaw', 'cron'), { recursive: true });
+    await fs.writeFile(join(tempHome, '.openclaw', 'cron', 'jobs.json.migrated'), JSON.stringify({
+      version: 1,
+      jobs: [
+        {
+          id: 'live-job',
+          name: 'Live job',
+          enabled: true,
+          schedule: { kind: 'cron', expr: '0 3 * * *' },
+          payload: { kind: 'systemEvent', text: 'Live cron' },
+        },
+        {
+          id: 'off-job',
+          name: 'Off job',
+          enabled: false,
+          schedule: { kind: 'every', everyMs: 86400000 },
+          payload: { kind: 'agentTurn', message: 'Disabled cron' },
+        },
+      ],
+    }, null, 2), 'utf8');
+    await fs.writeFile(join(tempHome, '.openclaw', 'cron', 'jobs-state.json.migrated'), JSON.stringify({
+      version: 1,
+      jobs: {
+        'off-job': {
+          state: {
+            lastRunAtMs: 456,
+          },
+        },
+      },
+    }, null, 2), 'utf8');
+
+    const res = await app.request('/api/crons');
+    const data = await res.json() as {
+      ok: boolean;
+      result: {
+        jobs?: Array<{ id?: string; enabled?: boolean; state?: { lastRunAtMs?: number } }>;
+        content?: Array<{ type?: string; text?: string }>;
+      };
+    };
+
+    expect(res.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(data.result.jobs).toHaveLength(2);
+    expect(data.result.jobs?.find((job) => job.id === 'off-job')?.enabled).toBe(false);
+    expect(data.result.jobs?.find((job) => job.id === 'off-job')?.state?.lastRunAtMs).toBe(456);
+    const parsedContent = JSON.parse(data.result.content?.[0]?.text as string) as { jobs?: Array<{ id?: string }> };
+    expect(parsedContent.jobs?.map((job) => job.id)).toEqual(['live-job', 'off-job']);
+  });
+
   it('still returns success when manual run history cannot be persisted', async () => {
     const { app, invokeGatewayTool } = await buildApp();
     invokeGatewayTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {

@@ -5,18 +5,20 @@ import { WorkspacePanel } from './WorkspacePanel';
 
 const configTabRenderLog: Array<{ agentId: string; cronWarning?: string | null }> = [];
 const skillsTabRenderLog: string[] = [];
-const mockUseCrons = vi.fn<() => { activeCount: number; cronWarning: string | null }>(() => ({
+const mockUseCrons = vi.fn<() => { activeCount: number; totalCount: number; cronWarning: string | null }>(() => ({
   activeCount: 0,
+  totalCount: 0,
   cronWarning: null,
 }));
 let kanbanVisible = true;
 const mockUseSettings = vi.fn(() => ({ kanbanVisible }));
 
 vi.mock('./WorkspaceTabs', () => ({
-  WorkspaceTabs: ({ activeTab, onTabChange }: { activeTab: string; onTabChange: (tab: 'config') => void }) => (
+  WorkspaceTabs: ({ activeTab, cronCount, onTabChange }: { activeTab: string; cronCount?: number; onTabChange: (tab: 'config') => void }) => (
     <div>
       <button type="button" onClick={() => onTabChange('config')}>Config</button>
       <div data-testid="active-tab">{activeTab}</div>
+      <div data-testid="cron-count">{cronCount ?? 0}</div>
     </div>
   ),
 }));
@@ -51,7 +53,7 @@ describe('WorkspacePanel', () => {
     configTabRenderLog.length = 0;
     skillsTabRenderLog.length = 0;
     mockUseCrons.mockReset();
-    mockUseCrons.mockReturnValue({ activeCount: 0, cronWarning: null });
+    mockUseCrons.mockReturnValue({ activeCount: 0, totalCount: 0, cronWarning: null });
     kanbanVisible = true;
     mockUseSettings.mockClear();
   });
@@ -86,6 +88,7 @@ describe('WorkspacePanel', () => {
     localStorage.setItem('nerve-workspace-tab', 'config');
     mockUseCrons.mockReturnValue({
       activeCount: 0,
+      totalCount: 0,
       cronWarning: 'This gateway does not expose cron management, so Nerve can’t load or edit crons right now.',
     });
 
@@ -94,6 +97,16 @@ describe('WorkspacePanel', () => {
     );
 
     expect(await screen.findByTestId('config-tab')).toHaveTextContent('Nerve can’t load or edit crons right now');
+  });
+
+  it('uses total cron count for the tab badge so disabled crons stay counted', () => {
+    mockUseCrons.mockReturnValue({ activeCount: 1, totalCount: 18, cronWarning: null });
+
+    render(
+      <WorkspacePanel workspaceAgentId="alpha" memories={[]} onRefreshMemories={vi.fn()} />,
+    );
+
+    expect(screen.getByTestId('cron-count')).toHaveTextContent('18');
   });
 
   it('falls back to memory when kanban is hidden but persisted as active', () => {
