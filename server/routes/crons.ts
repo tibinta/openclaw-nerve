@@ -79,6 +79,8 @@ const app = new Hono();
 
 const GATEWAY_RUN_TIMEOUT_MS = 60_000;
 const MANUAL_CRON_RUNS_DIR = join(config.home, '.openclaw', 'cron', 'nerve-manual-runs');
+const LOCAL_CRON_JOBS_FILE = join(config.home, '.openclaw', 'cron', 'jobs.json');
+const LOCAL_CRON_STATE_FILE = join(config.home, '.openclaw', 'cron', 'jobs-state.json');
 
 interface ManualCronRunEntry {
   ts: number;
@@ -130,6 +132,15 @@ async function readManualCronRunEntries(jobId: string): Promise<Record<string, u
   }
 }
 
+async function readJsonFile<T>(filePath: string): Promise<T | null> {
+  try {
+    const raw = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 function sortCronRunEntries(entries: Record<string, unknown>[]): Record<string, unknown>[] {
   return [...entries].sort((a, b) => {
     const aTs = Number(a.ts || a.runAtMs || 0);
@@ -165,6 +176,46 @@ async function mergeManualRunStateIntoJobs(jobs: Record<string, unknown>[]): Pro
   }));
 }
 
+async function mergeLocalCronFallbackIntoJobs(jobs: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  const [localJobsFile, localStateFile] = await Promise.all([
+    readJsonFile<{ jobs?: Record<string, unknown>[] }>(LOCAL_CRON_JOBS_FILE),
+    readJsonFile<{ jobs?: Record<string, { state?: Record<string, unknown> }> }>(LOCAL_CRON_STATE_FILE),
+  ]);
+
+  const localJobs = Array.isArray(localJobsFile?.jobs) ? localJobsFile.jobs : [];
+  if (!localJobs.length) return jobs;
+
+  const jobsById = new Map<string, Record<string, unknown>>();
+  for (const job of jobs) {
+    const jobId = typeof job.id === 'string'
+      ? job.id
+      : typeof job.jobId === 'string'
+        ? job.jobId
+        : '';
+    if (jobId) jobsById.set(jobId, job);
+  }
+
+  const localStateById = localStateFile?.jobs ?? {};
+  const merged = [...jobs];
+  for (const localJob of localJobs) {
+    const jobId = typeof localJob.id === 'string'
+      ? localJob.id
+      : typeof localJob.jobId === 'string'
+        ? localJob.jobId
+        : '';
+    if (!jobId || jobsById.has(jobId)) continue;
+
+    const localState = localStateById[jobId]?.state ?? {};
+    // The gateway may omit disabled jobs; merge the canonical local cron store so Off jobs stay visible.
+    merged.push({
+      ...localJob,
+      state: localState,
+    });
+  }
+
+  return merged;
+}
+
 function replaceCronJobsInResult(result: unknown, jobs: Record<string, unknown>[]): unknown {
   const r = result as {
     jobs?: unknown;
@@ -180,7 +231,7 @@ function replaceCronJobsInResult(result: unknown, jobs: Record<string, unknown>[
         if (!Array.isArray(parsed.jobs)) return item;
         return {
           ...item,
-          text: JSON.stringify({ ...parsed, jobs }, null, 2),
+          text: JSON.stringify({ ...parsed, jobs, total: jobs.length }, null, 2),
         };
       } catch {
         return item;
@@ -192,7 +243,7 @@ function replaceCronJobsInResult(result: unknown, jobs: Record<string, unknown>[
     };
   };
   if (Array.isArray(r?.jobs)) {
-    return syncContent({ ...r, jobs });
+    return syncContent({ ...r, jobs, total: jobs.length });
   }
   if (Array.isArray(r?.details?.jobs)) {
     return syncContent({
@@ -200,7 +251,9 @@ function replaceCronJobsInResult(result: unknown, jobs: Record<string, unknown>[
       details: {
         ...r.details,
         jobs,
+        total: jobs.length,
       },
+      total: jobs.length,
     });
   }
   if (Array.isArray(result)) {
@@ -229,11 +282,20 @@ function deriveAgentIdFromSessionKey(sessionKey?: string): string | undefined {
   return match?.[1];
 }
 
-function normalizeCronTarget<T extends { sessionKey?: string; agentId?: string; sessionTarget?: string; payload?: unknown }>(job: T): T {
+function normalizeCronTarget<T extends { sessionKey?: string; agentId?: string; sessionTarget?: string; payload?: unknown; thinkingLevel?: unknown }>(job: T): T {
   const agentId = deriveAgentIdFromSessionKey(job.sessionKey);
   const normalizedAgentId = agentId ?? job.agentId;
   const normalizedJob = agentId ? { ...job, agentId } : { ...job };
   const payload = (normalizedJob.payload || {}) as Record<string, unknown>;
+  const thinkingLevel = typeof normalizedJob.thinkingLevel === 'string'
+    ? normalizedJob.thinkingLevel.trim()
+    : '';
+  const payloadWithThinking = thinkingLevel && payload.kind === 'agentTurn'
+    // The gateway accepts thinking on the payload shape, not as a top-level field.
+    ? { ...payload, thinking: thinkingLevel }
+    : payload;
+  const jobWithoutThinkingLevel = { ...normalizedJob } as Record<string, unknown>;
+  delete jobWithoutThinkingLevel.thinkingLevel;
 
   if (
     normalizedAgentId
@@ -243,10 +305,10 @@ function normalizeCronTarget<T extends { sessionKey?: string; agentId?: string; 
   ) {
     // Gateway only permits root `main` targeting for the default agent. Keep
     // saved agent cron edits recoverable by preserving the agent and isolating the run.
-    return { ...normalizedJob, sessionTarget: 'isolated' };
+    return { ...jobWithoutThinkingLevel, payload: payloadWithThinking, sessionTarget: 'isolated' } as T;
   }
 
-  return normalizedJob;
+  return { ...jobWithoutThinkingLevel, payload: payloadWithThinking } as T;
 }
 
 function isIsolatedAgentTurnCron(job: Record<string, unknown>): boolean {
@@ -272,7 +334,8 @@ app.get('/api/crons', rateLimitGeneral, async (c) => {
       includeDisabled: true,
     });
     const jobs = getCronJobsFromResult(result);
-    const mergedJobs = jobs.length > 0 ? await mergeManualRunStateIntoJobs(jobs) : jobs;
+    const localFallbackJobs = await mergeLocalCronFallbackIntoJobs(jobs);
+    const mergedJobs = localFallbackJobs.length > 0 ? await mergeManualRunStateIntoJobs(localFallbackJobs) : localFallbackJobs;
     return c.json({ ok: true, result: replaceCronJobsInResult(result, mergedJobs) });
   } catch (err) {
     console.error('[crons] list error:', (err as Error).message);

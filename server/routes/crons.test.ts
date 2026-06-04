@@ -104,17 +104,54 @@ describe('cron routes', () => {
       job: expect.objectContaining({
         name: 'Memory Dreaming Promotion',
         description: 'Daily promotion run',
+        agentId: 'main',
+        enabled: true,
+        sessionTarget: 'main',
+        payload: {
+          kind: 'systemEvent',
+          text: 'Post reminder',
+        },
         delivery: { mode: 'announce', bestEffort: true, channel: 'slack', to: '#ops' },
         wakeMode: 'now',
         deleteAfterRun: true,
         clearAgentOverride: true,
         accountId: 'acc-123',
         lightContext: true,
-        thinkingLevel: 'medium',
         failureAlerts: 'off',
         bestEffortDelivery: true,
       }),
     });
+  });
+
+  it('moves top-level thinkingLevel into the payload before saving', async () => {
+    const { app, invokeGatewayTool } = await buildApp();
+
+    const res = await app.request('/api/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job: {
+          name: 'Thinking Job',
+          enabled: false,
+          schedule: { kind: 'every', everyMs: 86400000 },
+          payload: { kind: 'agentTurn', message: 'Say hello' },
+          sessionTarget: 'isolated',
+          thinkingLevel: 'medium',
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const gatewayJob = (invokeGatewayTool.mock.calls[0]?.[1] as { job?: Record<string, unknown> } | undefined)?.job;
+    expect(gatewayJob).toMatchObject({
+      name: 'Thinking Job',
+      payload: {
+        kind: 'agentTurn',
+        message: 'Say hello',
+        thinking: 'medium',
+      },
+    });
+    expect(gatewayJob?.thinkingLevel).toBeUndefined();
   });
 
   it('derives agentId from sessionKey when updating a cron', async () => {
@@ -328,6 +365,85 @@ describe('cron routes', () => {
     expect(contentText).toBeTruthy();
     const parsedContent = JSON.parse(contentText as string) as { jobs?: Array<{ state?: { lastRunAtMs?: number } }> };
     expect(parsedContent.jobs?.[0]?.state?.lastRunAtMs).toBe(2000);
+  });
+
+  it('backfills disabled jobs from the local cron store when the gateway omits them', async () => {
+    const { app, invokeGatewayTool, tempHome } = await buildApp();
+    invokeGatewayTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
+      if (tool === 'cron' && args.action === 'list') {
+        return {
+          jobs: [{
+            id: 'live-job',
+            name: 'Live job',
+            enabled: true,
+            schedule: { kind: 'cron', expr: '0 3 * * *' },
+            payload: { kind: 'systemEvent', text: 'Live cron' },
+            state: {
+              nextRunAtMs: 123,
+            },
+          }],
+          total: 1,
+        };
+      }
+      return { ok: true };
+    });
+
+    await fs.mkdir(join(tempHome, '.openclaw', 'cron'), { recursive: true });
+    await fs.writeFile(join(tempHome, '.openclaw', 'cron', 'jobs.json'), JSON.stringify({
+      version: 1,
+      jobs: [
+        {
+          id: 'live-job',
+          name: 'Live job',
+          enabled: true,
+          schedule: { kind: 'cron', expr: '0 3 * * *' },
+          payload: { kind: 'systemEvent', text: 'Live cron' },
+          state: {
+            nextRunAtMs: 123,
+          },
+        },
+        {
+          id: 'off-job',
+          name: 'Off job',
+          enabled: false,
+          schedule: { kind: 'every', everyMs: 86400000 },
+          payload: { kind: 'agentTurn', message: 'Disabled cron' },
+          state: {
+            lastRunAtMs: 456,
+          },
+        },
+      ],
+    }, null, 2), 'utf8');
+    await fs.writeFile(join(tempHome, '.openclaw', 'cron', 'jobs-state.json'), JSON.stringify({
+      version: 1,
+      jobs: {
+        'live-job': {
+          updatedAtMs: 1,
+          state: {
+            nextRunAtMs: 123,
+          },
+        },
+        'off-job': {
+          updatedAtMs: 2,
+          state: {
+            lastRunAtMs: 456,
+          },
+        },
+      },
+    }, null, 2), 'utf8');
+
+    const res = await app.request('/api/crons');
+    const data = await res.json() as {
+      ok: boolean;
+      result: { jobs?: Array<{ id?: string; enabled?: boolean; state?: { lastRunAtMs?: number } }> };
+    };
+
+    expect(res.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(data.result.jobs).toHaveLength(2);
+    expect(data.result.jobs?.find((job) => job.id === 'live-job')?.enabled).toBe(true);
+    expect(data.result.jobs?.find((job) => job.id === 'off-job')?.enabled).toBe(false);
+    expect(data.result.jobs?.find((job) => job.id === 'off-job')?.state?.lastRunAtMs).toBe(456);
   });
 
   it('still returns success when manual run history cannot be persisted', async () => {
