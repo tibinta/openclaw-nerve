@@ -18,8 +18,11 @@ const TTS_DEDUPE_WINDOW_MS = 60_000;
 
 /** Strip code blocks, markdown noise, and validate text is speakable for TTS fallback. */
 export function buildVoiceFallbackText(raw: string): string | null {
+  // Active voice replies must speak the visible answer, not a model-authored
+  // marker payload that can accidentally include older chat context.
+  let text = stripTTSMarkers(raw);
   // Strip fenced code blocks
-  let text = raw.replace(/```[\s\S]*?```/g, '');
+  text = text.replace(/```[\s\S]*?```/g, '');
   // Strip inline code
   text = text.replace(/`[^`]+`/g, '');
   // Strip markdown images/links
@@ -42,6 +45,44 @@ export function buildVoiceFallbackText(raw: string): string | null {
     text = text.slice(0, FALLBACK_MAX_CHARS).replace(/\s\S*$/, '') + '…';
   }
   return text;
+}
+
+function stripTTSMarkers(raw: string): string {
+  let cursor = 0;
+  let cleaned = '';
+
+  while (cursor < raw.length) {
+    const start = raw.indexOf('[tts: ', cursor);
+    if (start === -1) {
+      cleaned += raw.slice(cursor);
+      break;
+    }
+
+    cleaned += raw.slice(cursor, start);
+    const payloadStart = start + '[tts: '.length;
+    let depth = 0;
+    let end = -1;
+    for (let i = payloadStart; i < raw.length; i++) {
+      const ch = raw[i];
+      if (ch === '[') {
+        depth++;
+      } else if (ch === ']') {
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+        depth--;
+      }
+    }
+
+    if (end === -1) {
+      cleaned += raw.slice(start);
+      break;
+    }
+    cursor = end + 1;
+  }
+
+  return cleaned.trim();
 }
 
 /** Reduce a reply to a short spoken summary for ADHD/dyslexia-friendly playback. */
@@ -114,19 +155,20 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
   const handleFinalTTS = useCallback((finalData: FinalMessageData | null, isActiveRun: boolean) => {
     if (!isActiveRun && !voiceReplyPendingRef.current) return;
 
-    if (finalData?.ttsText) {
+    if (voiceReplyPendingRef.current) {
+      // For live voice chats, Nerve owns the speech source. The model may still
+      // emit hidden markers for cron paths, but voice replies read the visible
+      // final answer so they cannot pull in previous bubbles or instructions.
+      const fallback = finalData?.text
+        ? buildConciseSpeechText(finalData.text) ?? stripTTSMarkers(finalData.text).trim()
+        : '';
+      if (fallback) speak.current(fallback);
+      voiceReplyPendingRef.current = false;
+    } else if (finalData?.ttsText) {
       const speechText = markSpeechIfNew(finalData.ttsText);
       if (speechText) {
         speak.current(speechText);
       }
-      voiceReplyPendingRef.current = false;
-    } else if (!finalData?.ttsText && voiceReplyPendingRef.current) {
-      // Voice fallback: agent forgot [tts:...] marker — auto-speak a cleaned response,
-      // and fall back to the raw text if sanitizing strips it too aggressively.
-      const fallback = finalData?.text
-        ? buildConciseSpeechText(finalData.text) ?? finalData.text.trim()
-        : '';
-      if (fallback) speak.current(fallback);
       voiceReplyPendingRef.current = false;
     } else if (soundEnabled.current) {
       playPing();

@@ -67,7 +67,7 @@ describe('useChatTTS', () => {
     expect(speak).toHaveBeenCalledWith('bold reply');
   });
 
-  it('shortens long tts text into a concise spoken summary', () => {
+  it('uses visible final text for voice replies even when a TTS marker exists', () => {
     const speak = vi.fn();
     const { result } = renderHook(() => useChatTTS({
       soundEnabled: makeRef(false),
@@ -84,7 +84,7 @@ describe('useChatTTS', () => {
       }, false);
     });
 
-    expect(speak).toHaveBeenCalledWith('First sentence explains the answer. Second sentence adds detail that should stay in chat.');
+    expect(speak).toHaveBeenCalledWith('Long reply');
   });
 
   it('drops COPY noise from spoken fallback text', () => {
@@ -105,6 +105,27 @@ describe('useChatTTS', () => {
     });
 
     expect(speak).toHaveBeenCalledWith('I will do that.');
+  });
+
+  it('speaks the visible voice reply instead of a model-written TTS marker payload', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    act(() => {
+      result.current.trackVoiceMessage('[voice] what changed?');
+      result.current.handleFinalTTS({
+        message: { role: 'assistant', content: 'New answer only. [tts: New answer only. Previous bubble above.]' } as never,
+        text: 'New answer only. [tts: New answer only. Previous bubble above.]',
+        ttsText: 'New answer only. Previous bubble above.',
+        charts: [],
+      }, true);
+    });
+
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenCalledWith('New answer only.');
   });
 
   it('speaks new history messages that carry hidden TTS text', () => {
