@@ -264,18 +264,7 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     };
   }, [cleanupAudio]);
 
-  const playChunk = useCallback(async (chunk: string, gen: number) => {
-    if (provider === 'holler') {
-      try {
-        await playHollerPcmStream(chunk, { model, voice });
-        return;
-      } catch (err) {
-        if (gen !== generationRef.current) return;
-        console.warn('[TTS] Holler stream failed; trying fallback audio:', err instanceof Error ? err.message : String(err));
-      }
-    }
-
-    const blob = await fetchTTSWithFallback(chunk, provider, { model, voice });
+  const playBlobChunk = useCallback(async (blob: Blob, gen: number) => {
     if (gen !== generationRef.current) return;
 
     let playback: { audio: HTMLAudioElement; url: string } | null = null;
@@ -316,7 +305,7 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
       revoke();
       throw err;
     }
-  }, [provider, model, voice]);
+  }, []);
 
   const speak = useCallback(async (text: string) => {
     if (!enabled || !text) return;
@@ -327,11 +316,34 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
 
     setIsSpeaking(true);
     try {
-      for (let i = 0; i < chunks.length; i++) {
+      if (provider === 'holler') {
+        for (let i = 0; i < chunks.length; i++) {
+          if (gen !== generationRef.current) return;
+          try {
+            await playHollerPcmStream(chunks[i], { model, voice });
+          } catch (err) {
+            if (gen !== generationRef.current) return;
+            console.warn('[TTS] Holler stream failed; trying fallback audio:', err instanceof Error ? err.message : String(err));
+            const blob = await fetchTTSWithFallback(chunks[i], 'holler', { model, voice });
+            await playBlobChunk(blob, gen);
+          }
+          if (gen !== generationRef.current) return;
+          if (i < chunks.length - 1) await delay(TTS_SENTENCE_GAP_MS);
+        }
+        return;
+      }
+
+      // Start every sentence render immediately, then consume the audio in text
+      // order. This removes long provider gaps between sentences while keeping
+      // playback calm and predictable.
+      const chunkAudio = chunks.map((chunk) => fetchTTSWithFallback(chunk, provider, { model, voice }));
+      for (let i = 0; i < chunkAudio.length; i++) {
         if (gen !== generationRef.current) return;
-        await playChunk(chunks[i], gen);
+        const blob = await chunkAudio[i];
         if (gen !== generationRef.current) return;
-        if (i < chunks.length - 1) await delay(TTS_SENTENCE_GAP_MS);
+        await playBlobChunk(blob, gen);
+        if (gen !== generationRef.current) return;
+        if (i < chunkAudio.length - 1) await delay(TTS_SENTENCE_GAP_MS);
       }
     } catch (err: unknown) {
       console.error('[TTS] play failed:', err instanceof Error ? err.message : String(err));
@@ -340,7 +352,7 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
         setIsSpeaking(false);
       }
     }
-  }, [enabled, cleanupAudio, playChunk]);
+  }, [enabled, provider, model, voice, cleanupAudio, playBlobChunk]);
 
   return { speak, isSpeaking };
 }

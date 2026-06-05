@@ -164,6 +164,7 @@ describe('useTTS queued playback', () => {
   const originalRevokeObjectURL = URL.revokeObjectURL;
   const playCalls: string[] = [];
   const requestedTexts: string[] = [];
+  const pendingAudio: MockAudio[] = [];
 
   async function flushSpeechQueue() {
     for (let i = 0; i < 8; i++) {
@@ -182,11 +183,16 @@ describe('useTTS queued playback', () => {
 
     async play() {
       playCalls.push(this.src);
-      this.ended = true;
+      pendingAudio.push(this);
     }
 
     pause() {
       this.ended = true;
+    }
+
+    finish() {
+      this.ended = true;
+      this.dispatchEvent(new Event('ended'));
     }
   }
 
@@ -194,6 +200,7 @@ describe('useTTS queued playback', () => {
     vi.useFakeTimers();
     playCalls.length = 0;
     requestedTexts.length = 0;
+    pendingAudio.length = 0;
     let urlIndex = 0;
 
     globalThis.fetch = vi.fn(async (_url, init) => {
@@ -218,7 +225,7 @@ describe('useTTS queued playback', () => {
     URL.revokeObjectURL = originalRevokeObjectURL;
   });
 
-  it('requests and plays sentence chunks in order with a 200ms gap', async () => {
+  it('renders sentence chunks immediately while playback stays ordered with a 200ms gap', async () => {
     const { result } = renderHook(() => useTTS(true, 'edge'));
 
     await act(async () => {
@@ -226,22 +233,28 @@ describe('useTTS queued playback', () => {
       await flushSpeechQueue();
     });
 
-    expect(requestedTexts).toEqual(['First sentence is ready.']);
+    expect(requestedTexts).toEqual([
+      'First sentence is ready.',
+      'Second sentence follows.',
+    ]);
+    expect(playCalls).toEqual(['blob:tts-1']);
+
+    await act(async () => {
+      pendingAudio[0]?.finish();
+      await flushSpeechQueue();
+    });
+    expect(playCalls).toEqual(['blob:tts-1']);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(199);
+      await flushSpeechQueue();
     });
-    expect(requestedTexts).toEqual(['First sentence is ready.']);
+    expect(playCalls).toEqual(['blob:tts-1']);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
       await flushSpeechQueue();
     });
-
-    expect(requestedTexts).toEqual([
-      'First sentence is ready.',
-      'Second sentence follows.',
-    ]);
     expect(playCalls).toEqual(['blob:tts-1', 'blob:tts-2']);
   });
 
@@ -253,15 +266,17 @@ describe('useTTS queued playback', () => {
       await flushSpeechQueue();
     });
     expect(requestedTexts[0]).toBe('Old first sentence is ready.');
+    expect(requestedTexts[1]).toBe('Old second sentence follows.');
 
     await act(async () => {
       void result.current.speak('New sentence wins.');
       await flushSpeechQueue();
+      pendingAudio[0]?.finish();
       await vi.advanceTimersByTimeAsync(250);
       await flushSpeechQueue();
     });
 
     expect(requestedTexts).toContain('New sentence wins.');
-    expect(requestedTexts).not.toContain('Old second sentence follows.');
+    expect(playCalls).toHaveLength(2);
   });
 });
