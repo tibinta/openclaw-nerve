@@ -38,10 +38,10 @@ vi.stubGlobal('fetch', vi.fn(() =>
 
 describe('audio-feedback', () => {
   let ensureAudioContext: () => void;
-  let playWakePing: () => void;
-  let playSubmitPing: () => void;
-  let playCancelPing: () => void;
-  let playPing: () => void;
+  let playWakePing: () => { played: boolean; path: string; durationMs: number };
+  let playSubmitPing: () => { played: boolean; path: string; durationMs: number };
+  let playCancelPing: () => { played: boolean; path: string; durationMs: number };
+  let playPing: () => { played: boolean; path: string; durationMs: number };
 
   beforeEach(async () => {
     mockStart.mockClear();
@@ -91,10 +91,11 @@ describe('audio-feedback', () => {
 
   describe('playWakePing', () => {
     it('should create a buffer source and start it', () => {
-      playWakePing();
+      const playback = playWakePing();
       expect(mockCreateBufferSource).toHaveBeenCalled();
       expect(mockConnect).toHaveBeenCalled();
       expect(mockStart).toHaveBeenCalledWith(0);
+      expect(playback).toMatchObject({ played: true, durationMs: 1000 });
     });
 
     it('should use default playbackRate of 1', () => {

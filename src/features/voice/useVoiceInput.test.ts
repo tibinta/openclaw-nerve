@@ -7,9 +7,9 @@ import { buildWakePhrases, buildStopPhrasesRegex } from '@/lib/constants';
 
 // Mock audio feedback module
 vi.mock('./audio-feedback', () => ({
-  playWakePing: vi.fn(),
-  playSubmitPing: vi.fn(),
-  playCancelPing: vi.fn(),
+  playWakePing: vi.fn(() => ({ played: true, path: '/sounds/wake-confirmations/wake-001.mp3', durationMs: 1760 })),
+  playSubmitPing: vi.fn(() => ({ played: true, path: '/sounds/send-confirmations/send-001.mp3', durationMs: 1120 })),
+  playCancelPing: vi.fn(() => ({ played: true, path: '/sounds/cancel.ogg', durationMs: 220 })),
   ensureAudioContext: vi.fn(),
 }));
 
@@ -200,6 +200,21 @@ describe('useVoiceInput', () => {
     }) as typeof fetch;
 
     vi.clearAllMocks();
+    vi.mocked(audioFeedback.playWakePing).mockReturnValue({
+      played: true,
+      path: '/sounds/wake-confirmations/wake-001.mp3',
+      durationMs: 1760,
+    });
+    vi.mocked(audioFeedback.playSubmitPing).mockReturnValue({
+      played: true,
+      path: '/sounds/send-confirmations/send-001.mp3',
+      durationMs: 1120,
+    });
+    vi.mocked(audioFeedback.playCancelPing).mockReturnValue({
+      played: true,
+      path: '/sounds/cancel.ogg',
+      durationMs: 220,
+    });
     localStorage.clear();
     mockWakeWordSupport({ supported: true, reason: null });
   });
@@ -569,7 +584,9 @@ describe('useVoiceInput', () => {
       });
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(1500);
+        await vi.advanceTimersByTimeAsync(2009);
+        expect(result.current.voiceState).toBe('listening');
+        await vi.advanceTimersByTimeAsync(1);
         await vi.advanceTimersByTimeAsync(300);
       });
 
@@ -582,6 +599,32 @@ describe('useVoiceInput', () => {
       expect(result.current.voiceState).toBe('listening');
       expect(onTranscription).toHaveBeenCalledWith('transcribed text');
       expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
+    });
+
+    it('uses a safe fallback wake delay when the confirmation has not loaded yet', async () => {
+      vi.mocked(audioFeedback.playWakePing).mockReturnValue({
+        played: false,
+        path: '/sounds/wake.mp3',
+        durationMs: 0,
+      });
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'local', undefined, false, 500));
+
+      await startWakeWordListener(result);
+
+      act(() => {
+        mockRecognition?.simulateResult('hey agent', false);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1799);
+      });
+      expect(result.current.voiceState).toBe('listening');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(result.current.voiceState).toBe('recording');
     });
 
     it('closes one-shot reply listening after 5 seconds with no speech', async () => {

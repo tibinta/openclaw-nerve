@@ -50,6 +50,8 @@ const SILENCE_RMS_THRESHOLD = 0.018;
 const SILENCE_CHECK_MS = 200;
 const SILENCE_MIN_RECORDING_MS = 900;
 const SILENCE_NO_SPEECH_LIMIT_MS = 10000;
+const WAKE_CONFIRM_FALLBACK_DELAY_MS = 1800;
+const WAKE_CONFIRM_OUTRO_PAD_MS = 250;
 
 export interface StartRecordingOptions {
   pauseMs?: number;
@@ -456,9 +458,12 @@ export function useVoiceInput(
               intentionalStopRef.current = true;
               try { recognitionRef.current?.abort(); } catch { /* already stopped */ }
               recognitionRef.current = null;
-              playWakePing();
-              // Spoken confirmations are longer than the old beep; wait so the mic does not capture Jane's acknowledgement.
-              trackedTimeout(() => doStartRecording(), 1500);
+              const wakeFeedback = playWakePing();
+              const wakeDelayMs = wakeFeedback.durationMs > 0
+                ? wakeFeedback.durationMs + WAKE_CONFIRM_OUTRO_PAD_MS
+                : WAKE_CONFIRM_FALLBACK_DELAY_MS;
+              // Use the actual decoded confirmation length so the mic opens after Jane's acknowledgement, not during it.
+              trackedTimeout(() => doStartRecording(), wakeDelayMs);
               return;
             }
           }

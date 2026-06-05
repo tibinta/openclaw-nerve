@@ -5,6 +5,12 @@ let audioCtx: AudioContext | null = null;
 const bufferCache = new Map<string, AudioBuffer>();
 const loadingCache = new Map<string, Promise<AudioBuffer | null>>();
 
+export interface AudioFeedbackPlayback {
+  played: boolean;
+  path: string;
+  durationMs: number;
+}
+
 /** Preload an audio file into an AudioBuffer. */
 function preloadSound(path: string): Promise<AudioBuffer | null> {
   const existing = loadingCache.get(path);
@@ -47,7 +53,7 @@ if (typeof window !== 'undefined') {
   SOUND_PATHS.forEach(p => void preloadSound(p));
 }
 
-function playSound(path: string, playbackRate = 1): void {
+function playSound(path: string, playbackRate = 1): AudioFeedbackPlayback {
   try {
     if (!audioCtx) audioCtx = new AudioContext();
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -56,7 +62,7 @@ function playSound(path: string, playbackRate = 1): void {
     if (!buffer) {
       // Not yet loaded — trigger preload for next time, skip this play
       preloadSound(path);
-      return;
+      return { played: false, path, durationMs: 0 };
     }
 
     const source = audioCtx.createBufferSource();
@@ -64,8 +70,10 @@ function playSound(path: string, playbackRate = 1): void {
     source.playbackRate.value = playbackRate;
     source.connect(audioCtx.destination);
     source.start(0);
+    return { played: true, path, durationMs: Math.ceil((buffer.duration * 1000) / playbackRate) };
   } catch {
     // AudioContext not available, silently skip
+    return { played: false, path, durationMs: 0 };
   }
 }
 
@@ -104,21 +112,21 @@ export async function unlockBrowserAudio(): Promise<boolean> {
 }
 
 /** Play ascending ping when wake-word is detected. */
-export function playWakePing(): void {
-  playSound(pickLoaded(WAKE_CONFIRM_PATHS, '/sounds/wake.mp3'));
+export function playWakePing(): AudioFeedbackPlayback {
+  return playSound(pickLoaded(WAKE_CONFIRM_PATHS, '/sounds/wake.mp3'));
 }
 
 /** Play confirmation sound when voice input is submitted. */
-export function playSubmitPing(): void {
-  playSound(pickLoaded(SEND_CONFIRM_PATHS, '/sounds/send.ogg'));
+export function playSubmitPing(): AudioFeedbackPlayback {
+  return playSound(pickLoaded(SEND_CONFIRM_PATHS, '/sounds/send.ogg'));
 }
 
 /** Play cancel sound when voice input is cancelled. */
-export function playCancelPing(): void {
-  playSound('/sounds/cancel.ogg');
+export function playCancelPing(): AudioFeedbackPlayback {
+  return playSound('/sounds/cancel.ogg');
 }
 
 /** Simple notification ping (used for chat completion sounds) */
-export function playPing(): void {
-  playSound('/sounds/notify.ogg');
+export function playPing(): AudioFeedbackPlayback {
+  return playSound('/sounds/notify.ogg');
 }
