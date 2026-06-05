@@ -491,6 +491,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     wakeWordEnabled,
     toggleWakeWord,
     startRecording,
+    startOneShotReplyRecording,
     stopAndTranscribe,
     discardRecording,
     error: voiceError,
@@ -547,16 +548,22 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   useEffect(() => {
     const handleVoiceReplySpoken = () => {
-      const latest = latestLiveVoiceStateRef.current;
-      if (latest.isGenerating || latest.isTtsSpeaking || latest.voiceState !== 'idle') return;
-      // A voice-origin answer just finished speaking. Open the mic for the
-      // natural reply immediately, without requiring the wake phrase again.
-      void startRecording();
+      window.setTimeout(() => {
+        const latest = latestLiveVoiceStateRef.current;
+        if (latest.isGenerating || latest.voiceState !== 'idle') return;
+        // A voice-origin answer just finished speaking. Open the mic for the
+        // natural reply immediately, without requiring the wake phrase again.
+        // If Alex says nothing, close this one-shot reply window after 5s.
+        void startOneShotReplyRecording({
+          pauseMs: wakeVoicePauseMs,
+          noSpeechTimeoutMs: 5000,
+        });
+      }, 100);
     };
 
     window.addEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);
     return () => window.removeEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);
-  }, [startRecording]);
+  }, [startOneShotReplyRecording, wakeVoicePauseMs]);
 
   const handleVoiceButton = useCallback(() => {
     clearVoiceError();

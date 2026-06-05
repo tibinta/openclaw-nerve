@@ -7,6 +7,7 @@ import { compressImage } from './image-compress';
 const voiceInputMockState = vi.hoisted(() => ({
   voiceState: 'idle' as 'idle' | 'listening' | 'recording' | 'transcribing',
   startRecording: vi.fn(),
+  startOneShotReplyRecording: vi.fn(),
   stopAndTranscribe: vi.fn(),
   discardRecording: vi.fn(),
   toggleWakeWord: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock('@/features/voice/useVoiceInput', () => ({
     wakeWordEnabled: false,
     toggleWakeWord: voiceInputMockState.toggleWakeWord,
     startRecording: voiceInputMockState.startRecording,
+    startOneShotReplyRecording: voiceInputMockState.startOneShotReplyRecording,
     stopAndTranscribe: voiceInputMockState.stopAndTranscribe,
     discardRecording: voiceInputMockState.discardRecording,
     error: null,
@@ -111,6 +113,7 @@ describe('InputBar', () => {
     resetInputBarComposerSnapshotForTests();
     voiceInputMockState.voiceState = 'idle';
     voiceInputMockState.startRecording.mockClear();
+    voiceInputMockState.startOneShotReplyRecording.mockClear();
     voiceInputMockState.stopAndTranscribe.mockClear();
     voiceInputMockState.discardRecording.mockClear();
     voiceInputMockState.toggleWakeWord.mockClear();
@@ -340,13 +343,20 @@ describe('InputBar', () => {
   });
 
   it('starts listening after a spoken voice reply without requiring the wake word', async () => {
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
+    vi.useFakeTimers();
+    try {
+      render(<InputBar onSend={vi.fn()} isGenerating={false} />);
 
-    window.dispatchEvent(new CustomEvent('nerve:voice-reply-spoken'));
+      window.dispatchEvent(new CustomEvent('nerve:voice-reply-spoken'));
+      await vi.advanceTimersByTimeAsync(100);
 
-    await waitFor(() => {
-      expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
-    });
+      expect(voiceInputMockState.startOneShotReplyRecording).toHaveBeenCalledWith({
+        pauseMs: 1800,
+        noSpeechTimeoutMs: 5000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('stages workspace file add-to-chat requests as server_path file references', async () => {

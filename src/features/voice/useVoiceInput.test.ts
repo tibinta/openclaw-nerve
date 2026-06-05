@@ -92,12 +92,13 @@ class MockMediaStream {
 }
 
 class MockAnalyser {
+  static forceQuiet = false;
   fftSize = 1024;
   calls = 0;
 
   getByteTimeDomainData(samples: Uint8Array) {
     this.calls += 1;
-    const loud = this.calls <= 2;
+    const loud = !MockAnalyser.forceQuiet && this.calls <= 2;
     for (let i = 0; i < samples.length; i += 1) {
       samples[i] = loud ? (i % 2 === 0 ? 80 : 176) : 128;
     }
@@ -149,6 +150,7 @@ describe('useVoiceInput', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     MockMediaRecorder.instances = [];
+    MockAnalyser.forceQuiet = false;
     mockRecognition = null;
 
     // Mock SpeechRecognition on window
@@ -580,6 +582,26 @@ describe('useVoiceInput', () => {
       expect(result.current.voiceState).toBe('listening');
       expect(onTranscription).toHaveBeenCalledWith('transcribed text');
       expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
+    });
+
+    it('closes one-shot reply listening after 5 seconds with no speech', async () => {
+      const onTranscription = vi.fn();
+      MockAnalyser.forceQuiet = true;
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'local'));
+
+      await act(async () => {
+        await result.current.startOneShotReplyRecording({ pauseMs: 500, noSpeechTimeoutMs: 5000 });
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      expect(result.current.voiceState).toBe('recording');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200);
+      });
+
+      expect(result.current.voiceState).toBe('idle');
+      expect(onTranscription).toHaveBeenCalledWith('transcribed text');
     });
 
     it('treats no-speech live browser turns as quiet empty turns', async () => {

@@ -51,6 +51,11 @@ const SILENCE_CHECK_MS = 200;
 const SILENCE_MIN_RECORDING_MS = 900;
 const SILENCE_NO_SPEECH_LIMIT_MS = 10000;
 
+export interface StartRecordingOptions {
+  pauseMs?: number;
+  noSpeechTimeoutMs?: number;
+}
+
 type BrowserAudioContext = typeof AudioContext;
 
 function getSupportedRecordingMimeType(): string | undefined {
@@ -256,7 +261,9 @@ export function useVoiceInput(
   const transcriptPauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silenceAudioContextRef = useRef<AudioContext | null>(null);
   const activeRecordingPauseMsRef = useRef<number | undefined>(undefined);
-  const startRef = useRef<() => Promise<void> | void>(() => undefined);
+  const activeNoSpeechTimeoutMsRef = useRef<number>(SILENCE_NO_SPEECH_LIMIT_MS);
+  const oneShotRecordingOptionsRef = useRef<StartRecordingOptions | undefined>(undefined);
+  const startRef = useRef<(options?: StartRecordingOptions) => Promise<void> | void>(() => undefined);
   const discardRef = useRef<() => void>(() => undefined);
   const stopRef = useRef<() => void>(() => undefined);
 
@@ -327,7 +334,8 @@ export function useVoiceInput(
         if (!quietSince) quietSince = now;
         const longEnough = now - startedAt >= SILENCE_MIN_RECORDING_MS;
         const pauseReached = heardSpeech && now - quietSince >= pauseMs;
-        const noSpeechTimeout = !heardSpeech && now - startedAt >= SILENCE_NO_SPEECH_LIMIT_MS;
+        const noSpeechLimitMs = activeNoSpeechTimeoutMsRef.current || SILENCE_NO_SPEECH_LIMIT_MS;
+        const noSpeechTimeout = !heardSpeech && now - startedAt >= noSpeechLimitMs;
         if (longEnough && (pauseReached || noSpeechTimeout)) {
           stopRef.current();
         }
@@ -506,7 +514,7 @@ export function useVoiceInput(
   }, [trackedTimeout]);
 
   // Action functions that use refs to avoid stale closures
-  const doStartRecording = useCallback(async () => {
+  const doStartRecording = useCallback(async (options?: StartRecordingOptions) => {
     // Initialize AudioContext on user interaction
     ensureAudioContext();
     // Stop recognition intentionally — we'll restart in stop mode after recording starts
@@ -518,12 +526,18 @@ export function useVoiceInput(
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       chunksRef.current = [];
+      const recordingOptions = options || oneShotRecordingOptionsRef.current;
+      oneShotRecordingOptionsRef.current = undefined;
       // Wake-triggered dictation must send after quiet speech even when the
       // separate Live Voice loop is off. Keep this per recording so manual mic,
       // Live Voice, and Wake can each use the right pause window.
-      activeRecordingPauseMsRef.current = wakeTriggeredRef.current
-        ? wakeAutoStopAfterSilenceMsRef.current
-        : autoStopAfterSilenceMsRef.current;
+      activeRecordingPauseMsRef.current = recordingOptions?.pauseMs
+        ?? (wakeTriggeredRef.current
+          ? wakeAutoStopAfterSilenceMsRef.current
+          : autoStopAfterSilenceMsRef.current);
+      // Post-TTS reply listening should close quickly if Alex says nothing.
+      // Normal wake/manual paths keep the broader safety timeout.
+      activeNoSpeechTimeoutMsRef.current = recordingOptions?.noSpeechTimeoutMs ?? SILENCE_NO_SPEECH_LIMIT_MS;
       resetBrowserTranscript();
       setInterimTranscript('');
       // Safari on iPhone often rejects WebM. Pick the first supported format so
@@ -547,6 +561,7 @@ export function useVoiceInput(
           ? 'Microphone permission denied'
           : 'Failed to access microphone';
       activeRecordingPauseMsRef.current = undefined;
+      activeNoSpeechTimeoutMsRef.current = SILENCE_NO_SPEECH_LIMIT_MS;
       setError(msg);
       if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
         setVoiceState('listening');
@@ -570,6 +585,7 @@ export function useVoiceInput(
     }
     stopStream();
     activeRecordingPauseMsRef.current = undefined;
+    activeNoSpeechTimeoutMsRef.current = SILENCE_NO_SPEECH_LIMIT_MS;
     if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
       setVoiceState('listening');
       ensureRecognitionRef.current('wake');
@@ -651,6 +667,7 @@ export function useVoiceInput(
       } finally {
         resetBrowserTranscript();
         activeRecordingPauseMsRef.current = undefined;
+        activeNoSpeechTimeoutMsRef.current = SILENCE_NO_SPEECH_LIMIT_MS;
       }
       // Resume wake word listener
       if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
@@ -737,6 +754,11 @@ export function useVoiceInput(
       ensureRecognitionRef.current('wake');
     }
   }, [language]);
+
+  const startOneShotReplyRecording = useCallback((options: StartRecordingOptions) => {
+    oneShotRecordingOptionsRef.current = options;
+    return doStartRecording(options);
+  }, [doStartRecording]);
 
   // Auto-start wake word listener if persisted as enabled (only if mic already granted)
   const startWakeWordRef = useRef(startWakeWordListener);
@@ -829,6 +851,7 @@ export function useVoiceInput(
     voiceState: state,
     interimTranscript,
     startRecording: doStartRecording,
+    startOneShotReplyRecording,
     stopAndTranscribe: doStopAndTranscribe,
     discardRecording: doDiscard,
     wakeWordEnabled,
