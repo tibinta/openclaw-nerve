@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { config } from '../lib/config.js';
 import { invokeGatewayTool } from '../lib/gateway-client.js';
+import { gatewayRpcCall } from '../lib/gateway-rpc.js';
 import { rateLimitGeneral } from '../middleware/rate-limit.js';
 
 const scheduleSchema = z.union([
@@ -83,6 +84,28 @@ const LOCAL_CRON_JOBS_FILE = join(config.home, '.openclaw', 'cron', 'jobs.json')
 const LOCAL_CRON_STATE_FILE = join(config.home, '.openclaw', 'cron', 'jobs-state.json');
 const LOCAL_CRON_JOBS_MIGRATED_FILE = join(config.home, '.openclaw', 'cron', 'jobs.json.migrated');
 const LOCAL_CRON_STATE_MIGRATED_FILE = join(config.home, '.openclaw', 'cron', 'jobs-state.json.migrated');
+const CRON_READONLY_KEYS = new Set([
+  'id',
+  'jobId',
+  'createdAtMs',
+  'updatedAtMs',
+  'state',
+  'nextRun',
+  'lastRun',
+  'lastStatus',
+  'lastError',
+  'lastDeliveryStatus',
+  'clearAgentOverride',
+]);
+
+type CronMutationInput = {
+  sessionKey?: string;
+  agentId?: string;
+  sessionTarget?: string;
+  payload?: unknown;
+  thinkingLevel?: unknown;
+  [key: string]: unknown;
+};
 
 interface ManualCronRunEntry {
   ts: number;
@@ -292,11 +315,10 @@ function replaceCronJobsInResult(result: unknown, jobs: Record<string, unknown>[
 
 async function getGatewayCronRunEntries(jobId: string): Promise<Record<string, unknown>[]> {
   try {
-    const gatewayResult = await invokeGatewayTool('cron', {
-      action: 'runs',
+    const gatewayResult = await gatewayRpcCall('cron.runs', {
       jobId,
       limit: 10,
-    });
+    }, GATEWAY_RUN_TIMEOUT_MS);
     return getCronRunEntriesFromResult(gatewayResult);
   } catch (err) {
     console.warn('[crons] gateway runs unavailable, falling back to manual history only:', (err as Error).message);
@@ -310,10 +332,15 @@ function deriveAgentIdFromSessionKey(sessionKey?: string): string | undefined {
   return match?.[1];
 }
 
-function normalizeCronTarget<T extends { sessionKey?: string; agentId?: string; sessionTarget?: string; payload?: unknown; thinkingLevel?: unknown }>(job: T): T {
-  const agentId = deriveAgentIdFromSessionKey(job.sessionKey);
-  const normalizedAgentId = agentId ?? job.agentId;
-  const normalizedJob = agentId ? { ...job, agentId } : { ...job };
+function normalizeCronTarget<T extends CronMutationInput>(job: T): T {
+  const cleanedJob: CronMutationInput = { ...job };
+  for (const key of CRON_READONLY_KEYS) {
+    delete cleanedJob[key];
+  }
+
+  const agentId = deriveAgentIdFromSessionKey(cleanedJob.sessionKey);
+  const normalizedAgentId = agentId ?? cleanedJob.agentId;
+  const normalizedJob = agentId ? { ...cleanedJob, agentId } : { ...cleanedJob };
   const payload = (normalizedJob.payload || {}) as Record<string, unknown>;
   const thinkingLevel = typeof normalizedJob.thinkingLevel === 'string'
     ? normalizedJob.thinkingLevel.trim()
@@ -357,10 +384,12 @@ function buildCronSpawnLabel(job: Record<string, unknown>): string {
 
 app.get('/api/crons', rateLimitGeneral, async (c) => {
   try {
-    const result = await invokeGatewayTool('cron', {
-      action: 'list',
+    // Current OpenClaw exposes cron management as gateway RPC methods, not
+    // as a generic /tools/invoke tool. Use RPC so the UI does not show a false
+    // "gateway.tools.allow" warning when the config is already correct.
+    const result = await gatewayRpcCall('cron.list', {
       includeDisabled: true,
-    });
+    }, GATEWAY_RUN_TIMEOUT_MS);
     const jobs = getCronJobsFromResult(result);
     const localFallbackJobs = await mergeLocalCronFallbackIntoJobs(jobs);
     const mergedJobs = localFallbackJobs.length > 0 ? await mergeManualRunStateIntoJobs(localFallbackJobs) : localFallbackJobs;
@@ -378,10 +407,9 @@ app.post('/api/crons', rateLimitGeneral, async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: parsed.error.issues[0]?.message || 'Invalid body' }, 400);
     const body = parsed.data;
     const normalizedJob = normalizeCronTarget(body.job);
-    const result = await invokeGatewayTool('cron', {
-      action: 'add',
+    const result = await gatewayRpcCall('cron.add', {
       job: normalizedJob,
-    });
+    }, GATEWAY_RUN_TIMEOUT_MS);
     return c.json({ ok: true, result });
   } catch (err) {
     console.error('[crons] add error:', (err as Error).message);
@@ -397,11 +425,10 @@ app.patch('/api/crons/:id', rateLimitGeneral, async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: parsed.error.issues[0]?.message || 'Invalid body' }, 400);
     const body = parsed.data;
     const normalizedPatch = normalizeCronTarget(body.patch);
-    const result = await invokeGatewayTool('cron', {
-      action: 'update',
-      jobId: id,
+    const result = await gatewayRpcCall('cron.update', {
+      id,
       patch: normalizedPatch,
-    });
+    }, GATEWAY_RUN_TIMEOUT_MS);
     return c.json({ ok: true, result });
   } catch (err) {
     console.error('[crons] update error:', (err as Error).message);
@@ -412,10 +439,9 @@ app.patch('/api/crons/:id', rateLimitGeneral, async (c) => {
 app.delete('/api/crons/:id', rateLimitGeneral, async (c) => {
   const id = c.req.param('id');
   try {
-    const result = await invokeGatewayTool('cron', {
-      action: 'remove',
+    const result = await gatewayRpcCall('cron.remove', {
       jobId: id,
-    });
+    }, GATEWAY_RUN_TIMEOUT_MS);
     return c.json({ ok: true, result });
   } catch (err) {
     console.error('[crons] remove error:', (err as Error).message);
@@ -428,11 +454,10 @@ app.post('/api/crons/:id/toggle', rateLimitGeneral, async (c) => {
   // Get current state first, then flip
   try {
     const body = await c.req.json<{ enabled: boolean }>().catch(() => ({ enabled: true }));
-    const result = await invokeGatewayTool('cron', {
-      action: 'update',
-      jobId: id,
+    const result = await gatewayRpcCall('cron.update', {
+      id,
       patch: { enabled: body.enabled },
-    });
+    }, GATEWAY_RUN_TIMEOUT_MS);
     return c.json({ ok: true, result });
   } catch (err) {
     console.error('[crons] toggle error:', (err as Error).message);
@@ -443,8 +468,7 @@ app.post('/api/crons/:id/toggle', rateLimitGeneral, async (c) => {
 app.post('/api/crons/:id/run', rateLimitGeneral, async (c) => {
   const id = c.req.param('id');
   try {
-    const listResult = await invokeGatewayTool('cron', {
-      action: 'list',
+    const listResult = await gatewayRpcCall('cron.list', {
       includeDisabled: true,
     }, GATEWAY_RUN_TIMEOUT_MS) as Record<string, unknown>;
     const jobs = getCronJobsFromResult(listResult);
@@ -468,7 +492,16 @@ app.post('/api/crons/:id/run', rateLimitGeneral, async (c) => {
         spawnArgs.agentId = job.agentId.trim();
       }
 
-      const result = await invokeGatewayTool('sessions_spawn', spawnArgs, GATEWAY_RUN_TIMEOUT_MS);
+      let result: unknown;
+      try {
+        result = await invokeGatewayTool('sessions_spawn', spawnArgs, GATEWAY_RUN_TIMEOUT_MS);
+      } catch (spawnErr) {
+        const message = (spawnErr as Error).message || '';
+        if (!/Tool not available: sessions_spawn|404/.test(message)) throw spawnErr;
+        // Some current OpenClaw gateways expose cron management as RPC while
+        // hiding generic session-spawn tools. Manual run should still work.
+        result = await gatewayRpcCall('cron.run', { jobId: id }, GATEWAY_RUN_TIMEOUT_MS);
+      }
       const details = (result as { details?: Record<string, unknown> })?.details ?? {};
       try {
         await appendManualCronRunEntry(id, {
@@ -491,8 +524,7 @@ app.post('/api/crons/:id/run', rateLimitGeneral, async (c) => {
       return c.json({ ok: true, result });
     }
 
-    const result = await invokeGatewayTool('cron', {
-      action: 'run',
+    const result = await gatewayRpcCall('cron.run', {
       jobId: id,
     }, GATEWAY_RUN_TIMEOUT_MS);
     return c.json({ ok: true, result });

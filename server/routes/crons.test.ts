@@ -15,10 +15,22 @@ describe('cron routes', () => {
 
   async function buildApp() {
     const invokeGatewayTool = vi.fn(async () => ({ ok: true }));
+    const gatewayRpcCall = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method.startsWith('cron.')) {
+        return invokeGatewayTool('cron', {
+          action: method.slice('cron.'.length),
+          ...params,
+        });
+      }
+      return { ok: true };
+    });
     const tempHome = await fs.mkdtemp(join(os.tmpdir(), 'nerve-crons-test-'));
 
     vi.doMock('../lib/gateway-client.js', () => ({
       invokeGatewayTool,
+    }));
+    vi.doMock('../lib/gateway-rpc.js', () => ({
+      gatewayRpcCall,
     }));
 
     vi.doMock('../lib/config.js', async (importOriginal) => {
@@ -39,7 +51,7 @@ describe('cron routes', () => {
     const mod = await import('./crons.js');
     const app = new Hono();
     app.route('/', mod.default);
-    return { app, invokeGatewayTool, tempHome };
+    return { app, invokeGatewayTool, gatewayRpcCall, tempHome };
   }
 
   it('derives agentId from sessionKey when creating a cron', async () => {
@@ -114,7 +126,6 @@ describe('cron routes', () => {
         delivery: { mode: 'announce', bestEffort: true, channel: 'slack', to: '#ops' },
         wakeMode: 'now',
         deleteAfterRun: true,
-        clearAgentOverride: true,
         accountId: 'acc-123',
         lightContext: true,
         failureAlerts: 'off',
@@ -155,13 +166,16 @@ describe('cron routes', () => {
   });
 
   it('derives agentId from sessionKey when updating a cron', async () => {
-    const { app, invokeGatewayTool } = await buildApp();
+    const { app, gatewayRpcCall } = await buildApp();
 
     const res = await app.request('/api/crons/job-123', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         patch: {
+          id: 'readonly-id',
+          jobId: 'readonly-job-id',
+          clearAgentOverride: true,
           sessionTarget: 'main',
           sessionKey: 'agent:ops:main',
           payload: { kind: 'systemEvent', text: 'Reminder: deploy window opens in 10 minutes.' },
@@ -170,20 +184,19 @@ describe('cron routes', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(invokeGatewayTool).toHaveBeenCalledWith('cron', {
-      action: 'update',
-      jobId: 'job-123',
+    expect(gatewayRpcCall).toHaveBeenCalledWith('cron.update', {
+      id: 'job-123',
       patch: {
         agentId: 'ops',
         payload: { kind: 'systemEvent', text: 'Reminder: deploy window opens in 10 minutes.' },
         sessionKey: 'agent:ops:main',
         sessionTarget: 'main',
       },
-    });
+    }, 60000);
   });
 
   it('keeps non-default agent cron edits isolated when updating', async () => {
-    const { app, invokeGatewayTool } = await buildApp();
+    const { app, gatewayRpcCall } = await buildApp();
 
     const res = await app.request('/api/crons/job-123', {
       method: 'PATCH',
@@ -199,16 +212,56 @@ describe('cron routes', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(invokeGatewayTool).toHaveBeenCalledWith('cron', {
-      action: 'update',
-      jobId: 'job-123',
+    expect(gatewayRpcCall).toHaveBeenCalledWith('cron.update', {
+      id: 'job-123',
       patch: {
         agentId: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
         payload: { kind: 'agentTurn', message: 'Check the board.' },
         sessionKey: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
         sessionTarget: 'isolated',
       },
+    }, 60000);
+  });
+
+  it('strips readonly cron fields before updating a job', async () => {
+    const { app, gatewayRpcCall } = await buildApp();
+
+    const res = await app.request('/api/crons/job-123', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patch: {
+          id: 'job-123',
+          createdAtMs: 123,
+          updatedAtMs: 456,
+          jobId: 'job-123',
+          clearAgentOverride: true,
+          state: { lastRunAtMs: 789 },
+          agentId: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+          sessionKey: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+          sessionTarget: 'main',
+          payload: { kind: 'agentTurn', message: 'Check the board.' },
+        },
+      }),
     });
+
+    expect(res.status).toBe(200);
+    expect(gatewayRpcCall).toHaveBeenCalledWith('cron.update', expect.objectContaining({
+      id: 'job-123',
+    }), 60000);
+    const patch = (gatewayRpcCall.mock.calls[0]?.[1] as { patch?: Record<string, unknown> } | undefined)?.patch;
+    expect(patch).toMatchObject({
+      agentId: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+      sessionKey: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
+      sessionTarget: 'isolated',
+      payload: { kind: 'agentTurn', message: 'Check the board.' },
+    });
+    expect(patch).not.toHaveProperty('id');
+    expect(patch).not.toHaveProperty('createdAtMs');
+    expect(patch).not.toHaveProperty('updatedAtMs');
+    expect(patch).not.toHaveProperty('jobId');
+    expect(patch).not.toHaveProperty('clearAgentOverride');
+    expect(patch).not.toHaveProperty('state');
   });
 
   it('runs isolated agentTurn jobs through sessions_spawn', async () => {
@@ -250,7 +303,7 @@ describe('cron routes', () => {
     expect(invokeGatewayTool).toHaveBeenCalledWith('cron', {
       action: 'list',
       includeDisabled: true,
-    }, 60000);
+    });
     expect(invokeGatewayTool).toHaveBeenCalledWith('sessions_spawn', {
       task: 'say hello',
       mode: 'run',
