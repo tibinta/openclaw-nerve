@@ -569,7 +569,7 @@ describe('useVoiceInput', () => {
       });
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(370);
+        await vi.advanceTimersByTimeAsync(1500);
         await vi.advanceTimersByTimeAsync(300);
       });
 

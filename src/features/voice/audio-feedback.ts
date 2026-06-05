@@ -28,9 +28,21 @@ function preloadSound(path: string): Promise<AudioBuffer | null> {
   return promise;
 }
 
-// Preload all sound effects on module load (OGG/Opus — no MP3 encoder delay artifacts)
-const WAKE_CONFIRM_PATHS = ['/sounds/wake-alex.mp3', '/sounds/wake.mp3'];
-const SOUND_PATHS = [...WAKE_CONFIRM_PATHS, '/sounds/send.ogg', '/sounds/cancel.ogg', '/sounds/notify.ogg'];
+function numberedSoundPaths(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `${prefix}-${String(index + 1).padStart(3, '0')}.mp3`);
+}
+
+// Short spoken confirmations. Keep the legacy single files last as safe fallbacks.
+const WAKE_CONFIRM_PATHS = [
+  ...numberedSoundPaths('/sounds/wake-confirmations/wake', 60),
+  '/sounds/wake-alex.mp3',
+  '/sounds/wake.mp3',
+];
+const SEND_CONFIRM_PATHS = [
+  ...numberedSoundPaths('/sounds/send-confirmations/send', 60),
+  '/sounds/send.ogg',
+];
+const SOUND_PATHS = [...WAKE_CONFIRM_PATHS, ...SEND_CONFIRM_PATHS, '/sounds/cancel.ogg', '/sounds/notify.ogg'];
 if (typeof window !== 'undefined') {
   SOUND_PATHS.forEach(p => void preloadSound(p));
 }
@@ -55,6 +67,12 @@ function playSound(path: string, playbackRate = 1): void {
   } catch {
     // AudioContext not available, silently skip
   }
+}
+
+function pickLoaded(paths: string[], fallback: string): string {
+  const loaded = paths.filter((path) => bufferCache.has(path));
+  if (loaded.length === 0) return fallback;
+  return loaded[Math.floor(Math.random() * loaded.length)] || fallback;
 }
 
 /** Initialize or resume the AudioContext (call on user interaction to unlock). */
@@ -87,13 +105,12 @@ export async function unlockBrowserAudio(): Promise<boolean> {
 
 /** Play ascending ping when wake-word is detected. */
 export function playWakePing(): void {
-  const preferredPath = WAKE_CONFIRM_PATHS.find((path) => bufferCache.has(path)) || '/sounds/wake.mp3';
-  playSound(preferredPath);
+  playSound(pickLoaded(WAKE_CONFIRM_PATHS, '/sounds/wake.mp3'));
 }
 
 /** Play confirmation sound when voice input is submitted. */
 export function playSubmitPing(): void {
-  playSound('/sounds/send.ogg');
+  playSound(pickLoaded(SEND_CONFIRM_PATHS, '/sounds/send.ogg'));
 }
 
 /** Play cancel sound when voice input is cancelled. */

@@ -70,10 +70,15 @@ describe('audio-feedback', () => {
   });
 
   describe('preloading', () => {
-    it('should fetch all 4 sound files on module load', () => {
+    it('should fetch sound effects and spoken confirmation pools on module load', () => {
       const fetchCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
       const urls = fetchCalls.map((c: string[]) => c[0]);
       expect(urls).toContain('/sounds/wake.mp3');
+      expect(urls).toContain('/sounds/wake-alex.mp3');
+      expect(urls).toContain('/sounds/wake-confirmations/wake-001.mp3');
+      expect(urls).toContain('/sounds/wake-confirmations/wake-060.mp3');
+      expect(urls).toContain('/sounds/send-confirmations/send-001.mp3');
+      expect(urls).toContain('/sounds/send-confirmations/send-060.mp3');
       expect(urls).toContain('/sounds/send.ogg');
       expect(urls).toContain('/sounds/cancel.ogg');
       expect(urls).toContain('/sounds/notify.ogg');

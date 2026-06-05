@@ -548,9 +548,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   useEffect(() => {
     const handleVoiceReplySpoken = () => {
-      window.setTimeout(() => {
+      let attempts = 0;
+      const tryStart = () => {
         const latest = latestLiveVoiceStateRef.current;
-        if (latest.isGenerating || latest.voiceState !== 'idle') return;
+        if (latest.isGenerating) return;
+        if (latest.voiceState !== 'idle' && latest.voiceState !== 'listening') {
+          attempts += 1;
+          if (attempts <= 12) window.setTimeout(tryStart, 250);
+          return;
+        }
         // A voice-origin answer just finished speaking. Open the mic for the
         // natural reply immediately, without requiring the wake phrase again.
         // If Alex says nothing, close this one-shot reply window after 5s.
@@ -558,7 +564,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           pauseMs: wakeVoicePauseMs,
           noSpeechTimeoutMs: 5000,
         });
-      }, 100);
+      };
+      window.setTimeout(tryStart, 200);
     };
 
     window.addEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);

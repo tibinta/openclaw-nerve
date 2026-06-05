@@ -249,6 +249,7 @@ export function useVoiceInput(
   const languageRef = useRef(language);
   languageRef.current = language;
   const wakeTriggeredRef = useRef(false);
+  const recordingHeardSpeechRef = useRef(false);
   const browserTranscriptRef = useRef('');
   const lastNonEmptyTranscriptRef = useRef('');
   // Track intentional stops to avoid restart loops
@@ -327,6 +328,7 @@ export function useVoiceInput(
 
         if (!isQuiet) {
           heardSpeech = true;
+          recordingHeardSpeechRef.current = true;
           quietSince = null;
           return;
         }
@@ -425,6 +427,7 @@ export function useVoiceInput(
           }
           const cleaned = cleanTranscript(full, stopPhrasesRegexRef.current);
           if (cleaned) {
+            recordingHeardSpeechRef.current = true;
             browserTranscriptRef.current = cleaned;
             lastNonEmptyTranscriptRef.current = cleaned;
             setInterimTranscript(cleaned);
@@ -441,7 +444,6 @@ export function useVoiceInput(
               return;
             }
             if (matchesPhrase(transcript, phrasesRef.current.stopPhrases, languageRef.current)) {
-              playSubmitPing();
               doStopAndTranscribe();
               return;
             }
@@ -455,8 +457,8 @@ export function useVoiceInput(
               try { recognitionRef.current?.abort(); } catch { /* already stopped */ }
               recognitionRef.current = null;
               playWakePing();
-              // Delay mic acquisition until wake chime finishes (~0.35s)
-              trackedTimeout(() => doStartRecording(), 370);
+              // Spoken confirmations are longer than the old beep; wait so the mic does not capture Jane's acknowledgement.
+              trackedTimeout(() => doStartRecording(), 1500);
               return;
             }
           }
@@ -526,6 +528,7 @@ export function useVoiceInput(
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       chunksRef.current = [];
+      recordingHeardSpeechRef.current = false;
       const recordingOptions = options || oneShotRecordingOptionsRef.current;
       oneShotRecordingOptionsRef.current = undefined;
       // Wake-triggered dictation must send after quiet speech even when the
@@ -574,6 +577,7 @@ export function useVoiceInput(
     setInterimTranscript('');
     clearTranscriptPauseTimer();
     resetBrowserTranscript();
+    recordingHeardSpeechRef.current = false;
     wakeTriggeredRef.current = false;
     intentionalStopRef.current = true;
     try { recognitionRef.current?.abort(); } catch { /* already stopped */ }
@@ -620,6 +624,10 @@ export function useVoiceInput(
     setInterimTranscript('');
     clearTranscriptPauseTimer();
     wakeTriggeredRef.current = false;
+    const shouldPlaySubmitFeedback = recordingHeardSpeechRef.current
+      || Boolean(browserTranscriptRef.current.trim())
+      || Boolean(lastNonEmptyTranscriptRef.current.trim());
+    if (shouldPlaySubmitFeedback) playSubmitPing();
     intentionalStopRef.current = true;
     try {
       recognitionRef.current?.stop();
@@ -666,6 +674,7 @@ export function useVoiceInput(
         setError(`Transcription failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         resetBrowserTranscript();
+        recordingHeardSpeechRef.current = false;
         activeRecordingPauseMsRef.current = undefined;
         activeNoSpeechTimeoutMsRef.current = SILENCE_NO_SPEECH_LIMIT_MS;
       }

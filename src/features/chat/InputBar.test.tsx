@@ -348,7 +348,30 @@ describe('InputBar', () => {
       render(<InputBar onSend={vi.fn()} isGenerating={false} />);
 
       window.dispatchEvent(new CustomEvent('nerve:voice-reply-spoken'));
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(voiceInputMockState.startOneShotReplyRecording).toHaveBeenCalledWith({
+        pauseMs: 1800,
+        noSpeechTimeoutMs: 5000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries post-speech listening while voice state is still settling', async () => {
+    vi.useFakeTimers();
+    try {
+      voiceInputMockState.voiceState = 'transcribing';
+      const { rerender } = render(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+      window.dispatchEvent(new CustomEvent('nerve:voice-reply-spoken'));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(voiceInputMockState.startOneShotReplyRecording).not.toHaveBeenCalled();
+
+      voiceInputMockState.voiceState = 'idle';
+      rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
+      await vi.advanceTimersByTimeAsync(250);
 
       expect(voiceInputMockState.startOneShotReplyRecording).toHaveBeenCalledWith({
         pauseMs: 1800,
