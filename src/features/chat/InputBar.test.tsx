@@ -81,6 +81,7 @@ vi.mock('@/contexts/SettingsContext', () => ({
     continuousVoiceEnabled: settingsMockState.continuousVoiceEnabled,
     toggleContinuousVoice: settingsMockState.toggleContinuousVoice,
     liveVoicePauseMs: 1800,
+    wakeVoicePauseMs: 1800,
     isTtsSpeaking: settingsMockState.isTtsSpeaking,
   }),
 }));
@@ -336,6 +337,16 @@ describe('InputBar', () => {
 
     expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  it('starts listening after a spoken voice reply without requiring the wake word', async () => {
+    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+    window.dispatchEvent(new CustomEvent('nerve:voice-reply-spoken'));
+
+    await waitFor(() => {
+      expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('stages workspace file add-to-chat requests as server_path file references', async () => {

@@ -307,7 +307,7 @@ describe('useTTS queued playback', () => {
     expect(playCalls).toEqual(['blob:tts-1', 'blob:tts-2']);
   });
 
-  it('cancels an old queue when a newer speak call starts', async () => {
+  it('queues a newer speak call until the current answer finishes', async () => {
     const { result } = renderHook(() => useTTS(true, 'edge'));
 
     await act(async () => {
@@ -320,13 +320,26 @@ describe('useTTS queued playback', () => {
     await act(async () => {
       void result.current.speak('New sentence wins.');
       await flushSpeechQueue();
+    });
+
+    expect(playCalls).toEqual(['blob:tts-1']);
+
+    await act(async () => {
       pendingAudio[0]?.finish();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(200);
+      await flushSpeechQueue();
+    });
+
+    expect(playCalls).toEqual(['blob:tts-1', 'blob:tts-2']);
+    expect(requestedTexts).not.toContain('New sentence wins.');
+
+    await act(async () => {
+      pendingAudio[1]?.finish();
       await flushSpeechQueue();
     });
 
     expect(requestedTexts).toContain('New sentence wins.');
-    expect(playCalls).toHaveLength(2);
+    expect(playCalls).toEqual(['blob:tts-1', 'blob:tts-2', 'blob:tts-3']);
   });
 
   it('pre-decodes later sentence chunks before the first chunk finishes', async () => {

@@ -308,11 +308,14 @@ async function playHollerPcmStream(text: string, options: TTSPlaybackOptions = {
  * Hook that provides a `speak` function for text-to-speech playback.
  *
  * Audio is fetched from `/api/tts` and played via an `HTMLAudioElement`.
- * Successive calls cancel the previous utterance automatically.
+ * Successive calls are queued so a new assistant answer waits for the current
+ * spoken answer to finish instead of cutting it off or replaying stale audio.
  */
 export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', modelOrOptions?: string | TTSPlaybackOptions) {
   const currentAudio = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
   const generationRef = useRef(0);
+  const playbackQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSpeechCountRef = useRef(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const model = typeof modelOrOptions === 'string' ? modelOrOptions : modelOrOptions?.model;
   const voice = typeof modelOrOptions === 'string' ? undefined : modelOrOptions?.voice;
@@ -328,6 +331,7 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
 
   useEffect(() => {
     return () => {
+      generationRef.current++;
       cleanupAudio();
     };
   }, [cleanupAudio]);
@@ -380,14 +384,11 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     await playPreparedAudioChunk(prepared);
   }, []);
 
-  const speak = useCallback(async (text: string) => {
+  const playSpeechNow = useCallback(async (text: string, gen: number) => {
     if (!enabled || !text) return;
-    cleanupAudio();
-    const gen = ++generationRef.current;
     const chunks = splitSpeechIntoTTSChunks(text);
     if (chunks.length === 0) return;
 
-    setIsSpeaking(true);
     try {
       if (provider === 'holler' && chunks.length === 1) {
         for (let i = 0; i < chunks.length; i++) {
@@ -445,11 +446,33 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     } catch (err: unknown) {
       console.error('[TTS] play failed:', err instanceof Error ? err.message : String(err));
     } finally {
-      if (gen === generationRef.current) {
-        setIsSpeaking(false);
-      }
+      // The public queue owns isSpeaking so multiple queued answers do not
+      // flicker between chunks or between consecutive assistant replies.
     }
-  }, [enabled, provider, model, voice, cleanupAudio, playBlobChunk, playPreparedChunk]);
+  }, [enabled, provider, model, voice, playBlobChunk, playPreparedChunk]);
+
+  const speak = useCallback((text: string): Promise<void> => {
+    if (!enabled || !text) return Promise.resolve();
+    const speechText = text.trim();
+    if (!speechText) return Promise.resolve();
+
+    const gen = generationRef.current;
+    pendingSpeechCountRef.current += 1;
+    setIsSpeaking(true);
+
+    const task = playbackQueueRef.current
+      .catch(() => undefined)
+      .then(() => playSpeechNow(speechText, gen))
+      .finally(() => {
+        pendingSpeechCountRef.current = Math.max(0, pendingSpeechCountRef.current - 1);
+        if (pendingSpeechCountRef.current === 0 && gen === generationRef.current) {
+          setIsSpeaking(false);
+        }
+      });
+
+    playbackQueueRef.current = task;
+    return task;
+  }, [enabled, playSpeechNow]);
 
   return { speak, isSpeaking };
 }

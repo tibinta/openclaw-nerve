@@ -12,6 +12,7 @@ import type { ChatMsg } from '@/features/chat/types';
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
 export const FALLBACK_MAX_CHARS = 12000;
+export const VOICE_REPLY_SPOKEN_EVENT = 'nerve:voice-reply-spoken';
 const TTS_DEDUPE_WINDOW_MS = 60_000;
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────────
@@ -116,12 +117,22 @@ function prunePlayedSpeech(played: Map<string, number>, now: number) {
 
 interface UseChatTTSDeps {
   soundEnabled: React.RefObject<boolean>;
-  speak: React.RefObject<(text: string) => void>;
+  speak: React.RefObject<(text: string) => void | Promise<void>>;
 }
 
 export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
   const voiceReplyPendingRef = useRef(false);
   const playedSoundsRef = useRef<Map<string, number>>(new Map());
+
+  const speakText = useCallback((text: string, voiceReply = false) => {
+    const done = Promise.resolve(speak.current(text));
+    if (voiceReply) {
+      void done.finally(() => {
+        window.dispatchEvent(new CustomEvent(VOICE_REPLY_SPOKEN_EVENT));
+      });
+    }
+    return done;
+  }, [speak]);
 
   const markSpeechIfNew = useCallback((text: string) => {
     const speechText = text.trim();
@@ -146,7 +157,6 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
   /** Clear the played-sounds dedup set (called on chat_started). */
   const resetPlayedSounds = useCallback(() => {
     playedSoundsRef.current.clear();
-    voiceReplyPendingRef.current = false;
   }, []);
 
   /**
@@ -163,12 +173,15 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
       const fallback = finalData?.text
         ? buildConciseSpeechText(finalData.text) ?? stripTTSMarkers(finalData.text).trim()
         : '';
-      if (fallback) speak.current(fallback);
       voiceReplyPendingRef.current = false;
-    } else if (finalData?.ttsText) {
+      if (fallback) speakText(fallback, true);
+      return;
+    }
+
+    if (finalData?.ttsText) {
       const speechText = markSpeechIfNew(finalData.ttsText);
       if (speechText) {
-        speak.current(speechText);
+        speakText(speechText);
       }
       voiceReplyPendingRef.current = false;
     } else if (isActiveRun && finalData?.text && soundEnabled.current) {
@@ -177,14 +190,14 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
       const fallback = buildConciseSpeechText(finalData.text) ?? stripTTSMarkers(finalData.text).trim();
       const speechText = fallback ? markSpeechIfNew(fallback) : null;
       if (speechText) {
-        speak.current(speechText);
+        speakText(speechText);
       } else {
         playPing();
       }
     } else if (soundEnabled.current) {
       playPing();
     }
-  }, [markSpeechIfNew, soundEnabled, speak]);
+  }, [markSpeechIfNew, soundEnabled, speakText]);
 
   /** Speak explicit `[tts: ...]` markers from cron/background runs that are not the active chat. */
   const handleBackgroundTTS = useCallback((finalData: FinalMessageData | null) => {
@@ -193,11 +206,15 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
 
     const freshSpeechText = markSpeechIfNew(speechText);
     if (!freshSpeechText) return;
-    speak.current(freshSpeechText);
-  }, [markSpeechIfNew, speak]);
+    speakText(freshSpeechText);
+  }, [markSpeechIfNew, speakText]);
 
   /** Recovery path: if a cron/background message arrives through history polling, speak only the newest new assistant bubble. */
   const handleHistoryTTS = useCallback((previous: ChatMsg[], next: ChatMsg[]) => {
+    // While a voice answer is in flight, websocket final owns what gets spoken.
+    // History polling can include old assistant bubbles and must not steal TTS.
+    if (voiceReplyPendingRef.current) return;
+
     const previousKeys = new Set(previous.map((msg) => makeHistoryMessageKey(msg)));
     const latestPreviousTs = previous.reduce((latest, msg) => Math.max(latest, msg.timestamp.getTime()), 0);
 
@@ -219,8 +236,8 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
 
     const freshSpeechText = markSpeechIfNew(speechText);
     if (!freshSpeechText) return;
-    speak.current(freshSpeechText);
-  }, [markSpeechIfNew, soundEnabled, speak]);
+    speakText(freshSpeechText);
+  }, [markSpeechIfNew, soundEnabled, speakText]);
 
   /** Play the completion ping sound if sound is enabled. */
   const playCompletionPing = useCallback(() => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { RefObject } from 'react';
-import { buildVoiceFallbackText, FALLBACK_MAX_CHARS, useChatTTS } from './useChatTTS';
+import { buildVoiceFallbackText, FALLBACK_MAX_CHARS, VOICE_REPLY_SPOKEN_EVENT, useChatTTS } from './useChatTTS';
 
 function makeRef<T>(value: T) {
   return { current: value } as RefObject<T>;
@@ -45,6 +45,64 @@ describe('useChatTTS', () => {
     });
 
     expect(speak).toHaveBeenCalledWith('OK');
+  });
+
+  it('does not let history recovery speak an older answer while a voice reply is pending', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(true),
+      speak: makeRef(speak),
+    }));
+
+    const previous = [{
+      msgId: 'old-user',
+      role: 'user',
+      html: 'How is the weather?',
+      rawText: '[voice] How is the weather?',
+      timestamp: new Date('2026-06-05T12:13:00.000Z'),
+    }] as never[];
+    const next = [
+      ...previous,
+      {
+        msgId: 'old-answer',
+        role: 'assistant',
+        html: 'Which city should I check for tomorrow’s weather?',
+        rawText: 'Which city should I check for tomorrow’s weather?',
+        timestamp: new Date('2026-06-05T12:13:16.000Z'),
+      },
+    ] as never[];
+
+    act(() => {
+      result.current.trackVoiceMessage('[voice] How is the weather tomorrow in London?');
+      result.current.handleHistoryTTS(previous, next);
+    });
+
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it('announces voice reply completion after the queued speech finishes', async () => {
+    const speak = vi.fn(async () => undefined);
+    const onSpoken = vi.fn();
+    window.addEventListener(VOICE_REPLY_SPOKEN_EVENT, onSpoken);
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(false),
+      speak: makeRef(speak),
+    }));
+
+    await act(async () => {
+      result.current.trackVoiceMessage('[voice] please answer');
+      result.current.handleFinalTTS({
+        message: { role: 'assistant', content: 'Ready.' } as never,
+        text: 'Ready.',
+        ttsText: null,
+        charts: [],
+      }, false);
+      await Promise.resolve();
+    });
+
+    expect(speak).toHaveBeenCalledWith('Ready.');
+    expect(onSpoken).toHaveBeenCalledTimes(1);
+    window.removeEventListener(VOICE_REPLY_SPOKEN_EVENT, onSpoken);
   });
 
   it('speaks active typed replies when voice playback is enabled', () => {

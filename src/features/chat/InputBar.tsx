@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, useImperativeHandle, forwardR
 import { Mic, Paperclip, X, Loader2, ArrowUp, FileText, FolderOpen, Radio } from 'lucide-react';
 import type { TreeEntry } from '@/features/file-browser';
 import { useVoiceInput } from '@/features/voice/useVoiceInput';
+import { VOICE_REPLY_SPOKEN_EVENT } from '@/hooks/useChatTTS';
 import { useTabCompletion } from '@/hooks/useTabCompletion';
 import { useInputHistory } from '@/hooks/useInputHistory';
 import { useSessionContext } from '@/contexts/SessionContext';
@@ -543,6 +544,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }, previousVoiceState === 'transcribing' ? 1400 : 700);
     return () => window.clearTimeout(id);
   }, [continuousVoiceEnabled, isGenerating, isTtsSpeaking, startRecording, voiceState]);
+
+  useEffect(() => {
+    const handleVoiceReplySpoken = () => {
+      const latest = latestLiveVoiceStateRef.current;
+      if (latest.isGenerating || latest.isTtsSpeaking || latest.voiceState !== 'idle') return;
+      // A voice-origin answer just finished speaking. Open the mic for the
+      // natural reply immediately, without requiring the wake phrase again.
+      void startRecording();
+    };
+
+    window.addEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);
+    return () => window.removeEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);
+  }, [startRecording]);
 
   const handleVoiceButton = useCallback(() => {
     clearVoiceError();
