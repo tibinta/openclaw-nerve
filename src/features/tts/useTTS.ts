@@ -33,6 +33,8 @@ export interface TTSPlaybackOptions {
 
 const TTS_SENTENCE_GAP_MS = 200;
 const TTS_CHUNK_MAX_CHARS = 420;
+const TTS_SILENCE_THRESHOLD = 0.004;
+const TTS_SILENCE_PADDING_SECONDS = 0.035;
 const SENTENCE_END_RE = /[.!?…]+["')\]]*$/;
 const SOFT_BREAK_RE = /[,;:]["')\]]*$/;
 
@@ -150,7 +152,8 @@ async function playBlobViaAudioContext(blob: Blob): Promise<void> {
   if (!AudioContextCtor) throw new Error('AudioContext is not available');
   const context = new AudioContextCtor();
   if (context.state === 'suspended') await context.resume();
-  const buffer = await context.decodeAudioData(await blob.arrayBuffer());
+  const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+  const buffer = trimAudioBufferSilence(context, decoded);
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.connect(context.destination);
@@ -166,6 +169,47 @@ async function playBlobViaAudioContext(blob: Blob): Promise<void> {
       reject(err);
     }
   });
+}
+
+export function findAudioSpeechBounds(
+  channels: Float32Array[],
+  sampleRate: number,
+  threshold = TTS_SILENCE_THRESHOLD,
+  paddingSeconds = TTS_SILENCE_PADDING_SECONDS,
+): { start: number; end: number } {
+  const length = channels[0]?.length ?? 0;
+  if (length === 0) return { start: 0, end: 0 };
+
+  let first = 0;
+  let last = length - 1;
+
+  const isAudible = (index: number) => channels.some((channel) => Math.abs(channel[index] ?? 0) >= threshold);
+  while (first < length && !isAudible(first)) first++;
+  if (first >= length) return { start: 0, end: length };
+
+  while (last > first && !isAudible(last)) last--;
+
+  const padding = Math.round(sampleRate * paddingSeconds);
+  return {
+    start: Math.max(0, first - padding),
+    end: Math.min(length, last + padding + 1),
+  };
+}
+
+function trimAudioBufferSilence(context: AudioContext, buffer: AudioBuffer): AudioBuffer {
+  const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
+  const { start, end } = findAudioSpeechBounds(channels, buffer.sampleRate);
+  const trimmedLength = end - start;
+  if (start === 0 && end === buffer.length) return buffer;
+  if (trimmedLength <= Math.round(buffer.sampleRate * 0.08)) return buffer;
+
+  // Holler WAV chunks can include seconds of generated silence. Trim only after
+  // decode so speech timing stays natural while chunk transitions stay snappy.
+  const trimmed = context.createBuffer(buffer.numberOfChannels, trimmedLength, buffer.sampleRate);
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    trimmed.copyToChannel(buffer.getChannelData(channel).slice(start, end), channel);
+  }
+  return trimmed;
 }
 
 async function playHollerPcmStream(text: string, options: TTSPlaybackOptions = {}): Promise<void> {
@@ -269,14 +313,14 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
 
     let playback: { audio: HTMLAudioElement; url: string } | null = null;
     try {
-      playback = await playBlobViaAudioElement(blob);
-    } catch (err) {
-      // Safari can reject blob-backed HTMLAudioElement playback after async TTS.
-      // Decode the same audio into Web Audio as a recovery path so the queue
-      // keeps speaking instead of stopping at the first rejected blob.
-      console.warn('[TTS] audio element playback failed; trying Web Audio fallback:', err instanceof Error ? err.message : String(err));
       await playBlobViaAudioContext(blob);
       return;
+    } catch (err) {
+      // Keep audio alive if Web Audio cannot decode a provider response.
+      // The fallback may include provider silence, but it is better than a
+      // silent failed reply.
+      console.warn('[TTS] Web Audio playback failed; trying audio element fallback:', err instanceof Error ? err.message : String(err));
+      playback = await playBlobViaAudioElement(blob);
     }
 
     if (gen !== generationRef.current) {

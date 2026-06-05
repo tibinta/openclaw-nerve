@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { buildTTSRequestBody, extractTTSMarkers, migrateTTSProvider, splitSpeechIntoTTSChunks, useTTS } from './useTTS';
+import { buildTTSRequestBody, extractTTSMarkers, findAudioSpeechBounds, migrateTTSProvider, splitSpeechIntoTTSChunks, useTTS } from './useTTS';
 
 describe('extractTTSMarkers', () => {
   it('should extract a single TTS marker', () => {
@@ -154,6 +154,28 @@ describe('splitSpeechIntoTTSChunks', () => {
 
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.join(' ')).toBe(longText);
+  });
+});
+
+describe('findAudioSpeechBounds', () => {
+  it('trims leading and trailing silence while preserving a small speech pad', () => {
+    const channel = new Float32Array(1000);
+    channel[300] = 0.02;
+    channel[700] = -0.02;
+
+    expect(findAudioSpeechBounds([channel], 1000, 0.004, 0.035)).toEqual({
+      start: 265,
+      end: 736,
+    });
+  });
+
+  it('keeps all-silent buffers intact so bad audio is not reduced to nothing', () => {
+    const channel = new Float32Array(1000);
+
+    expect(findAudioSpeechBounds([channel], 1000, 0.004, 0.035)).toEqual({
+      start: 0,
+      end: 1000,
+    });
   });
 });
 
