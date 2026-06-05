@@ -31,6 +31,11 @@ export interface TTSPlaybackOptions {
   voice?: string;
 }
 
+const TTS_SENTENCE_GAP_MS = 200;
+const TTS_CHUNK_MAX_CHARS = 420;
+const SENTENCE_END_RE = /[.!?…]+["')\]]*$/;
+const SOFT_BREAK_RE = /[,;:]["')\]]*$/;
+
 export function buildTTSRequestBody(
   text: string,
   provider: TTSProvider = 'openai',
@@ -40,6 +45,43 @@ export function buildTTSRequestBody(
   if (options.model) body.model = options.model;
   if (options.voice) body.voice = options.voice;
   return body;
+}
+
+export function splitSpeechIntoTTSChunks(text: string): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+
+  const parts = normalized.match(/\S+\s*/g) ?? [];
+  const chunks: string[] = [];
+  let current = '';
+
+  const pushCurrent = () => {
+    const chunk = current.trim();
+    if (chunk) chunks.push(chunk);
+    current = '';
+  };
+
+  for (const part of parts) {
+    const word = part.trim();
+    if (!word) continue;
+    const candidate = current ? `${current} ${word}` : word;
+    const shouldHardBreak = SENTENCE_END_RE.test(word) && candidate.length >= 12;
+    const shouldSoftBreak = candidate.length >= TTS_CHUNK_MAX_CHARS && SOFT_BREAK_RE.test(word);
+    const shouldForceBreak = candidate.length >= TTS_CHUNK_MAX_CHARS + 80;
+
+    if (current && (shouldSoftBreak || shouldForceBreak)) {
+      pushCurrent();
+      current = word;
+      if (SENTENCE_END_RE.test(word)) pushCurrent();
+      continue;
+    }
+
+    current = candidate;
+    if (shouldHardBreak) pushCurrent();
+  }
+
+  pushCurrent();
+  return chunks;
 }
 
 function getAudioContextCtor(): typeof AudioContext | null {
@@ -85,6 +127,10 @@ async function playBlobViaAudioElement(blob: Blob): Promise<{ audio: HTMLAudioEl
     audio.src = '';
     throw err;
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function waitForAudioElementToEnd(audio: HTMLAudioElement): Promise<void> {
@@ -218,60 +264,83 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
     };
   }, [cleanupAudio]);
 
+  const playChunk = useCallback(async (chunk: string, gen: number) => {
+    if (provider === 'holler') {
+      try {
+        await playHollerPcmStream(chunk, { model, voice });
+        return;
+      } catch (err) {
+        if (gen !== generationRef.current) return;
+        console.warn('[TTS] Holler stream failed; trying fallback audio:', err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    const blob = await fetchTTSWithFallback(chunk, provider, { model, voice });
+    if (gen !== generationRef.current) return;
+
+    let playback: { audio: HTMLAudioElement; url: string } | null = null;
+    try {
+      playback = await playBlobViaAudioElement(blob);
+    } catch (err) {
+      // Safari can reject blob-backed HTMLAudioElement playback after async TTS.
+      // Decode the same audio into Web Audio as a recovery path so the queue
+      // keeps speaking instead of stopping at the first rejected blob.
+      console.warn('[TTS] audio element playback failed; trying Web Audio fallback:', err instanceof Error ? err.message : String(err));
+      await playBlobViaAudioContext(blob);
+      return;
+    }
+
+    if (gen !== generationRef.current) {
+      playback.audio.pause();
+      playback.audio.src = '';
+      URL.revokeObjectURL(playback.url);
+      return;
+    }
+
+    const { audio, url } = playback;
+    currentAudio.current = { audio, url };
+    let revoked = false;
+    const revoke = () => {
+      if (revoked) return;
+      revoked = true;
+      URL.revokeObjectURL(url);
+      if (currentAudio.current?.audio === audio) {
+        currentAudio.current = null;
+      }
+    };
+    audio.addEventListener('ended', revoke, { once: true });
+    audio.addEventListener('error', () => revoke(), { once: true });
+    try {
+      await waitForAudioElementToEnd(audio);
+    } catch (err) {
+      revoke();
+      throw err;
+    }
+  }, [provider, model, voice]);
+
   const speak = useCallback(async (text: string) => {
     if (!enabled || !text) return;
     cleanupAudio();
     const gen = ++generationRef.current;
+    const chunks = splitSpeechIntoTTSChunks(text);
+    if (chunks.length === 0) return;
+
     setIsSpeaking(true);
     try {
-      if (provider === 'holler') {
-        try {
-          await playHollerPcmStream(text, { model, voice });
-          return;
-        } catch (err) {
-          if (gen !== generationRef.current) return;
-          console.warn('[TTS] Holler stream failed; trying fallback audio:', err instanceof Error ? err.message : String(err));
-        }
-      }
-
-      const blob = await fetchTTSWithFallback(text, provider, { model, voice });
-      // Superseded by a newer speak() call during fetch
-      if (gen !== generationRef.current) return;
-      const { audio, url } = await playBlobViaAudioElement(blob).catch(async (err) => {
-        // Safari can reject blob-backed HTMLAudioElement playback after async TTS.
-        // Decode the same audio into Web Audio as a recovery path so voice replies
-        // still speak after the page has been unlocked by microphone interaction.
-        console.warn('[TTS] audio element playback failed; trying Web Audio fallback:', err instanceof Error ? err.message : String(err));
-        await playBlobViaAudioContext(blob);
-        throw new Error('played-via-web-audio-fallback');
-      });
-      currentAudio.current = { audio, url };
-      let revoked = false;
-      const revoke = () => {
-        if (revoked) return;
-        revoked = true;
-        URL.revokeObjectURL(url);
-        if (currentAudio.current?.audio === audio) {
-          currentAudio.current = null;
-        }
-      };
-      audio.addEventListener('ended', revoke, { once: true });
-      audio.addEventListener('error', () => revoke(), { once: true });
-      try {
-        await waitForAudioElementToEnd(audio);
-      } catch (err) {
-        revoke();
-        throw err;
+      for (let i = 0; i < chunks.length; i++) {
+        if (gen !== generationRef.current) return;
+        await playChunk(chunks[i], gen);
+        if (gen !== generationRef.current) return;
+        if (i < chunks.length - 1) await delay(TTS_SENTENCE_GAP_MS);
       }
     } catch (err: unknown) {
-      if (err instanceof Error && err.message === 'played-via-web-audio-fallback') return;
       console.error('[TTS] play failed:', err instanceof Error ? err.message : String(err));
     } finally {
       if (gen === generationRef.current) {
         setIsSpeaking(false);
       }
     }
-  }, [enabled, provider, model, voice, cleanupAudio]);
+  }, [enabled, cleanupAudio, playChunk]);
 
   return { speak, isSpeaking };
 }

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { buildTTSRequestBody, extractTTSMarkers, migrateTTSProvider } from './useTTS';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { buildTTSRequestBody, extractTTSMarkers, migrateTTSProvider, splitSpeechIntoTTSChunks, useTTS } from './useTTS';
 
 describe('extractTTSMarkers', () => {
   it('should extract a single TTS marker', () => {
@@ -129,5 +130,138 @@ describe('buildTTSRequestBody', () => {
       model: 'gpt-4o-mini-tts',
       voice: 'marin',
     });
+  });
+});
+
+describe('splitSpeechIntoTTSChunks', () => {
+  it('splits natural sentences for faster first playback', () => {
+    expect(splitSpeechIntoTTSChunks('First thing. Second thing! Third thing?')).toEqual([
+      'First thing.',
+      'Second thing!',
+      'Third thing?',
+    ]);
+  });
+
+  it('keeps short fragments together until they sound like a real sentence', () => {
+    expect(splitSpeechIntoTTSChunks('Yes. OK. Do this next.')).toEqual([
+      'Yes. OK. Do this next.',
+    ]);
+  });
+
+  it('force-splits very long text even without punctuation', () => {
+    const longText = Array.from({ length: 120 }, (_, index) => `word${index}`).join(' ');
+    const chunks = splitSpeechIntoTTSChunks(longText);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join(' ')).toBe(longText);
+  });
+});
+
+describe('useTTS queued playback', () => {
+  const originalFetch = globalThis.fetch;
+  const originalAudio = globalThis.Audio;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const playCalls: string[] = [];
+  const requestedTexts: string[] = [];
+
+  async function flushSpeechQueue() {
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+  }
+
+  class MockAudio extends EventTarget {
+    src = '';
+    ended = false;
+
+    constructor(src?: string) {
+      super();
+      this.src = src ?? '';
+    }
+
+    async play() {
+      playCalls.push(this.src);
+      this.ended = true;
+    }
+
+    pause() {
+      this.ended = true;
+    }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    playCalls.length = 0;
+    requestedTexts.length = 0;
+    let urlIndex = 0;
+
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { text?: string };
+      requestedTexts.push(body.text ?? '');
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'Content-Type': 'audio/mpeg' },
+      });
+    }) as typeof fetch;
+
+    globalThis.Audio = MockAudio as unknown as typeof Audio;
+    URL.createObjectURL = vi.fn(() => `blob:tts-${++urlIndex}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    globalThis.fetch = originalFetch;
+    globalThis.Audio = originalAudio;
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it('requests and plays sentence chunks in order with a 200ms gap', async () => {
+    const { result } = renderHook(() => useTTS(true, 'edge'));
+
+    await act(async () => {
+      void result.current.speak('First sentence is ready. Second sentence follows.');
+      await flushSpeechQueue();
+    });
+
+    expect(requestedTexts).toEqual(['First sentence is ready.']);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(199);
+    });
+    expect(requestedTexts).toEqual(['First sentence is ready.']);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await flushSpeechQueue();
+    });
+
+    expect(requestedTexts).toEqual([
+      'First sentence is ready.',
+      'Second sentence follows.',
+    ]);
+    expect(playCalls).toEqual(['blob:tts-1', 'blob:tts-2']);
+  });
+
+  it('cancels an old queue when a newer speak call starts', async () => {
+    const { result } = renderHook(() => useTTS(true, 'edge'));
+
+    await act(async () => {
+      void result.current.speak('Old first sentence is ready. Old second sentence follows.');
+      await flushSpeechQueue();
+    });
+    expect(requestedTexts[0]).toBe('Old first sentence is ready.');
+
+    await act(async () => {
+      void result.current.speak('New sentence wins.');
+      await flushSpeechQueue();
+      await vi.advanceTimersByTimeAsync(250);
+      await flushSpeechQueue();
+    });
+
+    expect(requestedTexts).toContain('New sentence wins.');
+    expect(requestedTexts).not.toContain('Old second sentence follows.');
   });
 });
