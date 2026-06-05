@@ -11,7 +11,7 @@ import type { ChatMsg } from '@/features/chat/types';
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
-export const FALLBACK_MAX_CHARS = 300;
+export const FALLBACK_MAX_CHARS = 12000;
 const TTS_DEDUPE_WINDOW_MS = 60_000;
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────────
@@ -40,7 +40,8 @@ export function buildVoiceFallbackText(raw: string): string | null {
   text = text.replace(/\n{2,}/g, '. ').replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
   // Must have at least 3 letter characters (unicode-aware for non-Latin scripts)
   if (!/\p{L}{3,}/u.test(text)) return null;
-  // Cap length
+  // Keep cron readback whole for normal messages, but prevent accidental
+  // huge logs/transcripts from monopolising the browser TTS queue.
   if (text.length > FALLBACK_MAX_CHARS) {
     text = text.slice(0, FALLBACK_MAX_CHARS).replace(/\s\S*$/, '') + '…';
   }
@@ -170,6 +171,16 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
         speak.current(speechText);
       }
       voiceReplyPendingRef.current = false;
+    } else if (isActiveRun && finalData?.text && soundEnabled.current) {
+      // Typed sales-chat replies should speak the visible bubble after the
+      // browser audio path is unlocked; models no longer need to emit [tts:].
+      const fallback = buildConciseSpeechText(finalData.text) ?? stripTTSMarkers(finalData.text).trim();
+      const speechText = fallback ? markSpeechIfNew(fallback) : null;
+      if (speechText) {
+        speak.current(speechText);
+      } else {
+        playPing();
+      }
     } else if (soundEnabled.current) {
       playPing();
     }
@@ -185,22 +196,31 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
     speak.current(freshSpeechText);
   }, [markSpeechIfNew, speak]);
 
-  /** Recovery path: if a cron message arrives through history polling, speak its hidden marker once. */
+  /** Recovery path: if a cron/background message arrives through history polling, speak only the newest new assistant bubble. */
   const handleHistoryTTS = useCallback((previous: ChatMsg[], next: ChatMsg[]) => {
     const previousKeys = new Set(previous.map((msg) => makeHistoryMessageKey(msg)));
     const latestPreviousTs = previous.reduce((latest, msg) => Math.max(latest, msg.timestamp.getTime()), 0);
 
-    for (const msg of next) {
-      const speechText = msg.ttsText?.trim();
-      if (!speechText) continue;
-      if (previousKeys.has(makeHistoryMessageKey(msg))) continue;
-      if (latestPreviousTs > 0 && msg.timestamp.getTime() < latestPreviousTs) continue;
+    const newest = next
+      .filter((msg) => msg.role === 'assistant')
+      .filter((msg) => !previousKeys.has(makeHistoryMessageKey(msg)))
+      .filter((msg) => latestPreviousTs === 0 || msg.timestamp.getTime() >= latestPreviousTs)
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+    if (!newest) return;
 
-      const freshSpeechText = markSpeechIfNew(speechText);
-      if (!freshSpeechText) continue;
-      speak.current(freshSpeechText);
-    }
-  }, [markSpeechIfNew, speak]);
+    // History recovery can rehydrate older marker payloads while a new cron
+    // bubble arrives. Bind speech to the newest bubble so Safari never reads a
+    // previous "can hear you" reply for a later cron update.
+    // Cron/history recovery should read the whole visible message. The concise
+    // helper is only for active voice replies where a short answer is calmer.
+    const fallback = soundEnabled.current ? buildVoiceFallbackText(newest.rawText) : null;
+    const speechText = newest.ttsText?.trim() || fallback;
+    if (!speechText) return;
+
+    const freshSpeechText = markSpeechIfNew(speechText);
+    if (!freshSpeechText) return;
+    speak.current(freshSpeechText);
+  }, [markSpeechIfNew, soundEnabled, speak]);
 
   /** Play the completion ping sound if sound is enabled. */
   const playCompletionPing = useCallback(() => {

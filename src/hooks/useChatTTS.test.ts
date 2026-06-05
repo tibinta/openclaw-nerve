@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { RefObject } from 'react';
-import { useChatTTS } from './useChatTTS';
+import { buildVoiceFallbackText, FALLBACK_MAX_CHARS, useChatTTS } from './useChatTTS';
 
 function makeRef<T>(value: T) {
   return { current: value } as RefObject<T>;
@@ -45,6 +45,25 @@ describe('useChatTTS', () => {
     });
 
     expect(speak).toHaveBeenCalledWith('OK');
+  });
+
+  it('speaks active typed replies when voice playback is enabled', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(true),
+      speak: makeRef(speak),
+    }));
+
+    act(() => {
+      result.current.handleFinalTTS({
+        message: { role: 'assistant', content: 'Visible answer.' } as never,
+        text: 'Visible answer.',
+        ttsText: null,
+        charts: [],
+      }, true);
+    });
+
+    expect(speak).toHaveBeenCalledWith('Visible answer.');
   });
 
   it('prefers cleaned fallback text when the response is longer', () => {
@@ -161,6 +180,80 @@ describe('useChatTTS', () => {
 
     expect(speak).toHaveBeenCalledTimes(1);
     expect(speak).toHaveBeenCalledWith('Alex, cron voice is live.');
+  });
+
+  it('speaks the newest visible history reply instead of an older voice reply', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(true),
+      speak: makeRef(speak),
+    }));
+
+    const previous = [{
+      msgId: 'old-voice',
+      role: 'assistant',
+      html: 'Yes, I can hear you.',
+      rawText: 'Yes, I can hear you.',
+      ttsText: 'Yes, I can hear you.',
+      timestamp: new Date('2026-06-04T23:40:00.000Z'),
+    }] as never[];
+    const next = [
+      {
+        msgId: 'replayed-old-voice',
+        role: 'assistant',
+        html: 'Yes, I can hear you.',
+        rawText: 'Yes, I can hear you.',
+        ttsText: 'Yes, I can hear you.',
+        timestamp: new Date('2026-06-04T23:40:00.000Z'),
+      },
+      {
+        msgId: 'cron-understood',
+        role: 'assistant',
+        html: 'Understood.',
+        rawText: 'Understood.',
+        timestamp: new Date('2026-06-04T23:42:00.000Z'),
+      },
+    ] as never[];
+
+    act(() => {
+      result.current.handleHistoryTTS(previous, next);
+    });
+
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenCalledWith('Understood.');
+  });
+
+  it('keeps normal long cron history readback intact instead of clipping at a short preview length', () => {
+    const speak = vi.fn();
+    const { result } = renderHook(() => useChatTTS({
+      soundEnabled: makeRef(true),
+      speak: makeRef(speak),
+    }));
+    const longMessage = Array.from({ length: 36 }, (_, index) => `Sentence ${index + 1} explains the cron result clearly.`).join(' ');
+    const previous = [] as never[];
+    const next = [{
+      msgId: 'cron-long-readback',
+      role: 'assistant',
+      html: longMessage,
+      rawText: longMessage,
+      timestamp: new Date('2026-06-05T00:20:00.000Z'),
+    }] as never[];
+
+    act(() => {
+      result.current.handleHistoryTTS(previous, next);
+    });
+
+    expect(longMessage.length).toBeGreaterThan(300);
+    expect(speak).toHaveBeenCalledWith(longMessage);
+  });
+
+  it('still caps extreme fallback text so a bad transcript cannot block the browser voice queue', () => {
+    const veryLongMessage = `${'Clear sentence. '.repeat(1400)}Done.`;
+    const fallback = buildVoiceFallbackText(veryLongMessage);
+
+    expect(fallback).not.toBeNull();
+    expect(fallback!.length).toBeLessThanOrEqual(FALLBACK_MAX_CHARS + 1);
+    expect(fallback).toMatch(/…$/);
   });
 
   it('speaks explicit TTS markers from background cron finals', () => {
