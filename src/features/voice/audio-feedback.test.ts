@@ -76,9 +76,9 @@ describe('audio-feedback', () => {
       expect(urls).toContain('/sounds/wake.mp3');
       expect(urls).toContain('/sounds/wake-alex.mp3');
       expect(urls).toContain('/sounds/wake-confirmations/wake-001.mp3');
-      expect(urls).toContain('/sounds/wake-confirmations/wake-060.mp3');
+      expect(urls).toContain('/sounds/wake-confirmations/wake-120.mp3');
       expect(urls).toContain('/sounds/send-confirmations/send-001.mp3');
-      expect(urls).toContain('/sounds/send-confirmations/send-060.mp3');
+      expect(urls).toContain('/sounds/send-confirmations/send-120.mp3');
       expect(urls).toContain('/sounds/send.ogg');
       expect(urls).toContain('/sounds/cancel.ogg');
       expect(urls).toContain('/sounds/notify.ogg');

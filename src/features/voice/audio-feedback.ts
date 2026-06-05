@@ -40,12 +40,12 @@ function numberedSoundPaths(prefix: string, count: number): string[] {
 
 // Short spoken confirmations. Keep the legacy single files last as safe fallbacks.
 const WAKE_CONFIRM_PATHS = [
-  ...numberedSoundPaths('/sounds/wake-confirmations/wake', 60),
+  ...numberedSoundPaths('/sounds/wake-confirmations/wake', 120),
   '/sounds/wake-alex.mp3',
   '/sounds/wake.mp3',
 ];
 const SEND_CONFIRM_PATHS = [
-  ...numberedSoundPaths('/sounds/send-confirmations/send', 60),
+  ...numberedSoundPaths('/sounds/send-confirmations/send', 120),
   '/sounds/send.ogg',
 ];
 const SOUND_PATHS = [...WAKE_CONFIRM_PATHS, ...SEND_CONFIRM_PATHS, '/sounds/cancel.ogg', '/sounds/notify.ogg'];
