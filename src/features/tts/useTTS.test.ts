@@ -164,6 +164,7 @@ describe('useTTS queued playback', () => {
   const originalRevokeObjectURL = URL.revokeObjectURL;
   const playCalls: string[] = [];
   const requestedTexts: string[] = [];
+  const requestedUrls: string[] = [];
   const pendingAudio: MockAudio[] = [];
 
   async function flushSpeechQueue() {
@@ -200,10 +201,12 @@ describe('useTTS queued playback', () => {
     vi.useFakeTimers();
     playCalls.length = 0;
     requestedTexts.length = 0;
+    requestedUrls.length = 0;
     pendingAudio.length = 0;
     let urlIndex = 0;
 
-    globalThis.fetch = vi.fn(async (_url, init) => {
+    globalThis.fetch = vi.fn(async (url, init) => {
+      requestedUrls.push(String(url));
       const body = JSON.parse(String(init?.body ?? '{}')) as { text?: string };
       requestedTexts.push(body.text ?? '');
       return new Response(new Uint8Array([1, 2, 3]), {
@@ -255,6 +258,30 @@ describe('useTTS queued playback', () => {
       await vi.advanceTimersByTimeAsync(1);
       await flushSpeechQueue();
     });
+    expect(playCalls).toEqual(['blob:tts-1', 'blob:tts-2']);
+  });
+
+  it('uses the pre-rendered audio queue for multi-sentence Holler replies', async () => {
+    const { result } = renderHook(() => useTTS(true, 'holler'));
+
+    await act(async () => {
+      void result.current.speak('First Holler sentence is ready. Second Holler sentence follows.');
+      await flushSpeechQueue();
+    });
+
+    expect(requestedUrls).toEqual(['/api/tts', '/api/tts']);
+    expect(requestedTexts).toEqual([
+      'First Holler sentence is ready.',
+      'Second Holler sentence follows.',
+    ]);
+    expect(playCalls).toEqual(['blob:tts-1']);
+
+    await act(async () => {
+      pendingAudio[0]?.finish();
+      await vi.advanceTimersByTimeAsync(200);
+      await flushSpeechQueue();
+    });
+
     expect(playCalls).toEqual(['blob:tts-1', 'blob:tts-2']);
   });
 

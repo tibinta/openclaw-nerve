@@ -316,7 +316,7 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
 
     setIsSpeaking(true);
     try {
-      if (provider === 'holler') {
+      if (provider === 'holler' && chunks.length === 1) {
         for (let i = 0; i < chunks.length; i++) {
           if (gen !== generationRef.current) return;
           try {
@@ -335,7 +335,9 @@ export function useTTS(enabled: boolean, provider: TTSProvider = 'openai', model
 
       // Start every sentence render immediately, then consume the audio in text
       // order. This removes long provider gaps between sentences while keeping
-      // playback calm and predictable.
+      // playback calm and predictable. Holler uses this path for multi-sentence
+      // replies because its stream path cannot pre-render the next sentence
+      // while the current one is still playing.
       const chunkAudio = chunks.map((chunk) => fetchTTSWithFallback(chunk, provider, { model, voice }));
       for (let i = 0; i < chunkAudio.length; i++) {
         if (gen !== generationRef.current) return;
