@@ -4,6 +4,7 @@
 let audioCtx: AudioContext | null = null;
 const bufferCache = new Map<string, AudioBuffer>();
 const loadingCache = new Map<string, Promise<AudioBuffer | null>>();
+const activeSources = new Set<AudioBufferSourceNode>();
 
 export interface AudioFeedbackPlayback {
   played: boolean;
@@ -69,6 +70,10 @@ function playSound(path: string, playbackRate = 1): AudioFeedbackPlayback {
     source.buffer = buffer;
     source.playbackRate.value = playbackRate;
     source.connect(audioCtx.destination);
+    activeSources.add(source);
+    source.onended = () => {
+      activeSources.delete(source);
+    };
     source.start(0);
     return { played: true, path, durationMs: Math.ceil((buffer.duration * 1000) / playbackRate) };
   } catch {

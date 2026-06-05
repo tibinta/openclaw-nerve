@@ -342,6 +342,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
   }, []);
 
+  const POST_TTS_REPLY_SETTLE_MS = 650;
+
   useEffect(() => {
     persistedComposerSnapshot = {
       text: draftText,
@@ -565,7 +567,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           noSpeechTimeoutMs: 5000,
         });
       };
-      window.setTimeout(tryStart, 200);
+      window.setTimeout(tryStart, POST_TTS_REPLY_SETTLE_MS);
     };
 
     window.addEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);

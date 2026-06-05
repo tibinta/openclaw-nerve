@@ -8,6 +8,7 @@ const mockCreateBufferSource = vi.fn(() => ({
   buffer: null,
   playbackRate: { value: 1 },
   connect: mockConnect,
+  onended: null as (() => void) | null,
   start: mockStart,
 }));
 
@@ -96,6 +97,7 @@ describe('audio-feedback', () => {
       expect(mockConnect).toHaveBeenCalled();
       expect(mockStart).toHaveBeenCalledWith(0);
       expect(playback).toMatchObject({ played: true, durationMs: 1000 });
+      expect(mockCreateBufferSource.mock.results[0].value.onended).toEqual(expect.any(Function));
     });
 
     it('should use default playbackRate of 1', () => {
