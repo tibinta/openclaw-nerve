@@ -4,17 +4,19 @@ import type { VoiceState } from './useVoiceInput';
 export interface VoiceControlSnapshot {
   voiceState: VoiceState;
   continuousVoiceEnabled: boolean;
+  wakeWordEnabled: boolean;
   voiceError: string | null;
 }
 
 export const VOICE_CONTROL_STATE_EVENT = 'nerve:voice-control-state';
 export const VOICE_CONTROL_COMMAND_EVENT = 'nerve:voice-control-command';
 
-type VoiceControlCommand = 'toggle-voice' | 'toggle-live';
+type VoiceControlCommand = 'toggle-voice' | 'toggle-live' | 'toggle-wake';
 
 const DEFAULT_VOICE_CONTROL_SNAPSHOT: VoiceControlSnapshot = {
   voiceState: 'idle',
   continuousVoiceEnabled: false,
+  wakeWordEnabled: false,
   voiceError: null,
 };
 

@@ -568,19 +568,20 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [clearVoiceError, continuousVoiceEnabled, discardRecording, startRecording, toggleContinuousVoice, voiceState]);
 
   useEffect(() => {
-    publishVoiceControlSnapshot({ voiceState, continuousVoiceEnabled, voiceError });
-  }, [continuousVoiceEnabled, voiceError, voiceState]);
+    publishVoiceControlSnapshot({ voiceState, continuousVoiceEnabled, wakeWordEnabled, voiceError });
+  }, [continuousVoiceEnabled, voiceError, voiceState, wakeWordEnabled]);
 
   useEffect(() => {
     const handleVoiceCommand = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
       if (command === 'toggle-voice') handleVoiceButton();
       if (command === 'toggle-live') handleContinuousVoiceButton();
+      if (command === 'toggle-wake') toggleWakeWord();
     };
 
     window.addEventListener(VOICE_CONTROL_COMMAND_EVENT, handleVoiceCommand);
     return () => window.removeEventListener(VOICE_CONTROL_COMMAND_EVENT, handleVoiceCommand);
-  }, [handleContinuousVoiceButton, handleVoiceButton]);
+  }, [handleContinuousVoiceButton, handleVoiceButton, toggleWakeWord]);
 
   // Live transcription preview: write interim transcript to textarea during recording
   useEffect(() => {

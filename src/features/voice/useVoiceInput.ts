@@ -729,21 +729,23 @@ export function useVoiceInput(
   const startWakeWordRef = useRef(startWakeWordListener);
   startWakeWordRef.current = startWakeWordListener;
   useEffect(() => {
-    if (!wakeWordSupported || !wakeWordEnabled || wakeWordEnabledRef.current) return;
+    if (!wakeWordSupported || !wakeWordEnabled || stateRef.current !== 'idle') return;
     // Only auto-start if mic permission was previously granted (avoid surprise prompts)
     navigator.permissions?.query({ name: 'microphone' as PermissionName }).then((result) => {
+      if (!wakeWordEnabled || stateRef.current !== 'idle') return;
       if (result.state === 'granted') {
         startWakeWordRef.current();
       } else {
-        // Permission not granted — clear persisted state so toggle shows off on supported environments
-        try { localStorage.removeItem(WAKE_WORD_KEY); } catch { /* noop */ }
+        // Keep the saved preference, but avoid surprise permission prompts on reload.
+        wakeWordEnabledRef.current = false;
+        setVoiceState('idle');
       }
     }).catch(() => {
       // Permissions API not available — try starting anyway (user interaction required)
+      if (!wakeWordEnabled || stateRef.current !== 'idle') return;
       startWakeWordRef.current();
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
-  }, []);
+  }, [setVoiceState, wakeWordEnabled, wakeWordSupported]);
 
   // Double-tap left Shift support
   startRef.current = doStartRecording;

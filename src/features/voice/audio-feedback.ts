@@ -29,7 +29,8 @@ function preloadSound(path: string): Promise<AudioBuffer | null> {
 }
 
 // Preload all sound effects on module load (OGG/Opus — no MP3 encoder delay artifacts)
-const SOUND_PATHS = ['/sounds/wake.mp3', '/sounds/send.ogg', '/sounds/cancel.ogg', '/sounds/notify.ogg'];
+const WAKE_CONFIRM_PATHS = ['/sounds/wake-alex.mp3', '/sounds/wake.mp3'];
+const SOUND_PATHS = [...WAKE_CONFIRM_PATHS, '/sounds/send.ogg', '/sounds/cancel.ogg', '/sounds/notify.ogg'];
 if (typeof window !== 'undefined') {
   SOUND_PATHS.forEach(p => void preloadSound(p));
 }
@@ -68,9 +69,26 @@ export function ensureAudioContext(): void {
   }
 }
 
+/** Prime Safari/desktop autoplay from a real button tap before async TTS replies arrive later. */
+export async function unlockBrowserAudio(): Promise<boolean> {
+  try {
+    ensureAudioContext();
+    const audio = new Audio('/sounds/notify.ogg');
+    audio.muted = true;
+    audio.volume = 0;
+    await audio.play();
+    audio.pause();
+    audio.src = '';
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Play ascending ping when wake-word is detected. */
 export function playWakePing(): void {
-  playSound('/sounds/wake.mp3');
+  const preferredPath = WAKE_CONFIRM_PATHS.find((path) => bufferCache.has(path)) || '/sounds/wake.mp3';
+  playSound(preferredPath);
 }
 
 /** Play confirmation sound when voice input is submitted. */

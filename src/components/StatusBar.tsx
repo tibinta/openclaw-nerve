@@ -209,6 +209,21 @@ export function StatusBar({ connectionState, sessionCount, sparkline, contextTok
         >
           <Radio size={13} aria-hidden="true" />
         </button>
+        <button
+          type="button"
+          onClick={() => sendVoiceControlCommand('toggle-wake')}
+          disabled={voiceBusy}
+          className={`inline-flex h-8 min-w-8 cursor-pointer items-center justify-center gap-1.5 rounded-full border px-2.5 text-[0.667rem] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45 disabled:cursor-not-allowed disabled:opacity-50 ${
+            voiceControl.wakeWordEnabled ? 'border-primary/35 bg-primary/12 text-primary' : 'border-border/70 bg-background/75 text-muted-foreground hover:text-foreground'
+          }`}
+          aria-label={voiceControl.wakeWordEnabled ? 'Wake listening on. Turn off' : 'Wake listening off. Turn on'}
+          aria-pressed={voiceControl.wakeWordEnabled}
+          title={voiceControl.wakeWordEnabled ? 'Wake on' : 'Wake off'}
+        >
+          <Radio size={13} aria-hidden="true" />
+          <span>Wake</span>
+          <span className={`h-1.5 w-1.5 rounded-full ${voiceControl.wakeWordEnabled ? 'bg-primary' : 'bg-muted-foreground/45'}`} aria-hidden="true" />
+        </button>
       </div>
     </div>
   );
