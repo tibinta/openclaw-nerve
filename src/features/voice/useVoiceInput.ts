@@ -167,6 +167,7 @@ export function useVoiceInput(
   sttInputMode: STTInputMode = 'hybrid',
   autoStopAfterSilenceMs?: number,
   suppressWakeWordResume: boolean = false,
+  wakeAutoStopAfterSilenceMs?: number,
 ) {
   const [state, setState] = useState<VoiceState>('idle');
   const stateRef = useRef<VoiceState>('idle');
@@ -183,6 +184,8 @@ export function useVoiceInput(
   sttInputModeRef.current = sttInputMode;
   const autoStopAfterSilenceMsRef = useRef(autoStopAfterSilenceMs);
   autoStopAfterSilenceMsRef.current = autoStopAfterSilenceMs;
+  const wakeAutoStopAfterSilenceMsRef = useRef(wakeAutoStopAfterSilenceMs);
+  wakeAutoStopAfterSilenceMsRef.current = wakeAutoStopAfterSilenceMs;
   const suppressWakeWordResumeRef = useRef(suppressWakeWordResume);
   suppressWakeWordResumeRef.current = suppressWakeWordResume;
 
@@ -252,6 +255,7 @@ export function useVoiceInput(
   const silenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptPauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const silenceAudioContextRef = useRef<AudioContext | null>(null);
+  const activeRecordingPauseMsRef = useRef<number | undefined>(undefined);
   const startRef = useRef<() => Promise<void> | void>(() => undefined);
   const discardRef = useRef<() => void>(() => undefined);
   const stopRef = useRef<() => void>(() => undefined);
@@ -283,7 +287,7 @@ export function useVoiceInput(
 
   const startSilenceWatcher = useCallback((stream: MediaStream) => {
     stopSilenceWatcher();
-    const pauseMs = autoStopAfterSilenceMsRef.current;
+    const pauseMs = activeRecordingPauseMsRef.current;
     if (!pauseMs || pauseMs <= 0) return;
 
     const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: BrowserAudioContext }).webkitAudioContext;
@@ -343,7 +347,7 @@ export function useVoiceInput(
 
   const scheduleTranscriptPauseStop = useCallback(() => {
     clearTranscriptPauseTimer();
-    const pauseMs = autoStopAfterSilenceMsRef.current;
+    const pauseMs = activeRecordingPauseMsRef.current;
     if (!pauseMs || pauseMs <= 0) return;
     transcriptPauseTimeoutRef.current = setTimeout(() => {
       transcriptPauseTimeoutRef.current = null;
@@ -514,6 +518,12 @@ export function useVoiceInput(
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       chunksRef.current = [];
+      // Wake-triggered dictation must send after quiet speech even when the
+      // separate Live Voice loop is off. Keep this per recording so manual mic,
+      // Live Voice, and Wake can each use the right pause window.
+      activeRecordingPauseMsRef.current = wakeTriggeredRef.current
+        ? wakeAutoStopAfterSilenceMsRef.current
+        : autoStopAfterSilenceMsRef.current;
       resetBrowserTranscript();
       setInterimTranscript('');
       // Safari on iPhone often rejects WebM. Pick the first supported format so
@@ -533,9 +543,10 @@ export function useVoiceInput(
       ensureRecognitionRef.current('stop');
       } catch (err) {
         console.error('Mic access denied:', err);
-        const msg = err instanceof DOMException && err.name === 'NotAllowedError'
+      const msg = err instanceof DOMException && err.name === 'NotAllowedError'
           ? 'Microphone permission denied'
           : 'Failed to access microphone';
+      activeRecordingPauseMsRef.current = undefined;
       setError(msg);
       if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
         setVoiceState('listening');
@@ -558,6 +569,7 @@ export function useVoiceInput(
       mediaRecorderRef.current.stop();
     }
     stopStream();
+    activeRecordingPauseMsRef.current = undefined;
     if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {
       setVoiceState('listening');
       ensureRecognitionRef.current('wake');
@@ -620,7 +632,7 @@ export function useVoiceInput(
             cleaned = browserTranscript;
           } else if (sttInputModeRef.current === 'hybrid' || !browserRecognitionSupported) {
             cleaned = await transcribeWithBackend(blob);
-          } else if (autoStopAfterSilenceMsRef.current) {
+          } else if (activeRecordingPauseMsRef.current) {
             cleaned = '';
           } else {
             throw new Error('Browser speech recognition did not produce a transcript');
@@ -638,6 +650,7 @@ export function useVoiceInput(
         setError(`Transcription failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         resetBrowserTranscript();
+        activeRecordingPauseMsRef.current = undefined;
       }
       // Resume wake word listener
       if (wakeWordEnabledRef.current && !suppressWakeWordResumeRef.current) {

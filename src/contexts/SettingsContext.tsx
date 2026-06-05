@@ -7,6 +7,7 @@ import { type FontName, applyFont, fontNames } from '@/lib/fonts';
 export type STTProvider = 'local' | 'openai';
 export type STTInputMode = 'browser' | 'local' | 'hybrid';
 export const DEFAULT_LIVE_VOICE_PAUSE_MS = 1800;
+export const DEFAULT_WAKE_VOICE_PAUSE_MS = DEFAULT_LIVE_VOICE_PAUSE_MS;
 const MIN_LIVE_VOICE_PAUSE_MS = 700;
 const MAX_LIVE_VOICE_PAUSE_MS = 5000;
 
@@ -42,6 +43,8 @@ interface SettingsContextValue {
   toggleContinuousVoice: () => void;
   liveVoicePauseMs: number;
   setLiveVoicePauseMs: (ms: number) => void;
+  wakeVoicePauseMs: number;
+  setWakeVoicePauseMs: (ms: number) => void;
   speak: (text: string) => Promise<void>;
   isTtsSpeaking: boolean;
   panelRatio: number;
@@ -144,6 +147,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return Number.isFinite(saved) && saved >= MIN_LIVE_VOICE_PAUSE_MS && saved <= MAX_LIVE_VOICE_PAUSE_MS
       ? Math.round(saved)
       : DEFAULT_LIVE_VOICE_PAUSE_MS;
+  });
+  const [wakeVoicePauseMs, setWakeVoicePauseMsState] = useState(() => {
+    const saved = Number(localStorage.getItem('nerve:wakeVoicePauseMs'));
+    return Number.isFinite(saved) && saved >= MIN_LIVE_VOICE_PAUSE_MS && saved <= MAX_LIVE_VOICE_PAUSE_MS
+      ? Math.round(saved)
+      : DEFAULT_WAKE_VOICE_PAUSE_MS;
   });
   const [panelRatio, setPanelRatioState] = useState(() => {
     const saved = localStorage.getItem('oc-panel-ratio');
@@ -261,6 +270,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const next = Math.min(MAX_LIVE_VOICE_PAUSE_MS, Math.max(MIN_LIVE_VOICE_PAUSE_MS, Math.round(ms)));
     setLiveVoicePauseMsState(next);
     localStorage.setItem('nerve:liveVoicePauseMs', String(next));
+  }, []);
+
+  const setWakeVoicePauseMs = useCallback((ms: number) => {
+    const next = Math.min(MAX_LIVE_VOICE_PAUSE_MS, Math.max(MIN_LIVE_VOICE_PAUSE_MS, Math.round(ms)));
+    setWakeVoicePauseMsState(next);
+    localStorage.setItem('nerve:wakeVoicePauseMs', String(next));
   }, []);
 
   const changeTtsProvider = useCallback((provider: TTSProvider) => {
@@ -433,6 +448,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     toggleContinuousVoice,
     liveVoicePauseMs,
     setLiveVoicePauseMs,
+    wakeVoicePauseMs,
+    setWakeVoicePauseMs,
     speak,
     isTtsSpeaking,
     panelRatio,
@@ -458,7 +475,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     sttProvider, changeSttProvider, sttInputMode, changeSttInputMode, sttModel, changeSttModel,
     wakeWordEnabled, handleToggleWakeWord, handleWakeWordState,
     liveTranscriptionPreview, toggleLiveTranscriptionPreview, continuousVoiceEnabled, toggleContinuousVoice,
-    liveVoicePauseMs, setLiveVoicePauseMs, speak, isTtsSpeaking, panelRatio, setPanelRatio, telemetryVisible, toggleTelemetry,
+    liveVoicePauseMs, setLiveVoicePauseMs, wakeVoicePauseMs, setWakeVoicePauseMs, speak, isTtsSpeaking, panelRatio, setPanelRatio, telemetryVisible, toggleTelemetry,
     eventsVisible, toggleEvents, logVisible, toggleLog, theme, setTheme, font, setFont,
     fontSize, setFontSize, editorFontSize, setEditorFontSize, kanbanVisible, toggleKanbanVisible,
   ]);

@@ -119,7 +119,7 @@ export default function App({ onLogout }: AppProps) {
     ttsProvider, ttsModel, setTtsProvider, setTtsModel,
     sttProvider, setSttProvider, sttInputMode, setSttInputMode, sttModel, setSttModel,
     wakeWordEnabled, handleToggleWakeWord, handleWakeWordState,
-    liveTranscriptionPreview, toggleLiveTranscriptionPreview, continuousVoiceEnabled, toggleContinuousVoice, liveVoicePauseMs, setLiveVoicePauseMs,
+    liveTranscriptionPreview, toggleLiveTranscriptionPreview, continuousVoiceEnabled, toggleContinuousVoice, liveVoicePauseMs, setLiveVoicePauseMs, wakeVoicePauseMs, setWakeVoicePauseMs,
     panelRatio, setPanelRatio,
     eventsVisible, logVisible,
     toggleEvents, toggleLog, toggleTelemetry,
@@ -903,6 +903,8 @@ export default function App({ onLogout }: AppProps) {
             onToggleContinuousVoice={toggleContinuousVoice}
             liveVoicePauseMs={liveVoicePauseMs}
             onLiveVoicePauseMsChange={setLiveVoicePauseMs}
+            wakeVoicePauseMs={wakeVoicePauseMs}
+            onWakeVoicePauseMsChange={setWakeVoicePauseMs}
             agentName={agentName}
             onLogout={onLogout}
             onGatewayRestart={handleGatewayRestart}

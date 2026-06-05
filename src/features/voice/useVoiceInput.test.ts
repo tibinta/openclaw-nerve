@@ -556,6 +556,32 @@ describe('useVoiceInput', () => {
       expect(onTranscription).toHaveBeenCalledWith('second turn text');
     });
 
+    it('auto-sends wake capture after silence when live voice is off', async () => {
+      const onTranscription = vi.fn();
+      const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'local', undefined, false, 500));
+
+      await startWakeWordListener(result);
+
+      act(() => {
+        mockRecognition?.simulateResult('hey agent', false);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(370);
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      expect(result.current.voiceState).toBe('recording');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1800);
+      });
+
+      expect(result.current.voiceState).toBe('listening');
+      expect(onTranscription).toHaveBeenCalledWith('transcribed text');
+      expect(hasTranscribeRequest(globalThis.fetch as Mock)).toBe(true);
+    });
+
     it('treats no-speech live browser turns as quiet empty turns', async () => {
       const onTranscription = vi.fn();
       const { result } = renderHook(() => useVoiceInput(onTranscription, 'Agent', 'en', 0, 'browser', 500));

@@ -280,7 +280,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   // Tab completion for session names
   const { sessions, agentName: ctxAgentName } = useSessionContext();
-  const { liveTranscriptionPreview, sttInputMode, sttProvider, continuousVoiceEnabled, toggleContinuousVoice, liveVoicePauseMs, isTtsSpeaking } = useSettings();
+  const { liveTranscriptionPreview, sttInputMode, sttProvider, continuousVoiceEnabled, toggleContinuousVoice, liveVoicePauseMs, wakeVoicePauseMs, isTtsSpeaking } = useSettings();
   const getSessionLabels = useMemo(() => {
     // Build a closure that returns current session labels
     const labels = sessions.map((s) => {
@@ -504,7 +504,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     setDraftText('');
     onSend('[voice] ' + text);
-  }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? liveVoicePauseMs : undefined, continuousVoiceEnabled);
+  }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? liveVoicePauseMs : undefined, continuousVoiceEnabled, wakeVoicePauseMs);
   const wasGeneratingRef = useRef(isGenerating);
   const pendingLiveVoiceRestartRef = useRef(false);
   const previousVoiceStateRef = useRef(voiceState);

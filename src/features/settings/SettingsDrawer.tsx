@@ -37,6 +37,8 @@ interface SettingsDrawerProps {
   onToggleContinuousVoice: () => void;
   liveVoicePauseMs: number;
   onLiveVoicePauseMsChange: (ms: number) => void;
+  wakeVoicePauseMs: number;
+  onWakeVoicePauseMsChange: (ms: number) => void;
   // Agent identity
   agentName?: string;
   // Auth
@@ -95,6 +97,8 @@ export function SettingsDrawer({
   onToggleContinuousVoice,
   liveVoicePauseMs,
   onLiveVoicePauseMsChange,
+  wakeVoicePauseMs,
+  onWakeVoicePauseMsChange,
   agentName,
   onLogout,
   onGatewayRestart,
@@ -252,6 +256,8 @@ export function SettingsDrawer({
                 onToggleContinuousVoice={onToggleContinuousVoice}
                 liveVoicePauseMs={liveVoicePauseMs}
                 onLiveVoicePauseMsChange={onLiveVoicePauseMsChange}
+                wakeVoicePauseMs={wakeVoicePauseMs}
+                onWakeVoicePauseMsChange={onWakeVoicePauseMsChange}
                 agentName={agentName}
               />
             )}

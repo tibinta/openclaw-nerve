@@ -223,6 +223,8 @@ interface AudioSettingsProps {
   onToggleContinuousVoice: () => void;
   liveVoicePauseMs: number;
   onLiveVoicePauseMsChange: (ms: number) => void;
+  wakeVoicePauseMs: number;
+  onWakeVoicePauseMsChange: (ms: number) => void;
   agentName?: string;
   section?: AudioSettingsSection;
 }
@@ -462,6 +464,8 @@ export function AudioSettings({
   onToggleContinuousVoice,
   liveVoicePauseMs,
   onLiveVoicePauseMsChange,
+  wakeVoicePauseMs,
+  onWakeVoicePauseMsChange,
   agentName = 'Agent',
   section = 'all',
 }: AudioSettingsProps) {
@@ -1022,6 +1026,25 @@ export function AudioSettings({
               aria-label="Live voice pause milliseconds"
             />
           </div>
+        </div>
+      )}
+
+      {showInput && (
+        <div className="grid gap-2 rounded-[18px] border border-border/70 bg-background/35 px-3 py-3 sm:grid-cols-[1fr_118px] sm:items-center">
+          <div className="flex flex-col">
+            <span className="text-sm font-medium text-foreground">Wake pause</span>
+            <span className="text-xs text-muted-foreground">Silence before wake sends.</span>
+          </div>
+          <input
+            type="number"
+            min={700}
+            max={5000}
+            step={100}
+            value={wakeVoicePauseMs}
+            onChange={(event) => onWakeVoicePauseMsChange(Number(event.target.value))}
+            className="min-h-10 rounded-2xl border border-border/80 bg-background/65 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+            aria-label="Wake pause milliseconds"
+          />
         </div>
       )}
 
