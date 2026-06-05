@@ -328,4 +328,96 @@ describe('useTTS queued playback', () => {
     expect(requestedTexts).toContain('New sentence wins.');
     expect(playCalls).toHaveLength(2);
   });
+
+  it('pre-decodes later sentence chunks before the first chunk finishes', async () => {
+    const originalWindowAudioContext = window.AudioContext;
+    const originalBlob = globalThis.Blob;
+    const decodeCalls: number[] = [];
+    const startedSources: Array<EventTarget & { start: () => void; finish: () => void }> = [];
+
+    class MockBuffer {
+      numberOfChannels = 1;
+      sampleRate = 1000;
+      length = 120;
+      duration = 0.12;
+      private channel = Float32Array.from({ length: 120 }, (_, index) => (index >= 10 && index <= 80 ? 0.02 : 0));
+
+      getChannelData() {
+        return this.channel;
+      }
+
+      copyToChannel(data: Float32Array) {
+        this.channel.set(data.slice(0, this.channel.length));
+      }
+    }
+
+    class MockBlob {
+      type: string;
+
+      constructor(_parts: BlobPart[], options?: BlobPropertyBag) {
+        this.type = options?.type ?? '';
+      }
+
+      async arrayBuffer() {
+        return new ArrayBuffer(8);
+      }
+    }
+
+    class MockSource extends EventTarget {
+      buffer: MockBuffer | null = null;
+      connect = vi.fn();
+
+      start() {
+        startedSources.push(this);
+      }
+
+      finish() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+
+    class MockAudioContext {
+      state: AudioContextState = 'running';
+      destination = {};
+      currentTime = 0;
+      decodeAudioData = vi.fn(async () => {
+        decodeCalls.push(decodeCalls.length + 1);
+        return new MockBuffer();
+      });
+      resume = vi.fn(async () => undefined);
+      close = vi.fn(async () => undefined);
+      createBufferSource = vi.fn(() => new MockSource());
+      createBuffer = vi.fn(() => new MockBuffer());
+    }
+
+    window.AudioContext = MockAudioContext as unknown as typeof AudioContext;
+    globalThis.Blob = MockBlob as unknown as typeof Blob;
+    try {
+      const { result } = renderHook(() => useTTS(true, 'edge'));
+
+      await act(async () => {
+        void result.current.speak('First sentence is ready. Second sentence follows.');
+        await flushSpeechQueue();
+      });
+
+      expect(requestedTexts).toEqual([
+        'First sentence is ready.',
+        'Second sentence follows.',
+      ]);
+      expect(decodeCalls).toEqual([1, 2]);
+      expect(startedSources).toHaveLength(1);
+
+      await act(async () => {
+        startedSources[0]?.finish();
+        await vi.advanceTimersByTimeAsync(200);
+        await flushSpeechQueue();
+      });
+
+      expect(startedSources).toHaveLength(2);
+      expect(playCalls).toEqual([]);
+    } finally {
+      window.AudioContext = originalWindowAudioContext;
+      globalThis.Blob = originalBlob;
+    }
+  });
 });
