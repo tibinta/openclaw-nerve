@@ -25,6 +25,10 @@ import { createDeviceBlock, getDeviceIdentity } from './device-identity.js';
 import { gatewayRpcCall } from './gateway-rpc.js';
 import { canInjectGatewayToken } from './trust-utils.js';
 import { isAllowedOrigin } from './origin-utils.js';
+import {
+  isInvalidEncryptedContentError,
+  rotateSessionAfterInvalidEncryptedContent,
+} from './session-recovery.js';
 
 /** @internal — exported for test overrides */
 export const _internals = { challengeTimeoutMs: 5_000 };
@@ -59,6 +63,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function positiveNumber(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
   return value;
+}
+
+function textField(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function extractSessionKey(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  return textField(value, 'sessionKey')
+    || textField(value, 'key')
+    || (isRecord(value.payload) ? extractSessionKey(value.payload) : null)
+    || (isRecord(value.params) ? extractSessionKey(value.params) : null);
+}
+
+function extractErrorText(value: unknown): string {
+  if (!isRecord(value)) return typeof value === 'string' ? value : '';
+  const parts: string[] = [];
+  for (const key of ['message', 'error', 'errorMessage', 'reason', 'detail', 'code']) {
+    const field = value[key];
+    if (typeof field === 'string') parts.push(field);
+  }
+  if (isRecord(value.error)) parts.push(extractErrorText(value.error));
+  if (isRecord(value.payload)) parts.push(extractErrorText(value.payload));
+  return parts.join(' ');
 }
 
 /**
@@ -261,6 +290,8 @@ function createGatewayRelay(
   let challengeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Timeout handle for the gateway TCP/WebSocket open phase. */
   let gatewayOpenTimer: ReturnType<typeof setTimeout> | null = null;
+  const chatSendRequests = new Map<string, string>();
+  const recoveringSessionKeys = new Set<string>();
 
   // Buffer client messages until gateway connection is open (with cap)
   const MAX_PENDING = 100;
@@ -302,6 +333,25 @@ function createGatewayRelay(
       clearTimeout(gatewayOpenTimer);
       gatewayOpenTimer = null;
     }
+  }
+
+  function recoverInvalidEncryptedSession(sessionKey: string | null, source: string): void {
+    if (!sessionKey || recoveringSessionKeys.has(sessionKey)) return;
+    recoveringSessionKeys.add(sessionKey);
+    rotateSessionAfterInvalidEncryptedContent(sessionKey)
+      .then((result) => {
+        if (result.rotated) {
+          console.warn(`${tag} Rotated session after invalid_encrypted_content from ${source}: ${result.previousSessionId} -> ${result.replacementSessionId}`);
+        } else {
+          console.warn(`${tag} Skipped invalid_encrypted_content recovery from ${source}: ${result.reason || 'not_rotated'}`);
+        }
+      })
+      .catch((err) => {
+        console.warn(`${tag} invalid_encrypted_content recovery failed from ${source}:`, (err as Error).message);
+      })
+      .finally(() => {
+        recoveringSessionKeys.delete(sessionKey);
+      });
   }
 
   function updateClientKindFromConnect(msg: Record<string, unknown>): void {
@@ -379,6 +429,28 @@ function createGatewayRelay(
 
     // Gateway → Client
     gwWs.on('message', (data: Buffer | string, isBinary: boolean) => {
+      if (!isBinary) {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (isRecord(msg)) {
+            if (msg.type === 'res' && typeof msg.id === 'string') {
+              const sessionKey = chatSendRequests.get(msg.id);
+              if (sessionKey) {
+                chatSendRequests.delete(msg.id);
+                if (msg.ok === false && isInvalidEncryptedContentError(extractErrorText(msg))) {
+                  recoverInvalidEncryptedSession(sessionKey, 'chat.send response');
+                }
+              }
+            } else if (
+              msg.type === 'event'
+              && isInvalidEncryptedContentError(extractErrorText(msg))
+            ) {
+              recoverInvalidEncryptedSession(extractSessionKey(msg), 'gateway event');
+            }
+          }
+        } catch { /* ignore recovery inspection parse failures */ }
+      }
+
       // Capture challenge nonce before handshake completes
       if (!handshakeComplete && !isBinary) {
         try {
@@ -542,6 +614,11 @@ function createGatewayRelay(
               }
             });
           return;
+        }
+
+        if (msg.type === 'req' && msg.method === 'chat.send' && typeof msg.id === 'string') {
+          const sessionKey = extractSessionKey(msg);
+          if (sessionKey) chatSendRequests.set(msg.id, sessionKey);
         }
 
         if (isControlUiClient) {

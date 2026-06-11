@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type Server } from 'node:http';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { MockGateway } from '../../src/test/mock-gateway.js';
 
 // Mock config before importing ws-proxy
@@ -15,6 +17,7 @@ vi.mock('./config.js', () => {
       sslPort: 3443,
       sessionSecret: 'test-secret',
       gatewayToken: 'test-token',
+      sessionsDir: '/tmp/openclaw-nerve-ws-proxy-test-sessions',
     },
     WS_ALLOWED_HOSTS,
     SESSION_COOKIE_NAME: 'nerve_session_3080',
@@ -92,6 +95,15 @@ function waitForCloseOrError(ws: WebSocket, timeoutMs = 3000): Promise<{ code: n
   });
 }
 
+async function waitForCondition(assertion: () => Promise<boolean> | boolean, timeoutMs = 3000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await assertion()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('condition timed out');
+}
+
 describe('ws-proxy', () => {
   let mockGw: MockGateway;
   let proxyServer: Server;
@@ -112,6 +124,8 @@ describe('ws-proxy', () => {
     mockedVerifySession.mockReset();
     mockedParseSessionCookie.mockReset();
     mockGw.clearReceived();
+    await fs.rm(config.sessionsDir, { recursive: true, force: true });
+    await fs.mkdir(config.sessionsDir, { recursive: true });
 
     // Create a new HTTP server and attach ws-proxy
     proxyServer = createServer();
@@ -129,6 +143,7 @@ describe('ws-proxy', () => {
     await new Promise<void>((resolve) => {
       proxyServer.close(() => resolve());
     });
+    await fs.rm(config.sessionsDir, { recursive: true, force: true });
   });
 
   describe('connection establishment', () => {
@@ -326,6 +341,79 @@ describe('ws-proxy', () => {
         activeMinutes: 10080,
         limit: 200,
       });
+
+      ws.close();
+    });
+
+    it('rotates a chat session binding after an invalid encrypted content response', async () => {
+      const sessionKey = 'agent:jane-whitmore---ceo:imessage:direct:+447494722196';
+      const previousSessionId = '026b3a95-9d15-47ba-a3bf-a18f0fa0598e';
+      await fs.writeFile(path.join(config.sessionsDir, 'sessions.json'), JSON.stringify({
+        [sessionKey]: {
+          sessionId: previousSessionId,
+          sessionFile: path.join(config.sessionsDir, `${previousSessionId}.jsonl`),
+          status: 'failed',
+          systemSent: true,
+          contextTokens: 42,
+          inputTokens: 10,
+          outputTokens: 2,
+          totalTokens: 54,
+        },
+      }));
+      await fs.writeFile(path.join(config.sessionsDir, `${previousSessionId}.jsonl`), 'failed transcript\n');
+
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(mockGw.url + '/ws')}`,
+      );
+
+      await waitForMessage(ws);
+      ws.send(JSON.stringify({
+        type: 'req',
+        method: 'connect',
+        id: 'c-recover',
+        params: { auth: { token: 'test-token' }, client: { id: 'nerve-ui', mode: 'webchat' } },
+      }));
+      await waitForCondition(async () => mockGw.received.some((entry) => {
+        const data = entry.data as Record<string, unknown>;
+        return data.type === 'req' && data.method === 'connect';
+      }));
+
+      mockGw.clearReceived();
+      ws.send(JSON.stringify({
+        type: 'req',
+        method: 'chat.send',
+        id: 'send-1',
+        params: { sessionKey, message: 'hello' },
+      }));
+      await mockGw.expectMessages(1);
+
+      mockGw.broadcast(JSON.stringify({
+        type: 'res',
+        id: 'send-1',
+        ok: false,
+        error: {
+          code: 'invalid_encrypted_content',
+          message: 'invalid_encrypted_content: encrypted content could not be decrypted or parsed',
+        },
+      }));
+
+      await waitForCondition(async () => {
+        const store = JSON.parse(await fs.readFile(path.join(config.sessionsDir, 'sessions.json'), 'utf-8'));
+        return store[sessionKey].sessionId !== previousSessionId;
+      });
+
+      const store = JSON.parse(await fs.readFile(path.join(config.sessionsDir, 'sessions.json'), 'utf-8'));
+      const rotated = store[sessionKey];
+      expect(rotated.sessionId).not.toBe(previousSessionId);
+      expect(rotated.status).toBe('waiting');
+      expect(rotated.systemSent).toBe(false);
+      expect(rotated.contextTokens).toBe(0);
+      expect(rotated.lastRecovery).toMatchObject({
+        reason: 'rotate_after_invalid_encrypted_content_llm_failures',
+        previousSessionId,
+      });
+      await expect(fs.readFile(path.join(config.sessionsDir, `${previousSessionId}.jsonl`), 'utf-8')).resolves.toBe('failed transcript\n');
+      await expect(fs.readFile(path.join(config.sessionsDir, `${rotated.sessionId}.jsonl`), 'utf-8')).resolves.toBe('');
 
       ws.close();
     });
