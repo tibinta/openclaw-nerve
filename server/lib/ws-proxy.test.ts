@@ -417,6 +417,81 @@ describe('ws-proxy', () => {
 
       ws.close();
     });
+
+    it('rotates when invalid encrypted content is embedded in a successful chat response', async () => {
+      const sessionKey = 'agent:jane-whitmore---ceo:imessage:direct:+447494722196';
+      const previousSessionId = '14c6df3a-8e87-420a-a06b-30adf9732b88';
+      await fs.writeFile(path.join(config.sessionsDir, 'sessions.json'), JSON.stringify({
+        [sessionKey]: {
+          sessionId: previousSessionId,
+          sessionFile: path.join(config.sessionsDir, `${previousSessionId}.jsonl`),
+          status: 'failed',
+          systemSent: true,
+          contextTokens: 272000,
+          inputTokens: 31505,
+          outputTokens: 230,
+          totalTokens: 303735,
+        },
+      }));
+      await fs.writeFile(path.join(config.sessionsDir, `${previousSessionId}.jsonl`), 'failed transcript\n');
+
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(mockGw.url + '/ws')}`,
+      );
+
+      await waitForMessage(ws);
+      ws.send(JSON.stringify({
+        type: 'req',
+        method: 'connect',
+        id: 'c-recover-success',
+        params: { auth: { token: 'test-token' }, client: { id: 'nerve-ui', mode: 'webchat' } },
+      }));
+      await waitForCondition(async () => mockGw.received.some((entry) => {
+        const data = entry.data as Record<string, unknown>;
+        return data.type === 'req' && data.method === 'connect';
+      }));
+
+      mockGw.clearReceived();
+      ws.send(JSON.stringify({
+        type: 'req',
+        method: 'chat.send',
+        id: 'send-success-error',
+        params: { sessionKey, message: 'hello' },
+      }));
+      await mockGw.expectMessages(1);
+
+      mockGw.broadcast(JSON.stringify({
+        type: 'res',
+        id: 'send-success-error',
+        ok: true,
+        result: {
+          message: {
+            role: 'assistant',
+            content: [],
+            stopReason: 'error',
+            errorMessage: 'invalid_encrypted_content: encrypted content could not be decrypted or parsed',
+          },
+        },
+      }));
+
+      await waitForCondition(async () => {
+        const store = JSON.parse(await fs.readFile(path.join(config.sessionsDir, 'sessions.json'), 'utf-8'));
+        return store[sessionKey].sessionId !== previousSessionId;
+      });
+
+      const store = JSON.parse(await fs.readFile(path.join(config.sessionsDir, 'sessions.json'), 'utf-8'));
+      const rotated = store[sessionKey];
+      expect(rotated.sessionId).not.toBe(previousSessionId);
+      expect(rotated.status).toBe('waiting');
+      expect(rotated.systemSent).toBe(false);
+      expect(rotated.contextTokens).toBe(0);
+      expect(rotated.lastRecovery).toMatchObject({
+        reason: 'rotate_after_invalid_encrypted_content_llm_failures',
+        previousSessionId,
+      });
+
+      ws.close();
+    });
   });
 
   describe('auth enforcement', () => {

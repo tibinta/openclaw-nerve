@@ -90,6 +90,23 @@ function extractErrorText(value: unknown): string {
   return parts.join(' ');
 }
 
+function responseContainsInvalidEncryptedContent(value: Record<string, unknown>): boolean {
+  if (isInvalidEncryptedContentError(extractErrorText(value))) return true;
+  const result = value.result;
+  if (isRecord(result) && isInvalidEncryptedContentError(extractErrorText(result))) return true;
+  if (!isRecord(result)) return false;
+
+  const message = result.message;
+  if (isRecord(message) && isInvalidEncryptedContentError(extractErrorText(message))) return true;
+
+  const messages = result.messages;
+  if (Array.isArray(messages)) {
+    return messages.some((entry) => isRecord(entry) && isInvalidEncryptedContentError(extractErrorText(entry)));
+  }
+
+  return false;
+}
+
 /**
  * Old browser tabs can keep running a cached bundle after the server is fixed.
  * Clamp expensive control-ui requests at the proxy so a stale Nerve tab cannot
@@ -437,7 +454,10 @@ function createGatewayRelay(
               const sessionKey = chatSendRequests.get(msg.id);
               if (sessionKey) {
                 chatSendRequests.delete(msg.id);
-                if (msg.ok === false && isInvalidEncryptedContentError(extractErrorText(msg))) {
+                if (
+                  (msg.ok === false && isInvalidEncryptedContentError(extractErrorText(msg)))
+                  || responseContainsInvalidEncryptedContent(msg)
+                ) {
                   recoverInvalidEncryptedSession(sessionKey, 'chat.send response');
                 }
               }
