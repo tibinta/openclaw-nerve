@@ -737,7 +737,7 @@ describe('SessionContext', () => {
     });
   });
 
-  it('auto-compacts the current session once when context usage crosses 90 percent', async () => {
+  it('auto-compacts the current session once when context usage crosses 70 percent', async () => {
     let sessionsListCalls = 0;
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'sessions.list') {
@@ -747,7 +747,7 @@ describe('SessionContext', () => {
             {
               sessionKey: JANE_DIRECT_CHAT_SESSION_KEY,
               label: 'Jane Direct',
-              totalTokens: 91_000,
+              totalTokens: 71_000,
               contextTokens: 100_000,
             },
           ],
@@ -770,7 +770,7 @@ describe('SessionContext', () => {
     });
 
     await waitFor(() => {
-      expect(rpcMock).toHaveBeenCalledWith('sessions.compact', { sessionKey: JANE_DIRECT_CHAT_SESSION_KEY });
+      expect(rpcMock).toHaveBeenCalledWith('sessions.compact', { key: JANE_DIRECT_CHAT_SESSION_KEY });
     });
 
     const compactCallsBeforeRefresh = rpcMock.mock.calls.filter(([method]) => method === 'sessions.compact').length;

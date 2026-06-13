@@ -186,3 +186,5 @@ export function getContextLimit(_model: string): number {
 export const CONTEXT_WARNING_THRESHOLD = 75;
 /** Percentage of context used before showing a red critical warning. */
 export const CONTEXT_CRITICAL_THRESHOLD = 90;
+/** Percentage of context used before proactively compacting an idle session. */
+export const CONTEXT_AUTO_COMPACT_THRESHOLD = 70;

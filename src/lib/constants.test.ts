@@ -10,6 +10,7 @@ import {
   getContextLimit,
   CONTEXT_WARNING_THRESHOLD,
   CONTEXT_CRITICAL_THRESHOLD,
+  CONTEXT_AUTO_COMPACT_THRESHOLD,
   buildWakePhrases,
   buildPrimaryWakePhrase,
   buildStopPhrasesRegex,
@@ -317,6 +318,12 @@ describe('Model Context Limits', () => {
 });
 
 describe('Context Thresholds', () => {
+  describe('CONTEXT_AUTO_COMPACT_THRESHOLD', () => {
+    it('keeps 30 percent context headroom', () => {
+      expect(CONTEXT_AUTO_COMPACT_THRESHOLD).toBe(70);
+    });
+  });
+
   describe('CONTEXT_WARNING_THRESHOLD', () => {
     it('should be 75%', () => {
       expect(CONTEXT_WARNING_THRESHOLD).toBe(75);

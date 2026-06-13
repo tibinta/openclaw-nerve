@@ -3,7 +3,7 @@ import { createContext, useContext, useCallback, useRef, useEffect, useState, us
 import { useGateway } from './GatewayContext';
 import { useSettings } from './SettingsContext';
 import { getSessionKey, type Session, type AgentLogEntry, type EventEntry, type GatewayEvent, type EventPayload, type AgentEventPayload, type ChatEventPayload, type ContentBlock, type SessionsListResponse, type ChatMessage, type GranularAgentState } from '@/types';
-import { CONTEXT_CRITICAL_THRESHOLD } from '@/lib/constants';
+import { CONTEXT_AUTO_COMPACT_THRESHOLD } from '@/lib/constants';
 import { playPing } from '@/features/voice/audio-feedback';
 import { describeToolUse } from '@/utils/helpers';
 import { buildAgentSidebarTree, buildSessionTree } from '@/features/sessions/sessionTree';
@@ -649,14 +649,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (!sessionKey || totalTokens <= 0 || contextTokens <= 0) return;
 
     const percent = (totalTokens / contextTokens) * 100;
-    if (percent < CONTEXT_CRITICAL_THRESHOLD) return;
+    if (percent < CONTEXT_AUTO_COMPACT_THRESHOLD) return;
 
     const lastTriggeredTokens = autoCompactTokensRef.current[sessionKey] ?? 0;
     if (totalTokens <= lastTriggeredTokens) return;
 
     autoCompactTokensRef.current[sessionKey] = totalTokens;
 
-    void rpc('sessions.compact', { sessionKey })
+    void rpc('sessions.compact', { key: sessionKey })
       .then(() => {
         // Refresh after compaction so the UI and future threshold checks use the updated token count.
         void refreshSessions();
