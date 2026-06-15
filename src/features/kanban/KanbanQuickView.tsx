@@ -5,11 +5,12 @@
  */
 
 import { useMemo, useState, useCallback } from 'react';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Plus } from 'lucide-react';
 import type { KanbanTask, TaskStatus } from './types';
 import { COLUMN_LABELS } from './types';
-import { useKanban } from './hooks/useKanban';
+import { useKanban, type CreateTaskPayload } from './hooks/useKanban';
 import { TaskDetailDrawer } from './TaskDetailDrawer';
+import { CreateTaskDialog } from './CreateTaskDialog';
 import { getTaskPriorityTone, getTaskStatusTone } from './tone';
 
 /* ── Statuses shown in quick view ── */
@@ -83,6 +84,7 @@ export function KanbanQuickView({ onOpenBoard }: KanbanQuickViewProps) {
     statusCounts,
     loading,
     error,
+    createTask,
     updateTask,
     deleteTask,
     executeTask,
@@ -91,6 +93,7 @@ export function KanbanQuickView({ onOpenBoard }: KanbanQuickViewProps) {
     abortTask,
   } = useKanban();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [createTaskOpen, setCreateTaskOpen] = useState(false);
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
     [selectedTaskId, tasks],
@@ -107,6 +110,9 @@ export function KanbanQuickView({ onOpenBoard }: KanbanQuickViewProps) {
     await deleteTask(id);
     setSelectedTaskId(null);
   }, [deleteTask]);
+  const handleCreateTask = useCallback(async (payload: CreateTaskPayload) => {
+    await createTask(payload);
+  }, [createTask]);
 
   const sections = useMemo(() => {
     return QUICK_STATUSES.map(s => ({
@@ -123,24 +129,37 @@ export function KanbanQuickView({ onOpenBoard }: KanbanQuickViewProps) {
       {/* Header */}
       <div className="border-b border-border/40 px-3 py-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <span className="cockpit-kicker text-[0.6rem]">
               <span className="text-primary">◆</span>
               Kanban
             </span>
-          {totalActive > 0 && (
-            <span className="cockpit-badge" data-tone="primary">
-              {totalActive}
-            </span>
-          )}
-        </div>
-        <button
-          onClick={onOpenBoard}
-          className="cockpit-toolbar-button px-3 text-[0.733rem]"
-        >
-          Open Board
-          <ArrowRight size={11} />
-        </button>
+            {totalActive > 0 && (
+              <span className="cockpit-badge" data-tone="primary">
+                {totalActive}
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setCreateTaskOpen(true)}
+              className="cockpit-toolbar-button min-h-9 px-3 text-[0.733rem]"
+              aria-label="Add task"
+              title="Add task"
+            >
+              <Plus size={12} />
+              Add Task
+            </button>
+            <button
+              type="button"
+              onClick={onOpenBoard}
+              className="cockpit-toolbar-button px-3 text-[0.733rem]"
+            >
+              Open Board
+              <ArrowRight size={11} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -169,6 +188,11 @@ export function KanbanQuickView({ onOpenBoard }: KanbanQuickViewProps) {
           ) : null
         )}
       </div>
+      <CreateTaskDialog
+        open={createTaskOpen}
+        onOpenChange={setCreateTaskOpen}
+        onCreate={handleCreateTask}
+      />
       <TaskDetailDrawer
         task={selectedTask}
         onClose={() => setSelectedTaskId(null)}
