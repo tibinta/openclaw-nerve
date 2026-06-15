@@ -73,6 +73,23 @@ describe('TaskDetailDrawer', () => {
     expect(combobox.parentElement).not.toHaveClass('cockpit-input');
   });
 
+  it('can render task details as a centred modal instead of the narrow side drawer', () => {
+    render(
+      <TaskDetailDrawer
+        task={makeTask()}
+        variant="modal"
+        onClose={vi.fn()}
+        onUpdate={vi.fn(async () => makeTask())}
+        onDelete={vi.fn(async () => {})}
+      />,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'Task details' });
+    expect(dialog).toHaveClass('left-1/2');
+    expect(dialog).toHaveClass('w-[min(94vw,980px)]');
+    expect(dialog).not.toHaveClass('right-0');
+  });
+
   it('shows a disabled stale-current option when the current assignee is no longer active', async () => {
     const user = userEvent.setup();
     renderDrawer(makeTask({ assignee: 'agent:ghost-reviewer' }));

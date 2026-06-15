@@ -195,6 +195,7 @@ export function KanbanQuickView({ onOpenBoard }: KanbanQuickViewProps) {
       />
       <TaskDetailDrawer
         task={selectedTask}
+        variant="modal"
         onClose={() => setSelectedTaskId(null)}
         onUpdate={updateTask}
         onDelete={handleDeleteTask}

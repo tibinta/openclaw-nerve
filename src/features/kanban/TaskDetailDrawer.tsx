@@ -100,6 +100,7 @@ function normalizeFeedbackForSave(feedback: TaskFeedback[]): Array<{ at: number;
 interface TaskDetailDrawerProps {
   task: KanbanTask | null;
   onClose: () => void;
+  variant?: 'drawer' | 'modal';
   onUpdate: (id: string, payload: UpdateTaskPayload) => Promise<KanbanTask>;
   onDelete: (id: string) => Promise<void>;
   parentTask?: KanbanTask | null;
@@ -115,6 +116,7 @@ interface TaskDetailDrawerProps {
 export function TaskDetailDrawer({
   task,
   onClose,
+  variant = 'drawer',
   onUpdate,
   onDelete,
   parentTask = null,
@@ -521,6 +523,7 @@ export function TaskDetailDrawer({
   }, [task?.id]);
 
   const isOpen = task !== null;
+  const isModal = variant === 'modal';
   const assigneeOptions = useMemo(
     () => buildAssigneeOptionsForEdit(sessions, task?.assignee ?? null, agentName),
     [agentName, sessions, task?.assignee],
@@ -528,6 +531,13 @@ export function TaskDetailDrawer({
 
   const selectClass = 'cockpit-select h-11 text-sm';
   const priorityTone = task ? getTaskPriorityTone(editPriority) : null;
+  const panelClassName = isModal
+    ? `shell-panel fixed left-1/2 top-1/2 z-50 flex h-[min(88vh,920px)] w-[min(94vw,980px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[28px] border border-border/70 shadow-[0_36px_90px_rgba(0,0,0,0.42)] transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        isOpen ? 'scale-100 opacity-100' : 'pointer-events-none scale-95 opacity-0'
+      }`
+    : `shell-panel fixed top-0 right-0 z-50 flex h-full w-[min(92vw,520px)] max-w-full flex-col overflow-hidden rounded-l-[32px] border-l border-border/70 shadow-[0_28px_72px_rgba(0,0,0,0.36)] transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        isOpen ? 'translate-x-0' : 'translate-x-full'
+      }`;
 
   return (
     <>
@@ -545,9 +555,7 @@ export function TaskDetailDrawer({
         role="dialog"
         aria-modal="true"
         aria-label="Task details"
-        className={`shell-panel fixed top-0 right-0 z-50 flex h-full w-[min(92vw,520px)] max-w-full flex-col overflow-hidden rounded-l-[32px] border-l border-border/70 shadow-[0_28px_72px_rgba(0,0,0,0.36)] transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${
-          isOpen ? 'translate-x-0' : 'translate-x-full'
-        }`}
+        className={panelClassName}
       >
         {task && (
           <>
@@ -563,7 +571,7 @@ export function TaskDetailDrawer({
               <button
                 onClick={safeClose}
                 className="shell-icon-button size-9 px-0"
-                aria-label="Close drawer"
+                aria-label={isModal ? 'Close task details' : 'Close drawer'}
               >
                 <X size={16} />
               </button>
