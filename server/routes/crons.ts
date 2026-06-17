@@ -27,15 +27,34 @@ const scheduleSchema = z.union([
 
 const payloadSchema = z.union([
   z.object({ kind: z.literal('systemEvent'), text: z.string() }),
-  z.object({ kind: z.literal('agentTurn'), message: z.string(), model: z.string().optional(), thinking: z.string().optional(), timeoutSeconds: z.number().optional() }),
+  z.object({
+    kind: z.literal('agentTurn'),
+    message: z.string(),
+    model: z.string().optional(),
+    thinking: z.string().optional(),
+    timeoutSeconds: z.number().optional(),
+    lightContext: z.boolean().optional(),
+  }),
+  z.object({
+    kind: z.literal('command'),
+    argv: z.array(z.string()),
+    cwd: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    input: z.string().optional(),
+    timeoutSeconds: z.number().optional(),
+    noOutputTimeoutSeconds: z.number().optional(),
+    outputMaxBytes: z.number().optional(),
+  }),
 ]);
 
 const deliverySchema = z.object({
   mode: z.enum(['none', 'announce']).optional(),
   channel: z.string().optional(),
   to: z.string().optional(),
+  accountId: z.string().optional(),
+  threadId: z.string().optional(),
   bestEffort: z.boolean().optional(),
-}).optional();
+}).passthrough().optional();
 
 const sessionAgentIdSchema = z.string().max(200).optional();
 
@@ -326,6 +345,24 @@ async function getGatewayCronRunEntries(jobId: string): Promise<Record<string, u
   }
 }
 
+async function gatewayCronUpdate(jobId: string, patch: Record<string, unknown>): Promise<unknown> {
+  try {
+    return await gatewayRpcCall('cron.update', {
+      id: jobId,
+      patch,
+    }, GATEWAY_RUN_TIMEOUT_MS);
+  } catch (err) {
+    const message = (err as Error).message || '';
+    if (!/required property 'jobId'|unexpected property 'id'/.test(message)) {
+      throw err;
+    }
+    return gatewayRpcCall('cron.update', {
+      jobId,
+      patch,
+    }, GATEWAY_RUN_TIMEOUT_MS);
+  }
+}
+
 function deriveAgentIdFromSessionKey(sessionKey?: string): string | undefined {
   if (!sessionKey) return undefined;
   const match = sessionKey.match(/^agent:([^:]+):/);
@@ -341,16 +378,56 @@ function normalizeCronTarget<T extends CronMutationInput>(job: T): T {
   const agentId = deriveAgentIdFromSessionKey(cleanedJob.sessionKey);
   const normalizedAgentId = agentId ?? cleanedJob.agentId;
   const normalizedJob = agentId ? { ...cleanedJob, agentId } : { ...cleanedJob };
-  const payload = (normalizedJob.payload || {}) as Record<string, unknown>;
+  const hasPayload = normalizedJob.payload !== undefined;
+  const payload = { ...((normalizedJob.payload || {}) as Record<string, unknown>) };
   const thinkingLevel = typeof normalizedJob.thinkingLevel === 'string'
     ? normalizedJob.thinkingLevel.trim()
     : '';
+  const topLevelModel = typeof normalizedJob.model === 'string'
+    ? normalizedJob.model.trim()
+    : '';
+  const topLevelTimeoutSeconds = typeof normalizedJob.timeoutSeconds === 'number'
+    ? normalizedJob.timeoutSeconds
+    : undefined;
+  if (payload.kind === 'agentTurn') {
+    if (topLevelModel && typeof payload.model !== 'string') payload.model = topLevelModel;
+    if (topLevelTimeoutSeconds !== undefined && typeof payload.timeoutSeconds !== 'number') {
+      payload.timeoutSeconds = topLevelTimeoutSeconds;
+    }
+    if (typeof normalizedJob.lightContext === 'boolean' && typeof payload.lightContext !== 'boolean') {
+      payload.lightContext = normalizedJob.lightContext;
+    }
+  }
   const payloadWithThinking = thinkingLevel && payload.kind === 'agentTurn'
     // The gateway accepts thinking on the payload shape, not as a top-level field.
     ? { ...payload, thinking: thinkingLevel }
     : payload;
   const jobWithoutThinkingLevel = { ...normalizedJob } as Record<string, unknown>;
   delete jobWithoutThinkingLevel.thinkingLevel;
+  delete jobWithoutThinkingLevel.model;
+  delete jobWithoutThinkingLevel.timeoutSeconds;
+  delete jobWithoutThinkingLevel.lightContext;
+  delete jobWithoutThinkingLevel.failureAlerts;
+
+  if (typeof jobWithoutThinkingLevel.bestEffortDelivery === 'boolean') {
+    const delivery = {
+      ...((jobWithoutThinkingLevel.delivery || {}) as Record<string, unknown>),
+      bestEffort: jobWithoutThinkingLevel.bestEffortDelivery,
+    };
+    jobWithoutThinkingLevel.delivery = delivery;
+    delete jobWithoutThinkingLevel.bestEffortDelivery;
+  }
+
+  if (typeof jobWithoutThinkingLevel.accountId === 'string' && jobWithoutThinkingLevel.accountId.trim()) {
+    const delivery = {
+      ...((jobWithoutThinkingLevel.delivery || {}) as Record<string, unknown>),
+      accountId: jobWithoutThinkingLevel.accountId.trim(),
+    };
+    jobWithoutThinkingLevel.delivery = delivery;
+    delete jobWithoutThinkingLevel.accountId;
+  } else {
+    delete jobWithoutThinkingLevel.accountId;
+  }
 
   if (
     normalizedAgentId
@@ -360,10 +437,17 @@ function normalizeCronTarget<T extends CronMutationInput>(job: T): T {
   ) {
     // Gateway only permits root `main` targeting for the default agent. Keep
     // saved agent cron edits recoverable by preserving the agent and isolating the run.
-    return { ...jobWithoutThinkingLevel, payload: payloadWithThinking, sessionTarget: 'isolated' } as T;
+    return {
+      ...jobWithoutThinkingLevel,
+      ...(hasPayload ? { payload: payloadWithThinking } : {}),
+      sessionTarget: 'isolated',
+    } as T;
   }
 
-  return { ...jobWithoutThinkingLevel, payload: payloadWithThinking } as T;
+  return {
+    ...jobWithoutThinkingLevel,
+    ...(hasPayload ? { payload: payloadWithThinking } : {}),
+  } as T;
 }
 
 function isIsolatedAgentTurnCron(job: Record<string, unknown>): boolean {
@@ -425,10 +509,7 @@ app.patch('/api/crons/:id', rateLimitGeneral, async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: parsed.error.issues[0]?.message || 'Invalid body' }, 400);
     const body = parsed.data;
     const normalizedPatch = normalizeCronTarget(body.patch);
-    const result = await gatewayRpcCall('cron.update', {
-      id,
-      patch: normalizedPatch,
-    }, GATEWAY_RUN_TIMEOUT_MS);
+    const result = await gatewayCronUpdate(id, normalizedPatch);
     return c.json({ ok: true, result });
   } catch (err) {
     console.error('[crons] update error:', (err as Error).message);
@@ -454,10 +535,7 @@ app.post('/api/crons/:id/toggle', rateLimitGeneral, async (c) => {
   // Get current state first, then flip
   try {
     const body = await c.req.json<{ enabled: boolean }>().catch(() => ({ enabled: true }));
-    const result = await gatewayRpcCall('cron.update', {
-      id,
-      patch: { enabled: body.enabled },
-    }, GATEWAY_RUN_TIMEOUT_MS);
+    const result = await gatewayCronUpdate(id, { enabled: body.enabled });
     return c.json({ ok: true, result });
   } catch (err) {
     console.error('[crons] toggle error:', (err as Error).message);

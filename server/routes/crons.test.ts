@@ -123,15 +123,16 @@ describe('cron routes', () => {
           kind: 'systemEvent',
           text: 'Post reminder',
         },
-        delivery: { mode: 'announce', bestEffort: true, channel: 'slack', to: '#ops' },
+        delivery: { mode: 'announce', bestEffort: true, channel: 'slack', to: '#ops', accountId: 'acc-123' },
         wakeMode: 'now',
         deleteAfterRun: true,
-        accountId: 'acc-123',
-        lightContext: true,
-        failureAlerts: 'off',
-        bestEffortDelivery: true,
       }),
     });
+    const gatewayJob = (invokeGatewayTool.mock.calls[0]?.[1] as { job?: Record<string, unknown> } | undefined)?.job;
+    expect(gatewayJob).not.toHaveProperty('accountId');
+    expect(gatewayJob).not.toHaveProperty('lightContext');
+    expect(gatewayJob).not.toHaveProperty('failureAlerts');
+    expect(gatewayJob).not.toHaveProperty('bestEffortDelivery');
   });
 
   it('moves top-level thinkingLevel into the payload before saving', async () => {
@@ -262,6 +263,90 @@ describe('cron routes', () => {
     expect(patch).not.toHaveProperty('jobId');
     expect(patch).not.toHaveProperty('clearAgentOverride');
     expect(patch).not.toHaveProperty('state');
+  });
+
+  it('moves legacy top-level agent options into the gateway payload when updating', async () => {
+    const { app, gatewayRpcCall } = await buildApp();
+
+    const res = await app.request('/api/crons/job-123', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patch: {
+          name: 'Tasks and Targets',
+          schedule: { kind: 'every', everyMs: 300000 },
+          sessionTarget: 'isolated',
+          sessionKey: 'agent:jane-whitmore---ceo:main',
+          payload: { kind: 'agentTurn', message: 'Check tasks' },
+          lightContext: true,
+          model: 'openai/gpt-5.1-codex',
+          timeoutSeconds: 180,
+          thinkingLevel: 'medium',
+          bestEffortDelivery: true,
+          accountId: 'imessage-main',
+          failureAlerts: 'off',
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(gatewayRpcCall).toHaveBeenCalledWith('cron.update', {
+      id: 'job-123',
+      patch: {
+        agentId: 'jane-whitmore---ceo',
+        name: 'Tasks and Targets',
+        schedule: { kind: 'every', everyMs: 300000 },
+        sessionTarget: 'isolated',
+        sessionKey: 'agent:jane-whitmore---ceo:main',
+        payload: {
+          kind: 'agentTurn',
+          message: 'Check tasks',
+          lightContext: true,
+          model: 'openai/gpt-5.1-codex',
+          timeoutSeconds: 180,
+          thinking: 'medium',
+        },
+        delivery: {
+          bestEffort: true,
+          accountId: 'imessage-main',
+        },
+      },
+    }, 60000);
+    const patch = (gatewayRpcCall.mock.calls[0]?.[1] as { patch?: Record<string, unknown> } | undefined)?.patch;
+    expect(patch).not.toHaveProperty('lightContext');
+    expect(patch).not.toHaveProperty('model');
+    expect(patch).not.toHaveProperty('timeoutSeconds');
+    expect(patch).not.toHaveProperty('thinkingLevel');
+    expect(patch).not.toHaveProperty('bestEffortDelivery');
+    expect(patch).not.toHaveProperty('accountId');
+    expect(patch).not.toHaveProperty('failureAlerts');
+  });
+
+  it('falls back to jobId when a gateway requires the alternate update id field', async () => {
+    const { app, gatewayRpcCall } = await buildApp();
+    gatewayRpcCall.mockImplementationOnce(async () => {
+      throw new Error("invalid cron.update params: at root: unexpected property 'id'; must have required property 'jobId'");
+    }).mockImplementationOnce(async () => ({ ok: true }));
+
+    const res = await app.request('/api/crons/job-123', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patch: {
+          enabled: true,
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(gatewayRpcCall).toHaveBeenNthCalledWith(1, 'cron.update', {
+      id: 'job-123',
+      patch: { enabled: true },
+    }, 60000);
+    expect(gatewayRpcCall).toHaveBeenNthCalledWith(2, 'cron.update', {
+      jobId: 'job-123',
+      patch: { enabled: true },
+    }, 60000);
   });
 
   it('runs isolated agentTurn jobs through sessions_spawn', async () => {
