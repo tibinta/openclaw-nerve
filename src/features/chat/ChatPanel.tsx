@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, type ReactNode } from 'react';
 import type { ProcessingStage, ActivityLogEntry, ChatStreamState } from '@/contexts/ChatContext';
 import { ToolCallBlock } from './ToolCallBlock';
 import { MessageBubble } from './MessageBubble';
@@ -45,6 +45,8 @@ interface ChatPanelProps {
   onOpenWorkspacePath?: (path: string) => void | Promise<void>;
   /** Configured path prefixes that should render as clickable inline path links. */
   pathLinkPrefixes?: string[];
+  /** High-priority approvals that must stay visible while the user is in chat. */
+  approvalBanner?: ReactNode;
 }
 
 export interface ChatPanelHandle {
@@ -62,6 +64,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
   onToggleMobileTopBar, isMobileTopBarHidden = false,
   onOpenWorkspacePath,
   pathLinkPrefixes,
+  approvalBanner,
 }, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -261,6 +264,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
           onClose={handleSearchClose}
         />
       )}
+
+      {approvalBanner}
 
       {/* Messages */}
       <div

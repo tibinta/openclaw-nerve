@@ -24,6 +24,7 @@ import { getSessionKey } from '@/types';
 import { useConnectionManager } from '@/hooks/useConnectionManager';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { useGatewayRestart } from '@/hooks/useGatewayRestart';
+import { ApprovalBanner, useApprovals } from '@/features/approvals';
 import { TopBar } from '@/components/TopBar';
 import { StatusBar } from '@/components/StatusBar';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -94,6 +95,7 @@ export default function App({ onLogout }: AppProps) {
   const {
     connectionState, model, sparkline,
   } = useGateway();
+  const approvalState = useApprovals();
 
   // Session state
   const {
@@ -709,6 +711,14 @@ export default function App({ onLogout }: AppProps) {
             isMobileTopBarHidden={isMobileTopBarHidden}
             onOpenWorkspacePath={openWorkspacePath}
             pathLinkPrefixes={chatPathLinkPrefixes}
+            approvalBanner={
+              <ApprovalBanner
+                pendingApprovals={approvalState.pendingApprovals}
+                resolvingKeys={approvalState.resolvingKeys}
+                error={approvalState.error}
+                onDecision={approvalState.resolveApproval}
+              />
+            }
           />
         </PanelErrorBoundary>
       }
