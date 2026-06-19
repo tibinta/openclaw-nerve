@@ -45,6 +45,19 @@ describe('ApprovalBanner', () => {
     expect(onDecision).toHaveBeenCalledWith(expect.objectContaining({ id: 'exec-1', kind: 'exec' }), 'allow-once');
   });
 
+  it('labels allow-always as a session-scoped action', () => {
+    render(
+      <ApprovalBanner
+        pendingApprovals={[commandApproval({ allowedDecisions: ['allow-once', 'allow-always', 'deny'] })]}
+        resolvingKeys={new Set()}
+        onDecision={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /allow session/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /always allow/i })).toBeFalsy();
+  });
+
   it('shows the queue count when more than one approval is waiting', () => {
     render(
       <ApprovalBanner

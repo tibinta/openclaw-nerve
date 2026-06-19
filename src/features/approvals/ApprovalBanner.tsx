@@ -25,7 +25,7 @@ function formatTimeLeft(expiresAtMs: number): string {
 
 function decisionLabel(decision: ApprovalDecision): string {
   if (decision === 'allow-once') return 'Allow once';
-  if (decision === 'allow-always') return 'Always allow';
+  if (decision === 'allow-always') return 'Allow session';
   return 'Deny';
 }
 
