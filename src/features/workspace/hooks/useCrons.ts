@@ -146,6 +146,16 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
   };
 }
 
+function cronLastRunMs(job: CronJob): number {
+  if (!job.lastRun) return 0;
+  const time = Date.parse(job.lastRun);
+  return Number.isFinite(time) ? time : 0;
+}
+
+export function sortCronJobsByLastRun(jobs: CronJob[]): CronJob[] {
+  return [...jobs].sort((a, b) => cronLastRunMs(b) - cronLastRunMs(a));
+}
+
 function getEventSessionKey(msg: GatewayEvent): string {
   const payload = msg.payload as { sessionKey?: unknown } | undefined;
   return typeof payload?.sessionKey === 'string' ? payload.sessionKey : '';
@@ -213,7 +223,7 @@ export function useCrons() {
       if (!data.ok) throw new Error(data.error || 'Failed to fetch crons');
       const rawJobs = extractCronJobsFromResult(data.result);
       if (seq === fetchSeqRef.current) {
-        setJobs((rawJobs as Record<string, unknown>[]).map(normalizeCronJob));
+        setJobs(sortCronJobsByLastRun((rawJobs as Record<string, unknown>[]).map(normalizeCronJob)));
         setError(null);
         setCronWarning(null);
       }
@@ -290,11 +300,11 @@ export function useCrons() {
       const data = await res.json() as { ok: boolean; error?: string };
       if (!data.ok) throw new Error(data.error || 'Failed to run');
       const nowIso = new Date().toISOString();
-      setJobs(prev => prev.map(job => (
+      setJobs(prev => sortCronJobsByLastRun(prev.map(job => (
         job.id === id
           ? { ...job, lastRun: nowIso }
           : job
-      )));
+      ))));
       return true;
     } catch (err) {
       setErrorState(err);

@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayEvent } from '@/types';
-import { getCronWarning, normalizeCronJob, useCrons } from './useCrons';
+import { getCronWarning, normalizeCronJob, sortCronJobsByLastRun, useCrons } from './useCrons';
 
 const gatewayMocks = vi.hoisted(() => ({
   connectionState: 'connected' as 'disconnected' | 'connecting' | 'connected' | 'reconnecting',
@@ -66,6 +66,32 @@ describe('normalizeCronJob', () => {
 
     expect(job.sessionTarget).toBeUndefined();
     expect(job.sessionKey).toBeUndefined();
+  });
+});
+
+describe('sortCronJobsByLastRun', () => {
+  it('puts recently used cron jobs first and never-run jobs last', () => {
+    const oldJob = normalizeCronJob({
+      id: 'old',
+      schedule: { kind: 'every', everyMs: 60000 },
+      payload: { kind: 'agentTurn', message: 'Old' },
+      state: { lastRunAtMs: 1000 },
+    });
+    const neverRunJob = normalizeCronJob({
+      id: 'never',
+      schedule: { kind: 'every', everyMs: 60000 },
+      payload: { kind: 'agentTurn', message: 'Never' },
+      state: {},
+    });
+    const recentJob = normalizeCronJob({
+      id: 'recent',
+      schedule: { kind: 'every', everyMs: 60000 },
+      payload: { kind: 'agentTurn', message: 'Recent' },
+      state: { lastRunAtMs: 3000 },
+    });
+
+    expect(sortCronJobsByLastRun([oldJob, neverRunJob, recentJob]).map((job) => job.id))
+      .toEqual(['recent', 'old', 'never']);
   });
 });
 
