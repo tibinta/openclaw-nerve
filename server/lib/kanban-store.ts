@@ -1048,6 +1048,11 @@ export class KanbanStore {
     const labels = task.labels.length > 0 ? task.labels.join(', ') : 'none';
     const assignee = task.assignee ?? 'operator';
     const description = task.description?.trim() || 'No description yet.';
+    const optionalMetadata = [
+      Number.isFinite(task.dueAt) ? `dueAt: ${task.dueAt}` : '',
+      Number.isFinite(task.estimateMin) ? `estimateMin: ${task.estimateMin}` : '',
+      Number.isFinite(task.actualMin) ? `actualMin: ${task.actualMin}` : '',
+    ].filter(Boolean);
     const evidence = task.evidence_links?.length
       ? task.evidence_links.map((link) => `- ${link}`).join('\n')
       : '- none';
@@ -1074,9 +1079,12 @@ export class KanbanStore {
       `status: ${task.status}`,
       `priority: ${task.priority}`,
       `assignee: ${assignee}`,
+      `createdAt: ${task.createdAt}`,
       `version: ${task.version}`,
       `updatedAt: ${task.updatedAt}`,
+      `columnOrder: ${task.columnOrder}`,
       `labels: ${labels}`,
+      ...optionalMetadata,
       '---',
       '',
       `# ${task.title}`,
@@ -1158,6 +1166,12 @@ export class KanbanStore {
       const value = Number(frontmatter.get(key));
       return Number.isFinite(value) ? value : fallbackValue;
     };
+    const optionalNumberFromFrontmatter = (key: string, fallbackValue?: number): number | undefined => {
+      const raw = frontmatter.get(key);
+      if (raw == null || raw === '') return fallbackValue;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : fallbackValue;
+    };
 
     const now = Date.now();
     return normalizeTaskRun({
@@ -1179,9 +1193,9 @@ export class KanbanStore {
       resultAt: fallback?.resultAt,
       model: fallback?.model,
       thinking: fallback?.thinking,
-      dueAt: fallback?.dueAt,
-      estimateMin: fallback?.estimateMin,
-      actualMin: fallback?.actualMin,
+      dueAt: optionalNumberFromFrontmatter('dueAt', fallback?.dueAt),
+      estimateMin: optionalNumberFromFrontmatter('estimateMin', fallback?.estimateMin),
+      actualMin: optionalNumberFromFrontmatter('actualMin', fallback?.actualMin),
       feedback,
       evidence_links: evidence.length > 0 ? evidence : fallback?.evidence_links,
       proof_gate: fallback?.proof_gate,

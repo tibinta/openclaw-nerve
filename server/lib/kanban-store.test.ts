@@ -174,6 +174,34 @@ describe('createTask', () => {
     expect(task.sourceSessionKey).toBe('sess-123');
   });
 
+  it('rebuilds task timing metadata from Markdown without JSON fallback', async () => {
+    const task = await createSampleTask({
+      title: 'Timed task',
+      status: 'in-progress',
+      dueAt: 9999999,
+      estimateMin: 30,
+    });
+
+    const taskDir = path.join(tmpDir, 'tasks', task.status, task.id);
+    const markdownPath = path.join(taskDir, 'task.md');
+    const markdown = fs.readFileSync(markdownPath, 'utf-8');
+    expect(markdown).toContain('dueAt: 9999999');
+    expect(markdown).toContain('estimateMin: 30');
+    expect(markdown).toContain(`createdAt: ${task.createdAt}`);
+    expect(markdown).toContain(`columnOrder: ${task.columnOrder}`);
+
+    await fs.promises.unlink(path.join(taskDir, '.cache', 'task.cache'));
+    await fs.promises.unlink(filePath);
+
+    const markdownStore = new KanbanStore(filePath);
+    await markdownStore.init();
+    const rebuilt = await markdownStore.getTask(task.id);
+    expect(rebuilt.dueAt).toBe(9999999);
+    expect(rebuilt.estimateMin).toBe(30);
+    expect(rebuilt.createdAt).toBe(task.createdAt);
+    expect(rebuilt.columnOrder).toBe(task.columnOrder);
+  });
+
   it('canonicalizes assignee on create', async () => {
     const task = await createSampleTask({ assignee: 'agent:reviewer:main' });
     expect(task.assignee).toBe('agent:reviewer');
