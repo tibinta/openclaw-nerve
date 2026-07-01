@@ -8,6 +8,10 @@
 import { getTTSConfig } from '../lib/tts-config.js';
 import { DEFAULT_HOLLER_VOICE } from '../lib/voice-providers.js';
 
+const HOLLER_SYNTHESIS_BASE_TIMEOUT_MS = 30_000;
+const HOLLER_SYNTHESIS_TIMEOUT_MS_PER_CHAR = 80;
+const HOLLER_SYNTHESIS_MAX_TIMEOUT_MS = 90_000;
+
 export interface HollerTTSResult {
   ok: true;
   buf: Buffer;
@@ -43,6 +47,11 @@ function buildPayload(text: string, voice?: string): Record<string, string | num
     n_codebooks: parseCodebooks(cfg.nCodebooks),
     continue: false,
   };
+}
+
+export function getHollerSynthesisTimeoutMs(text: string): number {
+  const timeout = HOLLER_SYNTHESIS_BASE_TIMEOUT_MS + text.length * HOLLER_SYNTHESIS_TIMEOUT_MS_PER_CHAR;
+  return Math.min(HOLLER_SYNTHESIS_MAX_TIMEOUT_MS, timeout);
 }
 
 /** Stream raw Float32 PCM from Holler `/speak`. */
@@ -87,7 +96,8 @@ export async function synthesizeHoller(text: string, voice?: string): Promise<Ho
   url.searchParams.set('voice', voice || cfg.voice || DEFAULT_HOLLER_VOICE);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  // ponytail: local Holler can exceed 15s on long, useful voice lines at richer codebook settings.
+  const timeout = setTimeout(() => controller.abort(), getHollerSynthesisTimeoutMs(text));
   try {
     const resp = await fetch(url, { signal: controller.signal });
     if (!resp.ok) {
