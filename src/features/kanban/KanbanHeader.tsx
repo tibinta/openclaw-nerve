@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useRef, useEffect } from 'react';
-import { Filter, Plus, X, Inbox } from 'lucide-react';
+import { Archive, Filter, Plus, X, Inbox } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { TaskStatus, TaskPriority } from './types';
 import type { KanbanFilters } from './hooks/useKanban';
@@ -51,22 +51,26 @@ interface KanbanHeaderProps {
   filters: KanbanFilters;
   onFiltersChange: (filters: KanbanFilters) => void;
   statusCounts: Record<TaskStatus, number>;
+  workflowCounts?: { queue: number; active: number; archive: number };
   onCreateTask: () => void;
   proposals?: KanbanProposal[];
   pendingProposalCount?: number;
   onApproveProposal?: (id: string) => void;
   onRejectProposal?: (id: string) => void;
+  onArchiveDone?: () => void;
 }
 
 export const KanbanHeader = memo(function KanbanHeader({
   filters,
   onFiltersChange,
   statusCounts,
+  workflowCounts,
   onCreateTask,
   proposals = [],
   pendingProposalCount = 0,
   onApproveProposal,
   onRejectProposal,
+  onArchiveDone,
 }: KanbanHeaderProps) {
   const [showFilters, setShowFilters] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
@@ -116,7 +120,12 @@ export const KanbanHeader = memo(function KanbanHeader({
     onFiltersChange({ q: '', priority: [], assignee: '', labels: [] });
   }, [onFiltersChange]);
 
-  const hasActiveFilters = filters.q || filters.priority.length > 0 || filters.assignee || filters.labels.length > 0;
+  const labels = Array.isArray(filters.labels) ? filters.labels : [];
+  const hasActiveFilters = filters.q || filters.priority.length > 0 || filters.assignee || labels.length > 0;
+
+  const queueCount = workflowCounts?.queue ?? ((statusCounts.backlog || 0) + (statusCounts.todo || 0));
+  const activeCount = workflowCounts?.active ?? ((statusCounts['in-progress'] || 0) + (statusCounts.review || 0));
+  const archiveCount = workflowCounts?.archive ?? (statusCounts.done || 0);
 
   return (
     <div className="shrink-0 space-y-3 border-b border-border/50 px-4 py-4">
@@ -131,10 +140,9 @@ export const KanbanHeader = memo(function KanbanHeader({
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-lg font-semibold tracking-[-0.03em] text-foreground">Tasks</h1>
             <div className="hidden sm:flex items-center gap-1.5">
-              <StatChip label="To Do" count={statusCounts.todo} status="todo" />
-              <StatChip label="In Progress" count={statusCounts['in-progress']} status="in-progress" />
-              <StatChip label="Review" count={statusCounts.review} status="review" />
-              <StatChip label="Done" count={statusCounts.done} status="done" />
+              <StatChip label="Queue" count={queueCount} status="backlog" />
+              <StatChip label="Active" count={activeCount} status="in-progress" />
+              <StatChip label="Archive" count={archiveCount} status="done" />
             </div>
           </div>
         </div>
@@ -142,15 +150,15 @@ export const KanbanHeader = memo(function KanbanHeader({
         <div className="flex-1" />
 
         {/* Right: search + filter toggle + create */}
-        <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap">
+        <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:max-w-[560px] sm:items-end">
           {/* Search */}
-          <div className="relative min-w-0 flex-1 sm:flex-none">
+          <div className="relative min-w-0 w-full sm:w-[280px]">
             <input
               type="text"
               value={searchValue}
               onChange={e => handleSearchChange(e.target.value)}
               placeholder="Search tasks…"
-              className="cockpit-input h-10 w-full min-w-0 px-4 pr-12 text-sm sm:w-[280px]"
+              className="cockpit-input h-10 w-full min-w-0 px-4 pr-12 text-sm"
             />
             {searchValue && (
               <button
@@ -162,60 +170,71 @@ export const KanbanHeader = memo(function KanbanHeader({
             )}
           </div>
 
-          {/* Filter toggle */}
-          <Button
-            variant={showFilters ? 'secondary' : 'outline'}
-            size="icon-sm"
-            onClick={() => setShowFilters(!showFilters)}
-            title="Toggle filters"
-            className={showFilters ? 'border-primary/30 bg-primary/12 text-primary' : ''}
-          >
-            <Filter size={14} />
-          </Button>
-
-          {/* Proposal inbox */}
-          <div className="relative" ref={inboxRef}>
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap">
+            {/* Filter toggle */}
             <Button
-              variant={showInbox ? 'secondary' : 'outline'}
+              variant={showFilters ? 'secondary' : 'outline'}
               size="icon-sm"
-              onClick={() => setShowInbox(!showInbox)}
-              title="Agent proposals"
-              className={showInbox ? 'border-primary/30 bg-primary/12 text-primary' : ''}
+              onClick={() => setShowFilters(!showFilters)}
+              title="Toggle filters"
+              className={showFilters ? 'border-primary/30 bg-primary/12 text-primary' : ''}
             >
-              <Inbox size={14} />
-              {pendingProposalCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 text-[0.667rem] font-bold bg-primary text-primary-foreground rounded-full flex items-center justify-center">
-                  {pendingProposalCount}
-                </span>
-              )}
+              <Filter size={14} />
             </Button>
 
-            {/* Inbox popover */}
-            {showInbox && (
-              <div className="shell-panel absolute right-0 top-full z-50 mt-2 w-[min(360px,calc(100vw-1.067rem))] max-w-[calc(100vw-1.067rem)] overflow-hidden rounded-3xl">
-                <div className="border-b border-border/50 bg-secondary/38 px-4 py-3">
-                  <span className="cockpit-kicker text-[0.6rem]">
-                    <span className="text-primary">◆</span>
-                    Agent proposals
+            {/* Proposal inbox */}
+            <div className="relative" ref={inboxRef}>
+              <Button
+                variant={showInbox ? 'secondary' : 'outline'}
+                size="icon-sm"
+                onClick={() => setShowInbox(!showInbox)}
+                title="Agent proposals"
+                className={showInbox ? 'border-primary/30 bg-primary/12 text-primary' : ''}
+              >
+                <Inbox size={14} />
+                {pendingProposalCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 text-[0.667rem] font-bold bg-primary text-primary-foreground rounded-full flex items-center justify-center">
+                    {pendingProposalCount}
                   </span>
-                  {pendingProposalCount > 0 && (
-                    <span className="ml-2 text-[0.733rem] text-muted-foreground">{pendingProposalCount} pending</span>
-                  )}
-                </div>
-                <ProposalInbox
-                  proposals={proposals}
-                  onApprove={(id) => onApproveProposal?.(id)}
-                  onReject={(id) => onRejectProposal?.(id)}
-                />
-              </div>
-            )}
-          </div>
+                )}
+              </Button>
 
-          {/* Create */}
-          <Button size="sm" onClick={onCreateTask}>
-            <Plus size={14} />
-            <span className="hidden sm:inline">New Task</span>
-          </Button>
+              {/* Inbox popover */}
+              {showInbox && (
+                <div
+                  className="shell-panel fixed left-2 right-2 top-20 z-50 max-h-[calc(100vh-6rem)] overflow-hidden rounded-2xl sm:left-6 sm:right-6 lg:left-8 lg:right-8"
+                  role="dialog"
+                  aria-label="Agent proposals"
+                >
+                  <div className="border-b border-border/50 bg-secondary/38 px-4 py-3">
+                    <span className="cockpit-kicker text-[0.6rem]">
+                      <span className="text-primary">◆</span>
+                      Agent proposals
+                    </span>
+                    {pendingProposalCount > 0 && (
+                      <span className="ml-2 text-[0.733rem] text-muted-foreground">{pendingProposalCount} pending</span>
+                    )}
+                  </div>
+                  <ProposalInbox
+                    proposals={proposals}
+                    onApprove={(id) => onApproveProposal?.(id)}
+                    onReject={(id) => onRejectProposal?.(id)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Create */}
+            <Button size="sm" onClick={onCreateTask}>
+              <Plus size={14} />
+              <span className="hidden sm:inline">New Task</span>
+            </Button>
+
+            <Button variant="outline" size="sm" onClick={onArchiveDone} title="Move done tasks into archive">
+              <Archive size={14} />
+              <span className="hidden sm:inline">Archive Done</span>
+            </Button>
+          </div>
         </div>
       </div>
 

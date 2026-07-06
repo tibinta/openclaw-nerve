@@ -45,18 +45,24 @@ function ProposalSummary({ proposal }: { proposal: KanbanProposal }) {
   const { type, payload } = proposal;
   if (type === 'create') {
     const title = (payload.title as string) || 'Untitled';
+    const description = payload.description as string | undefined;
     const priority = payload.priority as string | undefined;
-    const labels = payload.labels as string[] | undefined;
+    const labels = Array.isArray((payload as Record<string, unknown>).labels) ? ((payload as Record<string, unknown>).labels as string[]) : [];
     return (
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-medium text-foreground truncate">{title}</p>
+        <p className="text-xs font-medium text-foreground break-words">{title}</p>
+        {description && (
+          <p className="mt-1 text-[0.733rem] leading-relaxed text-muted-foreground break-words">
+            {description}
+          </p>
+        )}
         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
           {priority && (
             <span className="text-[0.667rem] text-muted-foreground">
               {priority}
             </span>
           )}
-          {labels?.map((l) => (
+          {labels.map((l) => (
             <span key={l} className="text-[0.667rem] px-1 py-0 rounded bg-muted text-muted-foreground">
               {l}
             </span>
@@ -71,10 +77,10 @@ function ProposalSummary({ proposal }: { proposal: KanbanProposal }) {
   const changes = Object.keys(payload).filter((k) => k !== 'id');
   return (
     <div className="min-w-0 flex-1">
-      <p className="text-xs font-medium text-foreground truncate">
-        Update: <span className="font-mono text-[0.667rem] text-muted-foreground">{taskId.slice(0, 8)}</span>
+      <p className="text-xs font-medium text-foreground break-words">
+        Update: <span className="font-mono text-[0.667rem] text-muted-foreground">{taskId}</span>
       </p>
-      <p className="text-[0.667rem] text-muted-foreground truncate">
+      <p className="text-[0.667rem] text-muted-foreground break-words">
         Fields: {changes.join(', ') || 'none'}
       </p>
     </div>
@@ -112,7 +118,7 @@ function ProposalRow({
   };
 
   return (
-    <div className="flex items-start gap-3 border-b border-border/40 px-4 py-3 transition-colors last:border-b-0 hover:bg-primary/[0.04]">
+    <div className="flex flex-col gap-3 border-b border-border/40 px-4 py-3 transition-colors last:border-b-0 hover:bg-primary/[0.04] sm:flex-row sm:items-start">
       <div className="flex flex-col items-start gap-1 shrink-0 pt-0.5">
         <TypeBadge type={proposal.type} />
         <RelativeTime ts={proposal.proposedAt} />
@@ -120,7 +126,7 @@ function ProposalRow({
 
       <ProposalSummary proposal={proposal} />
 
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex items-center gap-1 shrink-0 sm:justify-end">
         <Button
           variant="outline"
           size="xs"
@@ -172,7 +178,7 @@ export const ProposalInbox = memo(function ProposalInbox({
   }
 
   return (
-    <div className="max-h-[320px] overflow-y-auto">
+    <div className="max-h-[min(70vh,520px)] overflow-y-auto">
       {proposals.map((p) => (
         <ProposalRow
           key={p.id}
