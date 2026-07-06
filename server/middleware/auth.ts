@@ -23,15 +23,17 @@ const PUBLIC_ROUTES = [
   '/health',
 ];
 
+function timingSafeTokenMatch(providedToken: string, expectedToken: string): boolean {
+  const provided = Buffer.from(providedToken);
+  const expected = Buffer.from(expectedToken);
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
 function hasValidServerBearerAuth(header: string | undefined): boolean {
   const token = header?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  if (!token || !config.gatewayToken) return false;
-
-  const provided = Buffer.from(token);
-  const expected = Buffer.from(config.gatewayToken);
-  if (provided.length !== expected.length) return false;
-
-  return crypto.timingSafeEqual(provided, expected);
+  if (!token) return false;
+  if (config.serviceToken && timingSafeTokenMatch(token, config.serviceToken)) return true;
+  return Boolean(config.gatewayToken && timingSafeTokenMatch(token, config.gatewayToken));
 }
 
 /**

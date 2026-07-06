@@ -107,6 +107,7 @@ export const config = {
 
   // Authentication
   auth: (process.env.NERVE_AUTH || 'false').toLowerCase() === 'true',
+  serviceToken: process.env.NERVE_SERVICE_TOKEN || '',
   passwordHash: process.env.NERVE_PASSWORD_HASH || '',
   allowGatewayTokenLogin: (process.env.NERVE_ALLOW_GATEWAY_TOKEN_LOGIN || 'true').toLowerCase() !== 'false',
   sessionSecret: process.env.NERVE_SESSION_SECRET || '',

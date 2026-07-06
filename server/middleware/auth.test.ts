@@ -9,6 +9,7 @@ vi.mock('../lib/config.js', () => {
       auth: false,
       sessionSecret: 'test-secret-123',
       gatewayToken: 'gateway-token-123',
+      serviceToken: '',
     },
     SESSION_COOKIE_NAME: 'nerve_session_3080',
   };
@@ -24,7 +25,12 @@ import { authMiddleware } from './auth.js';
 import { config } from '../lib/config.js';
 import { verifySession } from '../lib/session.js';
 
-const mockedConfig = config as { auth: boolean; sessionSecret: string; gatewayToken: string };
+const mockedConfig = config as {
+  auth: boolean;
+  sessionSecret: string;
+  gatewayToken: string;
+  serviceToken: string;
+};
 const mockedVerifySession = verifySession as ReturnType<typeof vi.fn>;
 
 function createTestApp(): Hono {
@@ -45,6 +51,8 @@ function createTestApp(): Hono {
 describe('authMiddleware', () => {
   beforeEach(() => {
     mockedConfig.auth = false;
+    mockedConfig.gatewayToken = 'gateway-token-123';
+    mockedConfig.serviceToken = '';
     mockedVerifySession.mockReset();
   });
 
@@ -116,6 +124,36 @@ describe('authMiddleware', () => {
       expect(res.status).toBe(401);
       const body = (await res.json()) as { error: string };
       expect(body.error).toBe('Authentication required');
+    });
+
+    it('passes through with a matching service token and no cookie', async () => {
+      mockedConfig.serviceToken = 'tok-123';
+      const app = createTestApp();
+      const res = await app.request('/api/test', {
+        headers: { Authorization: 'Bearer tok-123' },
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(mockedVerifySession).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 for a wrong service token', async () => {
+      mockedConfig.serviceToken = 'tok-123';
+      const app = createTestApp();
+      const res = await app.request('/api/test', {
+        headers: { Authorization: 'Bearer wrong' },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('ignores service bearer auth when service token is empty', async () => {
+      mockedConfig.gatewayToken = '';
+      const app = createTestApp();
+      const res = await app.request('/api/test', {
+        headers: { Authorization: 'Bearer tok-123' },
+      });
+      expect(res.status).toBe(401);
+      expect(mockedVerifySession).not.toHaveBeenCalled();
     });
 
     describe('public routes bypass auth', () => {
