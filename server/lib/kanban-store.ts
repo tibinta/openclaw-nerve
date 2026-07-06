@@ -876,20 +876,41 @@ export class KanbanStore {
       });
     }
 
+    const hiddenRaw = await fs.promises.readFile(this.filePath, 'utf-8').catch(() => null);
+    let hiddenCompatibilityData = emptyStore();
+    if (hiddenRaw) {
+      try {
+        hiddenCompatibilityData = this.migrate(JSON.parse(hiddenRaw) as StoreData);
+      } catch (err) {
+        console.warn('[kanban-store] hidden compatibility store parse failed, falling back to split tree:', err);
+      }
+    }
+
     const treeData = await this.readSplitTreeRaw(this.splitTreeDir).catch((err) => {
       console.warn('[kanban-store] hidden split tree read failed, trying hidden compatibility file:', err);
       return null;
     });
     if (treeData) {
-      return this.migrate(treeData);
+      return this.migrate({
+        ...hiddenCompatibilityData,
+        tasks: treeData.tasks,
+        meta: treeData.meta,
+      });
     }
 
-    const hiddenRaw = await fs.promises.readFile(this.filePath, 'utf-8').catch(() => null);
     if (hiddenRaw) {
+      return hiddenCompatibilityData;
+    }
+
+    const legacyRaw = this.legacyFilePath
+      ? await fs.promises.readFile(this.legacyFilePath, 'utf-8').catch(() => null)
+      : null;
+    let legacyCompatibilityData = emptyStore();
+    if (legacyRaw) {
       try {
-        return this.migrate(JSON.parse(hiddenRaw) as StoreData);
+        legacyCompatibilityData = this.migrate(JSON.parse(legacyRaw) as StoreData);
       } catch (err) {
-        console.warn('[kanban-store] hidden compatibility store parse failed, falling back to legacy data:', err);
+        console.warn('[kanban-store] legacy compatibility store parse failed, returning empty store:', err);
       }
     }
 
@@ -900,18 +921,15 @@ export class KanbanStore {
         })
       : null;
     if (legacyTreeData) {
-      return this.migrate(legacyTreeData);
+      return this.migrate({
+        ...legacyCompatibilityData,
+        tasks: legacyTreeData.tasks,
+        meta: legacyTreeData.meta,
+      });
     }
 
-    const legacyRaw = this.legacyFilePath
-      ? await fs.promises.readFile(this.legacyFilePath, 'utf-8').catch(() => null)
-      : null;
     if (legacyRaw) {
-      try {
-        return this.migrate(JSON.parse(legacyRaw) as StoreData);
-      } catch (err) {
-        console.warn('[kanban-store] legacy compatibility store parse failed, returning empty store:', err);
-      }
+      return legacyCompatibilityData;
     }
 
     return emptyStore();

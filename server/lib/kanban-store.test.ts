@@ -1790,6 +1790,26 @@ describe('createProposal', () => {
     });
     expect(proposal.sourceSessionKey).toBe('sess-abc');
   });
+
+  it('preserves proposals when the hidden split tree is the task source', async () => {
+    process.env.NERVE_DATA_DIR = tmpDir;
+    const hiddenStore = new KanbanStore();
+    await hiddenStore.init();
+    await hiddenStore.createTask({ title: 'Existing task', createdBy: 'operator' });
+    const proposal = await hiddenStore.createProposal({
+      type: 'create',
+      payload: { title: 'Daily notes proposal', labels: ['daily-notes'] },
+      proposedBy: 'agent:notes-intake',
+      sourceSessionKey: 'daily-notes:2026-07-06',
+    });
+
+    const reloadedStore = new KanbanStore();
+    const proposals = await reloadedStore.listProposals('pending');
+
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].id).toBe(proposal.id);
+    expect(proposals[0].payload.title).toBe('Daily notes proposal');
+  });
 });
 
 describe('approveProposal', () => {
