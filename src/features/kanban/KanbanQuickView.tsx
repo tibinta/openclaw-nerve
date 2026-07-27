@@ -15,7 +15,6 @@ import { getTaskPriorityTone, getTaskStatusTone } from './tone';
 
 /* ── Statuses shown in quick view ── */
 const QUICK_STATUSES: TaskStatus[] = ['in-progress', 'review', 'todo'];
-const MAX_ROWS = 5;
 
 interface KanbanQuickViewProps {
   onOpenBoard: () => void;
@@ -54,8 +53,6 @@ function StatusSection({
   onOpenTask: (task: KanbanTask) => void;
 }) {
   const tone = getTaskStatusTone(status);
-  const visible = tasks.slice(0, MAX_ROWS);
-  const overflow = tasks.length - MAX_ROWS;
 
   return (
     <div className="mb-2 last:mb-0">
@@ -65,14 +62,9 @@ function StatusSection({
         </span>
         <span className="font-mono text-[0.667rem] text-muted-foreground/60">{tasks.length}</span>
       </div>
-      {visible.map(task => (
+      {tasks.map(task => (
         <TaskRow key={task.id} task={task} onClick={() => onOpenTask(task)} />
       ))}
-      {overflow > 0 && (
-        <span className="block px-1.5 text-[0.667rem] text-muted-foreground/50">
-          +{overflow} more
-        </span>
-      )}
     </div>
   );
 }

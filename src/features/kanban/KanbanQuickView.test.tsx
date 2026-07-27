@@ -84,4 +84,19 @@ describe('KanbanQuickView', () => {
     expect(screen.getByTestId('task-detail-drawer')).toHaveTextContent('Open this task');
     expect(screen.getByTestId('task-detail-drawer')).toHaveAttribute('data-variant', 'modal');
   });
+
+  it('shows every task in a status section', () => {
+    mockTasks = Array.from({ length: 9 }, (_, index) => ({
+      ...mockTask,
+      id: `task-${index + 1}`,
+      title: `Task ${index + 1}`,
+      status: 'todo',
+      columnOrder: index,
+    }));
+
+    render(<KanbanQuickView onOpenBoard={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Task 9' })).toBeInTheDocument();
+    expect(screen.queryByText('+4 more')).not.toBeInTheDocument();
+  });
 });
