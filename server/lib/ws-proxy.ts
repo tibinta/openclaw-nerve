@@ -29,6 +29,13 @@ import {
   isInvalidEncryptedContentError,
   rotateSessionAfterInvalidEncryptedContent,
 } from './session-recovery.js';
+import { createCodexRealtimeRelay } from './codex-realtime-proxy.js';
+import {
+  authorizeJaneMobileBridge,
+  createJaneMobileRelayPolicy,
+  gatewayWebSocketUrl,
+  type JaneMobileRelayPolicy,
+} from './jane-mobile-proxy.js';
 
 /** @internal — exported for test overrides */
 export const _internals = { challengeTimeoutMs: 5_000 };
@@ -165,13 +172,37 @@ export function closeAllWebSockets(): void {
  */
 export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
   const wss = new WebSocketServer({ noServer: true });
-  activeWssInstances.push(wss);
+  const codexRealtimeWss = new WebSocketServer({ noServer: true });
+  const janeMobileWss = new WebSocketServer({ noServer: true });
+  const janeRealtimeWss = new WebSocketServer({ noServer: true });
+  activeWssInstances.push(wss, codexRealtimeWss, janeMobileWss, janeRealtimeWss);
 
   // Eagerly load device identity at startup
   getDeviceIdentity();
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    if (req.url?.startsWith('/ws')) {
+    const pathname = new URL(req.url || '/', 'https://localhost').pathname;
+    if (pathname === '/internal/jane-mobile') {
+      if (!authorizeJaneMobileBridge(req, config.janeMobileBridgeToken)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nAuthentication required');
+        socket.destroy();
+        return;
+      }
+      janeMobileWss.handleUpgrade(req, socket, head, (ws) => janeMobileWss.emit('connection', ws, req));
+      return;
+    }
+
+    if (pathname === '/jane-realtime') {
+      if (!authorizeJaneMobileBridge(req, config.janeMobileBridgeToken)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nAuthentication required');
+        socket.destroy();
+        return;
+      }
+      janeRealtimeWss.handleUpgrade(req, socket, head, (ws) => janeRealtimeWss.emit('connection', ws, req));
+      return;
+    }
+
+    if (pathname === '/ws' || pathname === '/codex-realtime') {
       const originHeader = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
       if (!isAllowedOrigin(originHeader)) {
         socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nOrigin not allowed');
@@ -188,10 +219,24 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
           return;
         }
       }
-      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      const targetWss = pathname === '/codex-realtime' ? codexRealtimeWss : wss;
+      targetWss.handleUpgrade(req, socket, head, (ws) => targetWss.emit('connection', ws, req));
     } else {
       socket.destroy();
     }
+  });
+
+  codexRealtimeWss.on('connection', (clientWs: WebSocket) => createCodexRealtimeRelay(clientWs));
+  janeRealtimeWss.on('connection', (clientWs: WebSocket) => createCodexRealtimeRelay(clientWs));
+  janeMobileWss.on('connection', (clientWs: WebSocket) => {
+    createGatewayRelay(
+      clientWs,
+      gatewayWebSocketUrl(config.gatewayUrl),
+      `http://127.0.0.1:${config.port}`,
+      `jane-${randomUUID().slice(0, 8)}`,
+      true,
+      createJaneMobileRelayPolicy(),
+    );
   });
 
   wss.on('connection', (clientWs: WebSocket, req: IncomingMessage) => {
@@ -253,12 +298,13 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
  * If the gateway rejects the device (pairing required, token mismatch),
  * transparently retries without device identity.
  */
-function createGatewayRelay(
+export function createGatewayRelay(
   clientWs: WebSocket,
   targetUrl: URL,
   clientOrigin: string,
   connId: string,
   isTrusted: boolean,
+  relayPolicy?: JaneMobileRelayPolicy,
 ): void {
   const tag = `[ws-proxy:${connId}]`;
   const connStartTime = Date.now();
@@ -374,6 +420,7 @@ function createGatewayRelay(
   function updateClientKindFromConnect(msg: Record<string, unknown>): void {
     const params = (msg.params || {}) as ConnectParams;
     isControlUiClient = params.client?.id === CONTROL_UI_CLIENT_ID;
+    if (params.client?.id === 'gateway-client' && params.client?.mode === 'backend') useDeviceIdentity = false;
   }
 
   /**
@@ -446,6 +493,7 @@ function createGatewayRelay(
 
     // Gateway → Client
     gwWs.on('message', (data: Buffer | string, isBinary: boolean) => {
+      if (relayPolicy && !relayPolicy.allowGatewayFrame(data, isBinary)) return;
       if (!isBinary) {
         try {
           const msg = JSON.parse(data.toString());
@@ -547,6 +595,10 @@ function createGatewayRelay(
 
   // Client → Gateway (attached once, references mutable gwWs)
   clientWs.on('message', (data: Buffer | string, isBinary: boolean) => {
+    if (relayPolicy && !relayPolicy.allowClientFrame(data, isBinary)) {
+      clientWs.close(1008, 'Jane mobile method not allowed');
+      return;
+    }
     if (!gwWs || gwWs.readyState !== WebSocket.OPEN) {
       // Gateway not open — intercept connect messages and hold them separately
       if (!isBinary) {
