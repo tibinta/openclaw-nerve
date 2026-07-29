@@ -651,7 +651,7 @@ describe('ws-proxy', () => {
         type: 'req',
         method: 'connect',
         id: 'c1',
-        params: { auth: { token: 'test-token' }, client: { id: 'nerve-ui', mode: 'webchat' } },
+        params: { auth: { token: 'test-token' }, client: { id: 'nerve-ui', mode: 'webchat', platform: 'web' } },
       }));
 
       // Wait for the connect response from mock gateway
@@ -679,6 +679,7 @@ describe('ws-proxy', () => {
       const params = (connectMsg!.data as Record<string, unknown>).params as Record<string, unknown>;
       expect(params.device).toBeTruthy();
       expect((params.device as Record<string, unknown>).id).toMatch(/^mock-device-id/);
+      expect((params.client as Record<string, unknown>).platform).toBe('server');
 
       ws.close();
     });

@@ -143,6 +143,7 @@ describe('gateway-rpc (persistent WebSocket)', () => {
         maxProtocol: 4,
         client: {
           id: 'openclaw-control-ui',
+          platform: 'server',
           mode: 'webchat',
         },
         auth: { token: 'test-token' },

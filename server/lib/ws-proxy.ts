@@ -727,7 +727,7 @@ export function createGatewayRelay(
  * Inject Nerve's device identity into a connect request.
  */
 interface ConnectParams {
-  client?: { id?: string; mode?: string; instanceId?: string; [key: string]: unknown };
+  client?: { id?: string; mode?: string; platform?: string; instanceId?: string; [key: string]: unknown };
   role?: string;
   scopes?: string[];
   auth?: { token?: string };
@@ -761,6 +761,9 @@ function injectDeviceIdentity(msg: Record<string, unknown>, nonce: string, logTa
     ...msg,
     params: {
       ...params,
+      // The signing key belongs to this Nerve host, so keep its gateway-pinned
+      // metadata stable across browser and Jane relay clients.
+      client: { ...params.client, platform: 'server' },
       scopes: finalScopes,
       device,
     },

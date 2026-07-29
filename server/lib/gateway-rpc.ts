@@ -130,7 +130,7 @@ function buildConnectParams(nonce: string) {
     client: {
       id: clientId,
       version: '0.1.0',
-      platform: 'web',
+      platform: 'server',
       mode: clientMode,
       instanceId: `nerve-rpc-${randomUUID().slice(0, 8)}`,
     },
