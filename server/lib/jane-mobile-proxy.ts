@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { isJaneMobileCronControlRequest } from './jane-mobile-cron-control.js';
 
 const JANE_LIVE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
 const MAX_MESSAGE_CHARS = 64_000;
@@ -100,10 +101,68 @@ export function isAllowedJaneMobileChatSend(message: Record<string, unknown>): b
 export interface JaneMobileRelayPolicy {
   allowClientFrame(data: Buffer | string, isBinary: boolean): boolean;
   allowGatewayFrame(data: Buffer | string, isBinary: boolean): boolean;
+  gatewayFrame(data: Buffer | string, isBinary: boolean): Buffer | string | null;
 }
 
 export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
   const requestIds = new Set<string>();
+
+  const gatewayFrame = (data: Buffer | string, isBinary: boolean): Buffer | string | null => {
+    if (isBinary) return null;
+    try {
+      const message = JSON.parse(data.toString()) as unknown;
+      if (!isRecord(message)) return null;
+      if (message.type === 'res' && typeof message.id === 'string') {
+        const allowed = requestIds.has(message.id);
+        requestIds.delete(message.id);
+        return allowed ? data : null;
+      }
+      if (message.type !== 'event') return null;
+      if (message.event === 'connect.challenge') return data;
+      if (!isRecord(message.payload) || message.payload.sessionKey !== JANE_LIVE_SESSION_KEY) return null;
+      if (message.event === 'chat') {
+        return typeof message.payload.runId === 'string' && message.payload.runId.startsWith('jane-realtime:')
+          ? null
+          : data;
+      }
+      if (message.event !== 'agent') return null;
+
+      const stream = message.payload.stream;
+      const detail = isRecord(message.payload.data) ? message.payload.data : {};
+      let state: 'started' | 'running' | 'completed' | 'failed' | null = null;
+      let label = '';
+      if (stream === 'lifecycle' && detail.phase === 'start') {
+        state = 'started'; label = 'Jane started';
+      } else if (stream === 'lifecycle' && detail.phase === 'end') {
+        state = 'completed'; label = 'Jane completed';
+      } else if (stream === 'lifecycle' && detail.phase === 'error') {
+        state = 'failed'; label = 'Jane failed';
+      } else if (stream === 'tool' && (detail.phase === 'start' || detail.phase === 'result')) {
+        const tool = typeof detail.name === 'string' ? detail.name.toLowerCase() : '';
+        const safeLabels: Record<string, string> = {
+          bash: 'Checking local state',
+          exec: 'Checking local state',
+          read: 'Reading files',
+          web: 'Checking a source',
+          memory: 'Checking memory',
+          cron: 'Checking schedules',
+        };
+        state = 'running'; label = safeLabels[tool] || 'Working';
+      }
+      if (!state) return null;
+      const runId = typeof message.payload.runId === 'string'
+        && /^[A-Za-z0-9._:-]{1,128}$/.test(message.payload.runId)
+        ? message.payload.runId
+        : undefined;
+      return JSON.stringify({
+        type: 'event',
+        event: 'nerve.agent.progress',
+        payload: { state, label, ...(runId ? { run_id: runId } : {}) },
+      });
+    } catch {
+      return null;
+    }
+  };
 
   return {
     allowClientFrame(data, isBinary) {
@@ -116,6 +175,7 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
           requestIds.add(message.id);
           return true;
         }
+        if (isJaneMobileCronControlRequest(message)) return true;
         if (!isAllowedJaneMobileChatSend(message)) return false;
         requestIds.add(message.id);
         return true;
@@ -125,24 +185,9 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
     },
 
     allowGatewayFrame(data, isBinary) {
-      if (isBinary) return false;
-      try {
-        const message = JSON.parse(data.toString()) as unknown;
-        if (!isRecord(message)) return false;
-        if (message.type === 'res' && typeof message.id === 'string') {
-          const allowed = requestIds.has(message.id);
-          requestIds.delete(message.id);
-          return allowed;
-        }
-        if (message.type !== 'event') return false;
-        if (message.event === 'connect.challenge') return true;
-        if (message.event !== 'chat' || !isRecord(message.payload)) return false;
-        return message.payload.sessionKey === JANE_LIVE_SESSION_KEY
-          && !(typeof message.payload.runId === 'string' && message.payload.runId.startsWith('jane-realtime:'));
-      } catch {
-        return false;
-      }
+      return gatewayFrame(data, isBinary) !== null;
     },
+    gatewayFrame,
   };
 }
 

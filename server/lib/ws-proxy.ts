@@ -36,6 +36,7 @@ import {
   gatewayWebSocketUrl,
   type JaneMobileRelayPolicy,
 } from './jane-mobile-proxy.js';
+import { createJaneMobileCronController, type JaneMobileCronController } from './jane-mobile-cron-control.js';
 
 /** @internal — exported for test overrides */
 export const _internals = { challengeTimeoutMs: 5_000 };
@@ -176,6 +177,7 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
   const janeMobileWss = new WebSocketServer({ noServer: true });
   const janeRealtimeWss = new WebSocketServer({ noServer: true });
   const janeRealtimeDispatcher = new JaneRealtimeDispatcher();
+  const janeMobileCronController = createJaneMobileCronController();
   activeWssInstances.push(wss, codexRealtimeWss, janeMobileWss, janeRealtimeWss);
 
   // Eagerly load device identity at startup
@@ -237,6 +239,7 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
       `jane-${randomUUID().slice(0, 8)}`,
       true,
       createJaneMobileRelayPolicy(),
+      janeMobileCronController,
     );
   });
 
@@ -306,6 +309,7 @@ export function createGatewayRelay(
   connId: string,
   isTrusted: boolean,
   relayPolicy?: JaneMobileRelayPolicy,
+  janeMobileCronController?: JaneMobileCronController,
 ): void {
   const tag = `[ws-proxy:${connId}]`;
   const connStartTime = Date.now();
@@ -494,10 +498,11 @@ export function createGatewayRelay(
 
     // Gateway → Client
     gwWs.on('message', (data: Buffer | string, isBinary: boolean) => {
-      if (relayPolicy && !relayPolicy.allowGatewayFrame(data, isBinary)) return;
+      const clientData = relayPolicy ? relayPolicy.gatewayFrame(data, isBinary) : data;
+      if (clientData === null) return;
       if (!isBinary) {
         try {
-          const msg = JSON.parse(data.toString());
+          const msg = JSON.parse(clientData.toString());
           if (isRecord(msg)) {
             if (msg.type === 'res' && typeof msg.id === 'string') {
               const sessionKey = chatSendRequests.get(msg.id);
@@ -523,7 +528,7 @@ export function createGatewayRelay(
       // Capture challenge nonce before handshake completes
       if (!handshakeComplete && !isBinary) {
         try {
-          const msg = JSON.parse(data.toString());
+          const msg = JSON.parse(clientData.toString());
           if (msg.type === 'event' && msg.event === 'connect.challenge' && msg.payload?.nonce) {
             challengeNonce = msg.payload.nonce;
             // If we have a deferred connect message waiting, send it now with identity
@@ -536,7 +541,7 @@ export function createGatewayRelay(
 
       if (clientWs.readyState === WebSocket.OPEN) {
         gatewayToClientCount++;
-        clientWs.send(isBinary ? data : data.toString());
+        clientWs.send(isBinary ? clientData : clientData.toString());
       }
     });
 
@@ -596,6 +601,9 @@ export function createGatewayRelay(
 
   // Client → Gateway (attached once, references mutable gwWs)
   clientWs.on('message', (data: Buffer | string, isBinary: boolean) => {
+    if (janeMobileCronController?.handle(data, isBinary, (frame) => {
+      if (clientWs.readyState === WebSocket.OPEN) clientWs.send(frame);
+    })) return;
     if (relayPolicy && !relayPolicy.allowClientFrame(data, isBinary)) {
       clientWs.close(1008, 'Jane mobile method not allowed');
       return;

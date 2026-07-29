@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { IncomingMessage } from 'node:http';
 import {
+  authorizeJaneMobileBridge,
   createJaneMobileRelayPolicy,
   gatewayWebSocketUrl,
   isAllowedJaneMobileChatSend,
@@ -23,6 +25,16 @@ function chatSend(overrides: Record<string, unknown> = {}): Record<string, unkno
 }
 
 describe('Jane mobile relay policy', () => {
+  it('requires the private loopback bridge bearer', () => {
+    const request = (address: string, authorization: string) => ({
+      socket: { remoteAddress: address },
+      headers: { authorization },
+    }) as unknown as IncomingMessage;
+    expect(authorizeJaneMobileBridge(request('127.0.0.1', 'Bearer bridge-secret'), 'bridge-secret')).toBe(true);
+    expect(authorizeJaneMobileBridge(request('127.0.0.1', 'Bearer wrong'), 'bridge-secret')).toBe(false);
+    expect(authorizeJaneMobileBridge(request('192.168.40.20', 'Bearer bridge-secret'), 'bridge-secret')).toBe(false);
+  });
+
   it('allows only bounded Jane Live chat.send requests', () => {
     expect(isAllowedJaneMobileChatSend(chatSend())).toBe(true);
     expect(isAllowedJaneMobileChatSend(chatSend({ sessionKey: 'agent:other:main' }))).toBe(false);
@@ -51,6 +63,12 @@ describe('Jane mobile relay policy', () => {
       },
     }), false)).toBe(false);
     expect(policy.allowClientFrame(JSON.stringify(chatSend()), false)).toBe(true);
+    expect(policy.allowClientFrame(JSON.stringify({
+      type: 'req', id: 'cron-status', method: 'nerve.cron.group.status', params: {},
+    }), false)).toBe(true);
+    expect(policy.allowClientFrame(JSON.stringify({
+      type: 'req', id: 'cron-admin', method: 'nerve.cron.group.setEnabled', params: { enabled: true, idempotencyKey: 'valid-key', jobId: 'other' },
+    }), false)).toBe(false);
     expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'x', method: 'sessions.list', params: {} }), false)).toBe(false);
     expect(policy.allowGatewayFrame(JSON.stringify({ type: 'res', id: 'send-1', ok: true }), false)).toBe(true);
     expect(policy.allowGatewayFrame(JSON.stringify({ type: 'res', id: 'unknown', ok: true }), false)).toBe(false);
@@ -63,6 +81,28 @@ describe('Jane mobile relay policy', () => {
     expect(policy.allowGatewayFrame(JSON.stringify({
       type: 'event', event: 'chat', payload: { sessionKey: 'agent:other:main', state: 'delta' },
     }), false)).toBe(false);
+  });
+
+  it('maps existing agent lifecycle and tool events to safe progress only', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const mapped = policy.gatewayFrame(JSON.stringify({
+      type: 'event',
+      event: 'agent',
+      payload: {
+        sessionKey,
+        runId: 'run-safe-1',
+        stream: 'tool',
+        data: { phase: 'start', name: 'bash', args: { prompt: 'private', token: 'secret' } },
+      },
+    }), false);
+
+    expect(mapped).not.toBeNull();
+    expect(JSON.parse(String(mapped))).toEqual({
+      type: 'event',
+      event: 'nerve.agent.progress',
+      payload: { state: 'running', label: 'Checking local state', run_id: 'run-safe-1' },
+    });
+    expect(String(mapped)).not.toMatch(/private|secret|prompt|token|sessionKey|args/);
   });
 
   it('normalizes the configured gateway URL to its websocket route', () => {
