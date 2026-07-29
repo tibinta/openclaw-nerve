@@ -35,6 +35,10 @@ describe('Jane mobile cron control', () => {
   });
 
   it('returns only safe allowlisted status fields', async () => {
+    expect(JANE_OPERATING_CRONS).toEqual([
+      ['1c91b17d-f2e2-41f5-8b4a-a60d5b550da1', 'Services Watchdog'],
+      ['2a8997bb-df41-46b9-9de6-2df636a11150', 'OpenClaw Work Runner'],
+    ]);
     const gatewayCall = vi.fn(async () => ({ jobs: jobs() }));
     const controller = createJaneMobileCronController(gatewayCall as never);
     const frames: Record<string, unknown>[] = [];
@@ -48,7 +52,10 @@ describe('Jane mobile cron control', () => {
       type: 'res', id: 'status-1', ok: true,
       payload: { group: 'openclaw-operating-crons', edit_date: '2026-07-25', available: true, state: 'disabled' },
     });
-    expect((frames[0].payload as { jobs: unknown[] }).jobs).toHaveLength(15);
+    expect((frames[0].payload as { jobs: Array<{ name: string }> }).jobs.map((job) => job.name)).toEqual([
+      'Services Watchdog [edited 2026-07-25]',
+      'OpenClaw Work Runner [edited 2026-07-25]',
+    ]);
     expect(JSON.stringify(frames[0])).not.toMatch(/prompt|token|argv|description/i);
   });
 
@@ -73,7 +80,7 @@ describe('Jane mobile cron control', () => {
     expect(controller.handle(request('set-2', 'nerve.cron.group.setEnabled', params), false, send)).toBe(true);
     await vi.waitFor(() => expect(frames.filter((frame) => frame.type === 'res')).toHaveLength(2));
 
-    expect(gatewayCall.mock.calls.filter(([method]) => method === 'cron.update')).toHaveLength(15);
+    expect(gatewayCall.mock.calls.filter(([method]) => method === 'cron.update')).toHaveLength(2);
     expect(frames.filter((frame) => frame.event === 'nerve.agent.progress' && (frame.payload as { state?: string }).state === 'started')).toHaveLength(1);
     expect(frames.filter((frame) => frame.event === 'nerve.agent.progress' && (frame.payload as { state?: string }).state === 'completed')).toHaveLength(1);
     expect(current.every((job) => job.enabled)).toBe(true);
@@ -83,7 +90,7 @@ describe('Jane mobile cron control', () => {
       idempotencyKey: 'same-toggle-key',
     }), false, send);
     expect(frames.at(-1)).toMatchObject({ ok: false, error: { code: 'idempotency_conflict' } });
-    expect(gatewayCall.mock.calls.filter(([method]) => method === 'cron.update')).toHaveLength(15);
+    expect(gatewayCall.mock.calls.filter(([method]) => method === 'cron.update')).toHaveLength(2);
   });
 
   it('fails closed when a live allowlisted name changes', async () => {
