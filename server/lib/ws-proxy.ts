@@ -29,7 +29,7 @@ import {
   isInvalidEncryptedContentError,
   rotateSessionAfterInvalidEncryptedContent,
 } from './session-recovery.js';
-import { createCodexRealtimeRelay } from './codex-realtime-proxy.js';
+import { createCodexRealtimeRelay, JaneRealtimeDispatcher } from './codex-realtime-proxy.js';
 import {
   authorizeJaneMobileBridge,
   createJaneMobileRelayPolicy,
@@ -175,6 +175,7 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
   const codexRealtimeWss = new WebSocketServer({ noServer: true });
   const janeMobileWss = new WebSocketServer({ noServer: true });
   const janeRealtimeWss = new WebSocketServer({ noServer: true });
+  const janeRealtimeDispatcher = new JaneRealtimeDispatcher();
   activeWssInstances.push(wss, codexRealtimeWss, janeMobileWss, janeRealtimeWss);
 
   // Eagerly load device identity at startup
@@ -227,7 +228,7 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
   });
 
   codexRealtimeWss.on('connection', (clientWs: WebSocket) => createCodexRealtimeRelay(clientWs));
-  janeRealtimeWss.on('connection', (clientWs: WebSocket) => createCodexRealtimeRelay(clientWs));
+  janeRealtimeWss.on('connection', (clientWs: WebSocket) => createCodexRealtimeRelay(clientWs, janeRealtimeDispatcher));
   janeMobileWss.on('connection', (clientWs: WebSocket) => {
     createGatewayRelay(
       clientWs,

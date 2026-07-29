@@ -36,6 +36,7 @@ import {
   gatewayFilesGet,
   gatewayFilesSet,
   resetGatewayRpcCacheForTesting,
+  subscribeGatewayEvents,
 } from './gateway-rpc.js';
 
 let wss: WebSocketServer;
@@ -194,6 +195,21 @@ describe('gateway-rpc (persistent WebSocket)', () => {
 
       const result = await gatewayRpcCall('test.method', { foo: 'bar' });
       expect(result).toEqual({ result: 'ok' });
+    });
+
+    it('delivers chat events carried by the shared connection', async () => {
+      await gatewayRpcCall('test.connect', {});
+      const listener = vi.fn();
+      const unsubscribe = subscribeGatewayEvents(listener);
+
+      for (const client of wss.clients) {
+        client.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'final' } }));
+      }
+
+      await vi.waitFor(() => expect(listener).toHaveBeenCalledWith({
+        type: 'event', event: 'chat', payload: { state: 'final' },
+      }));
+      unsubscribe();
     });
 
     it('returns null when the gateway explicitly sends a null payload', async () => {

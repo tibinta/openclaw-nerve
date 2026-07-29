@@ -77,6 +77,13 @@ let connectReject: ((err: Error) => void) | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
 const inFlightCalls = new Map<string, Promise<unknown>>();
 const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
+const eventListeners = new Set<(event: Record<string, unknown>) => void>();
+
+/** Subscribe to events already carried by the shared gateway connection. */
+export function subscribeGatewayEvents(listener: (event: Record<string, unknown>) => void): () => void {
+  eventListeners.add(listener);
+  return () => eventListeners.delete(listener);
+}
 
 function normalizeOrigin(value: string | undefined | null): string | null {
   if (!value) return null;
@@ -200,6 +207,7 @@ function isGatewayStartingError(err: unknown): boolean {
 export function resetGatewayRpcCacheForTesting(): void {
   inFlightCalls.clear();
   responseCache.clear();
+  eventListeners.clear();
 }
 
 /** Clean up all pending calls with an error. */
@@ -314,7 +322,15 @@ function ensureConnection(): void {
         return;
       }
 
-      // Ignore other events (chat messages, etc.)
+      if (msg.type === 'event') {
+        for (const listener of eventListeners) {
+          try {
+            listener(msg);
+          } catch {
+            console.warn('[gateway-rpc] Gateway event listener failed');
+          }
+        }
+      }
     } catch {
       // Ignore parse errors
     }
