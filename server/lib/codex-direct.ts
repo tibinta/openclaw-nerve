@@ -1131,6 +1131,11 @@ class CodexDirectService {
       const task = await this.stopLastTask();
       return { ok: true, kind: 'status', reply: task.summary, task };
     }
+    if (!isExplicitProjectTask(clean)) {
+      const { decision, usage } = await this.runCoordinator(clean, imagePaths);
+      if (!decision.reply) throw new Error('Codex coordinator returned no reply.');
+      return { ok: true, kind: 'reply', reply: decision.reply, usage };
+    }
     return this.messageThroughDesktop(clean, imagePaths);
   }
 
