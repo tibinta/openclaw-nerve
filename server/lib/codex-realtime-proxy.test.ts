@@ -120,6 +120,35 @@ describe('Codex realtime boundary', () => {
     }));
   });
 
+  it('keeps an accepted Jane run alive when only the chat.send acknowledgement times out', async () => {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const gatewayCall = vi.fn(async () => {
+      queueMicrotask(() => listener?.({
+        event: 'chat',
+        payload: {
+          sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+          runId: 'late-run',
+          state: 'final',
+          message: { role: 'assistant', content: 'You have four active tasks today.' },
+        },
+      }));
+      throw new Error('Gateway RPC timeout after 10000ms calling chat.send');
+    });
+
+    await expect(dispatchJaneRealtimeRequest(
+      'How many tasks do we have today?',
+      'request-3',
+      {
+        codexMessage: vi.fn(),
+        gatewayCall,
+        subscribe: (next) => { listener = next; return () => { listener = undefined; }; },
+        timeoutMs: 100,
+      },
+    )).resolves.toBe('You have four active tasks today.');
+
+    expect(gatewayCall).toHaveBeenCalledOnce();
+  });
+
   it('stays silent until dispatch completes and replays one result after reconnect', async () => {
     let finish!: (value: string) => void;
     const run = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));

@@ -100,7 +100,7 @@ export async function dispatchJaneRealtimeRequest(
     return reply.reply.trim();
   }
 
-  let expectedRunId: string | null = null;
+  let expectedRunId: string | null | undefined = null;
   const earlyEvents: Record<string, unknown>[] = [];
   let resolveResult!: (text: string) => void;
   let rejectResult!: (error: Error) => void;
@@ -116,7 +116,7 @@ export async function dispatchJaneRealtimeRequest(
       earlyEvents.push(payload);
       return;
     }
-    if (typeof payload.runId === 'string' && payload.runId !== expectedRunId) return;
+    if (typeof expectedRunId === 'string' && typeof payload.runId === 'string' && payload.runId !== expectedRunId) return;
     if (payload.state === 'error' || payload.state === 'aborted') {
       rejectResult(new Error(`Jane request ${payload.state}`));
       return;
@@ -134,15 +134,22 @@ export async function dispatchJaneRealtimeRequest(
   });
 
   try {
-    const ack = await dependencies.gatewayCall('chat.send', {
-      sessionKey: JANE_LIVE_SESSION_KEY,
-      message: text,
-      deliver: false,
-      thinking: 'low',
-      fastMode: true,
-      idempotencyKey: `jane-realtime:${requestKey}`,
-    }) as { runId?: unknown } | null;
-    expectedRunId = typeof ack?.runId === 'string' ? ack.runId : '';
+    try {
+      const ack = await dependencies.gatewayCall('chat.send', {
+        sessionKey: JANE_LIVE_SESSION_KEY,
+        message: text,
+        deliver: false,
+        thinking: 'low',
+        fastMode: true,
+        idempotencyKey: `jane-realtime:${requestKey}`,
+      }) as { runId?: unknown } | null;
+      expectedRunId = typeof ack?.runId === 'string' ? ack.runId : '';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (!/^Gateway RPC timeout after \d+ms calling chat\.send$/.test(message)) throw error;
+      // This timeout only starts after wsSend succeeds; the run may already be executing.
+      expectedRunId = undefined;
+    }
     earlyEvents.splice(0).forEach(inspectPayload);
     return await result;
   } finally {
@@ -196,8 +203,8 @@ export class JaneRealtimeDispatcher {
     const dispatch = this.dispatchTail.then(async () => {
       try {
         this.queue.push({ key, text: await this.run(clean, key) });
-      } catch {
-        console.warn('[jane-realtime] Request dispatch failed');
+      } catch (error) {
+        console.warn('[jane-realtime] Request dispatch failed:', error instanceof Error ? error.message : 'unknown error');
         this.queue.push({ key, text: 'I could not start that request. Please try again.' });
       }
       await this.flush();
