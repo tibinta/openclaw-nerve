@@ -120,6 +120,52 @@ describe('Codex realtime boundary', () => {
     }));
   });
 
+  it('ignores an empty final event and speaks the next text-bearing final without fallback', async () => {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const gatewayCall = vi.fn(async () => {
+      queueMicrotask(() => {
+        listener?.({
+          event: 'chat',
+          payload: {
+            sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+            runId: 'run-with-empty-final',
+            state: 'final',
+            message: { role: 'assistant', content: [] },
+          },
+        });
+        listener?.({
+          event: 'chat',
+          payload: {
+            sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+            runId: 'run-with-empty-final',
+            state: 'final',
+            message: { role: 'assistant', content: 'The requested result is ready.' },
+          },
+        });
+      });
+      return { runId: 'run-with-empty-final', status: 'started' };
+    });
+    let dispatchResult = '';
+    const dispatcher = new JaneRealtimeDispatcher(async (text, requestKey) => {
+      dispatchResult = await dispatchJaneRealtimeRequest(text, requestKey, {
+        codexMessage: vi.fn(),
+        gatewayCall,
+        subscribe: (next) => { listener = next; return () => { listener = undefined; }; },
+        timeoutMs: 100,
+      });
+      return dispatchResult;
+    });
+    const speak = vi.fn();
+    dispatcher.attach({}, speak);
+
+    await dispatcher.submit('realtime-thread', 'What is the result?');
+
+    expect(dispatchResult).toBe('The requested result is ready.');
+    expect(speak).toHaveBeenCalledOnce();
+    expect(speak).toHaveBeenCalledWith('The requested result is ready.');
+    expect(speak).not.toHaveBeenCalledWith('I could not start that request. Please try again.');
+  });
+
   it('keeps an accepted Jane run alive when only the chat.send acknowledgement times out', async () => {
     let listener: ((event: Record<string, unknown>) => void) | undefined;
     const gatewayCall = vi.fn(async () => {

@@ -123,10 +123,7 @@ export async function dispatchJaneRealtimeRequest(
     }
     if (payload.state !== 'final') return;
     const final = finalChatText(payload);
-    if (!final) {
-      rejectResult(new Error('Jane returned no result'));
-      return;
-    }
+    if (!final) return;
     resolveResult(final);
   };
   const unsubscribe = dependencies.subscribe((event) => {
