@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   codexRealtimeEnvironment,
   dispatchJaneRealtimeRequest,
+  handleJaneRealtimeEvent,
   JaneRealtimeDispatcher,
   normalizeCodexRealtimeRequest,
 } from './codex-realtime-proxy.js';
@@ -117,7 +118,9 @@ describe('Codex realtime boundary', () => {
     expect(gatewayCall).toHaveBeenCalledWith('chat.send', expect.objectContaining({
       idempotencyKey: 'jane-realtime:request-2',
       sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      fastMode: true,
     }));
+    expect(gatewayCall.mock.calls[0][1]).not.toHaveProperty('thinking');
   });
 
   it('ignores an empty final event and speaks the next text-bearing final without fallback', async () => {
@@ -224,5 +227,51 @@ describe('Codex realtime boundary', () => {
     dispatcher.attach({}, vi.fn());
     await Promise.resolve();
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('serializes concurrent submissions once in arrival order', async () => {
+    const started: string[] = [];
+    const release: Array<() => void> = [];
+    const run = vi.fn((text: string) => new Promise<string>((resolve) => {
+      started.push(text);
+      release.push(() => resolve(`reply:${text}`));
+    }));
+    const dispatcher = new JaneRealtimeDispatcher(run);
+    const owner = {};
+    const speak = vi.fn();
+    dispatcher.attach(owner, speak);
+
+    const first = dispatcher.submit('thread', 'first');
+    const second = dispatcher.submit('thread', 'second');
+    await vi.waitFor(() => expect(started).toEqual(['first']));
+    expect(run).toHaveBeenCalledOnce();
+
+    release.shift()!();
+    await first;
+    await vi.waitFor(() => expect(started).toEqual(['first', 'second']));
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenNthCalledWith(1, 'reply:first');
+    dispatcher.acknowledge(owner);
+
+    release.shift()!();
+    await second;
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
+    expect(speak).toHaveBeenNthCalledWith(2, 'reply:second');
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispatches completed user transcript events and deduplicates retransmits', async () => {
+    const run = vi.fn(async (text: string) => `reply:${text}`);
+    const dispatcher = new JaneRealtimeDispatcher(run);
+    const owner = {};
+    const message = {
+      method: 'thread/realtime/transcript/done',
+      params: { role: 'user', text: 'Move the task to done' },
+    };
+
+    handleJaneRealtimeEvent(message, 'realtime-thread', dispatcher, owner);
+    handleJaneRealtimeEvent(message, 'realtime-thread', dispatcher, owner);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(run).toHaveBeenCalledWith('Move the task to done', expect.any(String));
   });
 });

@@ -136,7 +136,6 @@ export async function dispatchJaneRealtimeRequest(
         sessionKey: JANE_LIVE_SESSION_KEY,
         message: text,
         deliver: false,
-        thinking: 'low',
         fastMode: true,
         idempotencyKey: `jane-realtime:${requestKey}`,
       }) as { runId?: unknown } | null;
@@ -223,6 +222,23 @@ export class JaneRealtimeDispatcher {
       this.flushing = false;
     }
     if (!this.awaitingOwner && this.speaker && this.speaker.owner !== speaker.owner) void this.flush();
+  }
+}
+
+/** Dispatch only completed user turns; assistant completion acknowledges speech delivery. */
+export function handleJaneRealtimeEvent(
+  message: JsonMessage,
+  threadId: string | null,
+  dispatcher: JaneRealtimeDispatcher,
+  owner: object,
+): void {
+  if (message.method !== 'thread/realtime/transcript/done' || !isRecord(message.params)) return;
+  const role = message.params.role;
+  const text = message.params.text;
+  if (role === 'user' && typeof text === 'string' && text.trim() && threadId) {
+    void dispatcher.submit(threadId, text);
+  } else if (role === 'assistant') {
+    dispatcher.acknowledge(owner);
   }
 }
 
@@ -327,6 +343,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
   let nextId = 1000;
   let threadId: string | null = null;
   let closed = false;
+  let lastStderr = '';
   const owner = {};
 
   const close = (reason?: string) => {
@@ -422,10 +439,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
         });
       }
       if (message.method === 'thread/realtime/transcript/done' && dispatcher && isRecord(message.params)) {
-        const role = message.params.role;
-        const text = message.params.text;
-        if (role === 'user' && typeof text === 'string' && threadId) void dispatcher.submit(threadId, text);
-        if (role === 'assistant') dispatcher.acknowledge(owner);
+        handleJaneRealtimeEvent(message, threadId, dispatcher, owner);
       }
       sendJson(ws, message);
     }
@@ -459,6 +473,13 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
   ws.on('close', () => close());
   ws.on('error', () => close());
   child.on('error', () => close('Codex desktop runtime failed'));
-  child.on('exit', () => close('Codex desktop runtime stopped'));
-  child.stderr.resume();
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    const lines = chunk.trim().split('\n').filter(Boolean);
+    if (lines.length) lastStderr = lines.at(-1)!.slice(0, 500);
+  });
+  child.on('exit', (code, signal) => {
+    console.warn('[codex-realtime] host exited', { code, signal, detail: lastStderr || undefined });
+    close('Codex desktop runtime stopped');
+  });
 }
