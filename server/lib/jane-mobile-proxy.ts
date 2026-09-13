@@ -4,12 +4,46 @@ import { isJaneMobileCronControlRequest } from './jane-mobile-cron-control.js';
 
 const JANE_LIVE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
 const MAX_MESSAGE_CHARS = 64_000;
+const MAX_HISTORY_LIMIT = 20;
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function boundedText(value: unknown, limit: number): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, limit) : undefined;
+}
+
+function nestedText(detail: Record<string, unknown>, key: string): string | undefined {
+  for (const candidate of [detail, detail.input, detail.args, detail.arguments]) {
+    if (isRecord(candidate)) {
+      const value = boundedText(candidate[key], key === 'query' ? 240 : 512);
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+function publicToolMetadata(detail: Record<string, unknown>): {
+  tool?: string;
+  phase?: string;
+  query?: string;
+  domain?: string;
+  progress?: string;
+} {
+  const tool = boundedText(detail.name ?? detail.tool ?? detail.toolName, 64)?.toLowerCase();
+  const phase = boundedText(detail.phase, 32);
+  const query = nestedText(detail, 'query');
+  const rawUrl = nestedText(detail, 'url');
+  let domain: string | undefined;
+  if (rawUrl) {
+    try { domain = new URL(rawUrl).hostname.slice(0, 120); } catch { /* keep malformed URLs out of the public envelope */ }
+  }
+  const progress = boundedText(detail.progress ?? detail.summary ?? detail.message, 160);
+  return { ...(tool ? { tool } : {}), ...(phase ? { phase } : {}), ...(query ? { query } : {}), ...(domain ? { domain } : {}), ...(progress ? { progress } : {}) };
 }
 
 function isLoopback(address: string | undefined): boolean {
@@ -98,6 +132,15 @@ export function isAllowedJaneMobileChatSend(message: Record<string, unknown>): b
   return true;
 }
 
+export function isAllowedJaneMobileChatHistory(message: Record<string, unknown>): boolean {
+  if (message.type !== 'req' || message.method !== 'chat.history' || typeof message.id !== 'string') return false;
+  if (!isRecord(message.params)) return false;
+  const params = message.params;
+  if (Object.keys(params).some((key) => key !== 'sessionKey' && key !== 'limit')) return false;
+  if (params.sessionKey !== JANE_LIVE_SESSION_KEY) return false;
+  return Number.isInteger(params.limit) && (params.limit as number) > 0 && (params.limit as number) <= MAX_HISTORY_LIMIT;
+}
+
 export interface JaneMobileRelayPolicy {
   allowClientFrame(data: Buffer | string, isBinary: boolean): boolean;
   allowGatewayFrame(data: Buffer | string, isBinary: boolean): boolean;
@@ -147,17 +190,24 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
           memory: 'Checking memory',
           cron: 'Checking schedules',
         };
-        state = 'running'; label = safeLabels[tool] || 'Working';
+        const metadata = publicToolMetadata(detail);
+        state = 'running';
+        label = tool === 'web_search' && metadata.query
+          ? `searching: ${metadata.query}`
+          : tool === 'web_fetch' && metadata.domain
+            ? `fetching: ${metadata.domain}`
+            : safeLabels[tool] || 'Working';
       }
       if (!state) return null;
       const runId = typeof message.payload.runId === 'string'
         && /^[A-Za-z0-9._:-]{1,128}$/.test(message.payload.runId)
         ? message.payload.runId
         : undefined;
+      const metadata = stream === 'tool' ? publicToolMetadata(detail) : {};
       return JSON.stringify({
         type: 'event',
         event: 'nerve.agent.progress',
-        payload: { state, label, ...(runId ? { run_id: runId } : {}) },
+        payload: { state, label, ...metadata, ...(runId ? { run_id: runId } : {}) },
       });
     } catch {
       return null;
@@ -176,6 +226,10 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
           return true;
         }
         if (isJaneMobileCronControlRequest(message)) return true;
+        if (isAllowedJaneMobileChatHistory(message)) {
+          requestIds.add(message.id);
+          return true;
+        }
         if (!isAllowedJaneMobileChatSend(message)) return false;
         requestIds.add(message.id);
         return true;

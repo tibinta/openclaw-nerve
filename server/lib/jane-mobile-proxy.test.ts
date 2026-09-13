@@ -4,6 +4,7 @@ import {
   authorizeJaneMobileBridge,
   createJaneMobileRelayPolicy,
   gatewayWebSocketUrl,
+  isAllowedJaneMobileChatHistory,
   isAllowedJaneMobileChatSend,
 } from './jane-mobile-proxy.js';
 
@@ -21,6 +22,15 @@ function chatSend(overrides: Record<string, unknown> = {}): Record<string, unkno
       idempotencyKey: 'idem-1',
       ...overrides,
     },
+  };
+}
+
+function chatHistory(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: 'req',
+    id: 'history-1',
+    method: 'chat.history',
+    params: { sessionKey, limit: 20, ...overrides },
   };
 }
 
@@ -44,6 +54,13 @@ describe('Jane mobile relay policy', () => {
     }))).toBe(false);
   });
 
+  it('allows only bounded Jane Live chat.history requests', () => {
+    expect(isAllowedJaneMobileChatHistory(chatHistory())).toBe(true);
+    expect(isAllowedJaneMobileChatHistory(chatHistory({ sessionKey: 'agent:other:main' }))).toBe(false);
+    expect(isAllowedJaneMobileChatHistory(chatHistory({ limit: 21 }))).toBe(false);
+    expect(isAllowedJaneMobileChatHistory(chatHistory({ cursor: 'unexpected' }))).toBe(false);
+  });
+
   it('returns only responses for accepted requests and Jane Live chat events', () => {
     const policy = createJaneMobileRelayPolicy();
     expect(policy.allowClientFrame(JSON.stringify({
@@ -63,6 +80,7 @@ describe('Jane mobile relay policy', () => {
       },
     }), false)).toBe(false);
     expect(policy.allowClientFrame(JSON.stringify(chatSend()), false)).toBe(true);
+    expect(policy.allowClientFrame(JSON.stringify(chatHistory()), false)).toBe(true);
     expect(policy.allowClientFrame(JSON.stringify({
       type: 'req', id: 'cron-status', method: 'nerve.cron.group.status', params: {},
     }), false)).toBe(true);
@@ -71,6 +89,7 @@ describe('Jane mobile relay policy', () => {
     }), false)).toBe(false);
     expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'x', method: 'sessions.list', params: {} }), false)).toBe(false);
     expect(policy.allowGatewayFrame(JSON.stringify({ type: 'res', id: 'send-1', ok: true }), false)).toBe(true);
+    expect(policy.allowGatewayFrame(JSON.stringify({ type: 'res', id: 'history-1', ok: true, payload: { messages: [] } }), false)).toBe(true);
     expect(policy.allowGatewayFrame(JSON.stringify({ type: 'res', id: 'unknown', ok: true }), false)).toBe(false);
     expect(policy.allowGatewayFrame(JSON.stringify({
       type: 'event', event: 'chat', payload: { sessionKey, state: 'delta' },
@@ -100,9 +119,42 @@ describe('Jane mobile relay policy', () => {
     expect(JSON.parse(String(mapped))).toEqual({
       type: 'event',
       event: 'nerve.agent.progress',
-      payload: { state: 'running', label: 'Checking local state', run_id: 'run-safe-1' },
+      payload: {
+        state: 'running', label: 'Checking local state', tool: 'bash', phase: 'start', run_id: 'run-safe-1',
+      },
     });
     expect(String(mapped)).not.toMatch(/private|secret|prompt|token|sessionKey|args/);
+  });
+
+  it('keeps public search and fetch details while excluding raw tool arguments', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const search = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'agent', payload: {
+        sessionKey, runId: 'run-search', stream: 'tool',
+        data: { phase: 'start', name: 'web_search', input: { query: 'London weather tomorrow', secret: 'omit' } },
+      },
+    }), false);
+    expect(JSON.parse(String(search))).toMatchObject({
+      payload: {
+        state: 'running', label: 'searching: London weather tomorrow', tool: 'web_search', phase: 'start',
+        query: 'London weather tomorrow', run_id: 'run-search',
+      },
+    });
+    expect(String(search)).not.toMatch(/secret|input|args/);
+
+    const fetch = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'agent', payload: {
+        sessionKey, runId: 'run-fetch', stream: 'tool',
+        data: { phase: 'result', name: 'web_fetch', url: 'https://weather.example.test/forecast', body: 'omit' },
+      },
+    }), false);
+    expect(JSON.parse(String(fetch))).toMatchObject({
+      payload: {
+        state: 'running', label: 'fetching: weather.example.test', tool: 'web_fetch', phase: 'result', domain: 'weather.example.test',
+        run_id: 'run-fetch',
+      },
+    });
+    expect(String(fetch)).not.toMatch(/body|forecast/);
   });
 
   it('normalizes the configured gateway URL to its websocket route', () => {
