@@ -157,6 +157,20 @@ describe('Jane mobile relay policy', () => {
     expect(String(fetch)).not.toMatch(/body|forecast/);
   });
 
+  it('identifies file tools without exposing their paths or arguments', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const mapped = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'agent', payload: {
+        sessionKey, runId: 'run-file', stream: 'tool',
+        data: { phase: 'start', toolName: 'read', input: { path: '/private/client/secret.txt' } },
+      },
+    }), false);
+    expect(JSON.parse(String(mapped))).toMatchObject({
+      payload: { state: 'running', label: 'Reading files', tool: 'read', phase: 'start', run_id: 'run-file' },
+    });
+    expect(String(mapped)).not.toMatch(/private|secret\.txt|input/);
+  });
+
   it('normalizes the configured gateway URL to its websocket route', () => {
     expect(gatewayWebSocketUrl('http://127.0.0.1:18789').toString()).toBe('ws://127.0.0.1:18789/ws');
     expect(gatewayWebSocketUrl('wss://gateway.example/ws').toString()).toBe('wss://gateway.example/ws');

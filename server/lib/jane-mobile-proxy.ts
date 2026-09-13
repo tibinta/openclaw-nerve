@@ -181,16 +181,24 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
       } else if (stream === 'lifecycle' && detail.phase === 'error') {
         state = 'failed'; label = 'Jane failed';
       } else if (stream === 'tool' && (detail.phase === 'start' || detail.phase === 'result')) {
-        const tool = typeof detail.name === 'string' ? detail.name.toLowerCase() : '';
+        const metadata = publicToolMetadata(detail);
+        const tool = metadata.tool || '';
         const safeLabels: Record<string, string> = {
           bash: 'Checking local state',
           exec: 'Checking local state',
           read: 'Reading files',
+          write: 'Writing files',
+          edit: 'Editing files',
           web: 'Checking a source',
+          web_search: 'Searching the web',
+          web_fetch: 'Fetching a source',
           memory: 'Checking memory',
+          memory_search: 'Searching memory',
+          memory_get: 'Reading memory',
           cron: 'Checking schedules',
+          sessions_list: 'Listing sessions',
+          sessions_spawn: 'Starting a worker',
         };
-        const metadata = publicToolMetadata(detail);
         state = 'running';
         label = tool === 'web_search' && metadata.query
           ? `searching: ${metadata.query}`
