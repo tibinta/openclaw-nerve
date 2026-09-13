@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import {
   authorizeJaneMobileBridge,
   createJaneMobileRelayPolicy,
+  extractJanePublicProgress,
   gatewayWebSocketUrl,
   isAllowedJaneMobileChatHistory,
   isAllowedJaneMobileChatSend,
@@ -124,6 +125,21 @@ describe('Jane mobile relay policy', () => {
       },
     });
     expect(String(mapped)).not.toMatch(/private|secret|prompt|token|sessionKey|args/);
+  });
+
+  it('exposes only concrete tool activity to the realtime orb', () => {
+    expect(extractJanePublicProgress({
+      type: 'event', event: 'agent', payload: { sessionKey, stream: 'lifecycle', data: { phase: 'start' } },
+    })).toBeNull();
+    expect(extractJanePublicProgress({
+      type: 'event', event: 'agent', payload: {
+        sessionKey, runId: 'run-orb', stream: 'tool',
+        data: { phase: 'start', name: 'web_search', input: { query: 'London weather tomorrow' } },
+      },
+    })).toEqual({
+      state: 'running', label: 'searching: London weather tomorrow', tool: 'web_search', phase: 'start',
+      query: 'London weather tomorrow', run_id: 'run-orb',
+    });
   });
 
   it('keeps public search and fetch details while excluding raw tool arguments', () => {

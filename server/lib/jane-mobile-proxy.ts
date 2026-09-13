@@ -9,6 +9,17 @@ const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
+export interface JanePublicProgress {
+  state: 'started' | 'running' | 'completed' | 'failed';
+  label: string;
+  run_id?: string;
+  tool?: string;
+  phase?: string;
+  query?: string;
+  domain?: string;
+  progress?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -44,6 +55,43 @@ function publicToolMetadata(detail: Record<string, unknown>): {
   }
   const progress = boundedText(detail.progress ?? detail.summary, 160);
   return { ...(tool ? { tool } : {}), ...(phase ? { phase } : {}), ...(query ? { query } : {}), ...(domain ? { domain } : {}), ...(progress ? { progress } : {}) };
+}
+
+/** Convert one gateway agent event into the bounded public activity envelope. */
+export function extractJanePublicProgress(message: Record<string, unknown>): JanePublicProgress | null {
+  if (message.type !== 'event' || message.event !== 'agent' || !isRecord(message.payload)) return null;
+  if (message.payload.sessionKey !== JANE_LIVE_SESSION_KEY) return null;
+  const stream = message.payload.stream;
+  const detail = isRecord(message.payload.data) ? message.payload.data : {};
+  let state: JanePublicProgress['state'] | null = null;
+  let label = '';
+  // Lifecycle labels are intentionally omitted: the Live orb shows concrete
+  // tool activity, not generic "Jane started/completed" noise.
+  if (stream === 'tool' && (detail.phase === 'start' || detail.phase === 'result')) {
+    const metadata = publicToolMetadata(detail);
+    const safeLabels: Record<string, string> = {
+      bash: 'Checking local state', exec: 'Checking local state', read: 'Reading files',
+      write: 'Writing files', edit: 'Editing files', web: 'Checking a source',
+      web_search: 'Searching the web', web_fetch: 'Fetching a source', memory: 'Checking memory',
+      memory_search: 'Searching memory', memory_get: 'Reading memory', cron: 'Checking schedules',
+      sessions_list: 'Listing sessions', sessions_spawn: 'Starting a worker',
+    };
+    state = 'running';
+    label = metadata.tool === 'web_search' && metadata.query
+      ? `searching: ${metadata.query}`
+      : metadata.tool === 'web_fetch' && metadata.domain
+        ? `fetching: ${metadata.domain}`
+        : safeLabels[metadata.tool || ''] || 'Working';
+    const runId = typeof message.payload.runId === 'string'
+      && /^[A-Za-z0-9._:-]{1,128}$/.test(message.payload.runId)
+      ? message.payload.runId : undefined;
+    return { state, label, ...metadata, ...(runId ? { run_id: runId } : {}) };
+  }
+  if (!state) return null;
+  const runId = typeof message.payload.runId === 'string'
+    && /^[A-Za-z0-9._:-]{1,128}$/.test(message.payload.runId)
+    ? message.payload.runId : undefined;
+  return { state, label, ...(runId ? { run_id: runId } : {}) };
 }
 
 function isLoopback(address: string | undefined): boolean {
@@ -168,54 +216,12 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
           ? null
           : data;
       }
-      if (message.event !== 'agent') return null;
-
-      const stream = message.payload.stream;
-      const detail = isRecord(message.payload.data) ? message.payload.data : {};
-      let state: 'started' | 'running' | 'completed' | 'failed' | null = null;
-      let label = '';
-      if (stream === 'lifecycle' && detail.phase === 'start') {
-        state = 'started'; label = 'Jane started';
-      } else if (stream === 'lifecycle' && detail.phase === 'end') {
-        state = 'completed'; label = 'Jane completed';
-      } else if (stream === 'lifecycle' && detail.phase === 'error') {
-        state = 'failed'; label = 'Jane failed';
-      } else if (stream === 'tool' && (detail.phase === 'start' || detail.phase === 'result')) {
-        const metadata = publicToolMetadata(detail);
-        const tool = metadata.tool || '';
-        const safeLabels: Record<string, string> = {
-          bash: 'Checking local state',
-          exec: 'Checking local state',
-          read: 'Reading files',
-          write: 'Writing files',
-          edit: 'Editing files',
-          web: 'Checking a source',
-          web_search: 'Searching the web',
-          web_fetch: 'Fetching a source',
-          memory: 'Checking memory',
-          memory_search: 'Searching memory',
-          memory_get: 'Reading memory',
-          cron: 'Checking schedules',
-          sessions_list: 'Listing sessions',
-          sessions_spawn: 'Starting a worker',
-        };
-        state = 'running';
-        label = tool === 'web_search' && metadata.query
-          ? `searching: ${metadata.query}`
-          : tool === 'web_fetch' && metadata.domain
-            ? `fetching: ${metadata.domain}`
-            : safeLabels[tool] || 'Working';
-      }
-      if (!state) return null;
-      const runId = typeof message.payload.runId === 'string'
-        && /^[A-Za-z0-9._:-]{1,128}$/.test(message.payload.runId)
-        ? message.payload.runId
-        : undefined;
-      const metadata = stream === 'tool' ? publicToolMetadata(detail) : {};
+      const progress = extractJanePublicProgress(message);
+      if (!progress) return null;
       return JSON.stringify({
         type: 'event',
         event: 'nerve.agent.progress',
-        payload: { state, label, ...metadata, ...(runId ? { run_id: runId } : {}) },
+        payload: progress,
       });
     } catch {
       return null;

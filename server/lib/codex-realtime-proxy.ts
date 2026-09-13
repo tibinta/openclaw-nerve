@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
 import { getCodexDirectService } from './codex-direct.js';
 import { gatewayRpcCall, subscribeGatewayEvents } from './gateway-rpc.js';
+import { extractJanePublicProgress } from './jane-mobile-proxy.js';
 
 const CODEX_APP_BINARY = '/Applications/ChatGPT.app/Contents/Resources/codex';
 const DEVICECHECK_MODULE = '/Applications/ChatGPT.app/Contents/Resources/native/devicecheck.node';
@@ -405,10 +406,26 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
   let closed = false;
   let lastStderr = '';
   const owner = {};
+  const forwardedFinals = new Set<string>();
+  const unsubscribeGateway = subscribeGatewayEvents((event) => {
+    if (closed) return;
+    const progress = extractJanePublicProgress(event);
+    if (progress) sendJson(ws, { method: 'nerve/realtime/progress', params: { ...progress } });
+    if (event.event !== 'chat' || !isRecord(event.payload)) return;
+    const final = extractJaneCanonicalFinal(event.payload);
+    if (!final || forwardedFinals.has(final.key)) return;
+    forwardedFinals.add(final.key);
+    if (forwardedFinals.size > 128) forwardedFinals.delete(forwardedFinals.values().next().value!);
+    sendJson(ws, {
+      method: 'nerve/realtime/final',
+      params: { key: final.key, text: final.text, runId: event.payload.runId },
+    });
+  });
 
   const close = (reason?: string) => {
     if (closed) return;
     closed = true;
+    unsubscribeGateway();
     dispatcher?.detach(owner);
     lines.close();
     if (!child.killed) child.kill('SIGTERM');
