@@ -316,6 +316,7 @@ export function normalizeCodexRealtimeRequest(message: JsonMessage, threadId: st
         clientManagedHandoffs: true,
         delegationAckFiller: false,
         includeStartupContext: false,
+        realtimeStartInstructions: VOICE_PROMPT,
         flushTranscriptTailOnSessionEnd: true,
         transport: { type: 'webrtc', sdp },
       },

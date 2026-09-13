@@ -32,6 +32,7 @@ describe('Codex realtime boundary', () => {
       clientManagedHandoffs: true,
       delegationAckFiller: false,
       includeStartupContext: false,
+      realtimeStartInstructions: expect.stringContaining('Only speak text explicitly supplied by Nerve'),
       flushTranscriptTailOnSessionEnd: true,
       transport: { type: 'webrtc', sdp: 'v=0\r\n' },
     });
