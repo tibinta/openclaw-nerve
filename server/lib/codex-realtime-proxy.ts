@@ -416,14 +416,16 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
   const unsubscribeGateway = subscribeGatewayEvents((event) => {
     if (closed) return;
     const progress = extractJanePublicProgress(event);
-    if (progress) sendJson(ws, { method: 'nerve/realtime/progress', params: { ...progress } });
+    // Use the public envelope names consumed by the installed iOS client.
+    // Keeping this on the realtime socket avoids a second control/TTS path.
+    if (progress) sendJson(ws, { method: 'nerve/agent/progress', params: { ...progress } });
     if (event.event !== 'chat' || !isRecord(event.payload)) return;
     const final = extractJaneCanonicalFinal(event.payload);
     if (!final || forwardedFinals.has(final.key)) return;
     forwardedFinals.add(final.key);
     if (forwardedFinals.size > 128) forwardedFinals.delete(forwardedFinals.values().next().value!);
     sendJson(ws, {
-      method: 'nerve/realtime/final',
+      method: 'thread/realtime/assistant/final',
       params: { key: final.key, text: final.text, runId: event.payload.runId },
     });
   });
