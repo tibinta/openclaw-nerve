@@ -277,7 +277,7 @@ export class JaneRealtimeDispatcher {
   }
 }
 
-/** Dispatch only completed user turns; assistant completion acknowledges speech delivery. */
+/** Dispatch only completed user turns; speech stays queued until playout is confirmed. */
 export function handleJaneRealtimeEvent(
   message: JsonMessage,
   threadId: string | null,
@@ -298,8 +298,6 @@ export function handleJaneRealtimeEvent(
       .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
     const interventionKey = itemID ? `${callID ? `${callID}:` : ''}${itemID}` : undefined;
     void dispatcher.submit(threadId, text, interventionKey);
-  } else if (role === 'assistant') {
-    dispatcher.acknowledge(owner);
   }
 }
 
@@ -488,7 +486,10 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       return;
     }
 
-    if (message.method?.startsWith('thread/realtime/') || (message.method && REALTIME_ITEM_METHODS.has(message.method))) {
+    const isRealtimeItemEvent = Boolean(message.method && REALTIME_ITEM_METHODS.has(message.method)
+      && isRecord(message.params)
+      && (message.params.threadId === undefined || message.params.threadId === threadId));
+    if (message.method?.startsWith('thread/realtime/') || isRealtimeItemEvent) {
       if (message.method === 'thread/realtime/started' && threadId && dispatcher) {
         dispatcher.attach(owner, async (text) => {
           if (closed || child.stdin.destroyed) throw new Error('Codex voice host is unavailable');
@@ -500,7 +501,8 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
           writeJson(child, { ...speech, id: nextId++ });
         });
       }
-      if ((TRANSCRIPT_FINAL_METHODS.has(message.method) || message.method === 'item/completed') && dispatcher && isRecord(message.params)) {
+      const method = message.method;
+      if (method && (TRANSCRIPT_FINAL_METHODS.has(method) || method === 'item/completed') && dispatcher && isRecord(message.params)) {
         handleJaneRealtimeEvent(message, threadId, dispatcher, owner);
       }
       sendJson(ws, message);

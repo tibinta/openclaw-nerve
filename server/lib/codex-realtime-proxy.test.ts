@@ -323,6 +323,23 @@ describe('Codex realtime boundary', () => {
     expect(run).toHaveBeenNthCalledWith(1, 'Check the board', 'jane-turn:item-7');
   });
 
+  it('does not treat assistant transcript completion as audio playout acknowledgement', async () => {
+    const run = vi.fn(async (text: string) => `reply:${text}`);
+    const dispatcher = new JaneRealtimeDispatcher(run);
+    const owner = {};
+    const speak = vi.fn();
+    dispatcher.attach(owner, speak);
+    await dispatcher.submit('thread', 'first');
+    handleJaneRealtimeEvent({
+      method: 'thread/realtime/transcript/done',
+      params: { role: 'assistant', text: 'first result', item_id: 'assistant-1' },
+    }, 'thread', dispatcher, owner);
+    dispatcher.enqueueFinal({ key: 'second', text: 'second result' });
+    expect(speak).toHaveBeenCalledTimes(1);
+    dispatcher.acknowledge(owner);
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
+  });
+
   it('deduplicates canonical background finals while preserving distinct messages', async () => {
     const dispatcher = new JaneRealtimeDispatcher();
     const owner = {};
