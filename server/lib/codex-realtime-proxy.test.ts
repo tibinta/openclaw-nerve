@@ -4,11 +4,18 @@ import {
   dispatchJaneRealtimeRequest,
   extractJaneCanonicalFinal,
   handleJaneRealtimeEvent,
+  isJaneRealtimeStartedEvent,
   JaneRealtimeDispatcher,
   normalizeCodexRealtimeRequest,
 } from './codex-realtime-proxy.js';
 
 describe('Codex realtime boundary', () => {
+  it('recognizes both app-server realtime start envelopes for speech attachment', () => {
+    expect(isJaneRealtimeStartedEvent('thread/realtime/started')).toBe(true);
+    expect(isJaneRealtimeStartedEvent('thread/realtime/item/started')).toBe(true);
+    expect(isJaneRealtimeStartedEvent('thread/realtime/item/completed')).toBe(false);
+  });
+
   it('forces Nerve-owned realtime settings and strips Platform API routing', () => {
     const request = normalizeCodexRealtimeRequest({
       id: 7,
