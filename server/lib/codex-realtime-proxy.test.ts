@@ -292,19 +292,35 @@ describe('Codex realtime boundary', () => {
     expect(run).toHaveBeenCalledWith('Răspunde cât timp apelul rămâne deschis', expect.any(String));
   });
 
-  it('uses the realtime turn identity so an intentional repeated phrase is not dropped', async () => {
+  it('uses the app-server item identity so an intentional repeated phrase is not dropped', async () => {
     const run = vi.fn(async (text: string) => `reply:${text}`);
     const dispatcher = new JaneRealtimeDispatcher(run);
     const owner = {};
     const base = { role: 'user', text: 'Spune aceeași frază' };
 
-    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/completed', params: { ...base, turn_id: 'turn-1' } }, 'thread', dispatcher, owner);
-    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/completed', params: { ...base, turn_id: 'turn-2' } }, 'thread', dispatcher, owner);
-    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/completed', params: { ...base, turn_id: 'turn-1' } }, 'thread', dispatcher, owner);
+    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/done', params: { ...base, item_id: 'item-1' } }, 'thread', dispatcher, owner);
+    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/done', params: { ...base, item_id: 'item-2' } }, 'thread', dispatcher, owner);
+    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/done', params: { ...base, item_id: 'item-1' } }, 'thread', dispatcher, owner);
 
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
-    expect(run).toHaveBeenNthCalledWith(1, base.text, 'jane-turn:turn-1');
-    expect(run).toHaveBeenNthCalledWith(2, base.text, 'jane-turn:turn-2');
+    expect(run).toHaveBeenNthCalledWith(1, base.text, 'jane-turn:item-1');
+    expect(run).toHaveBeenNthCalledWith(2, base.text, 'jane-turn:item-2');
+  });
+
+  it('dispatches a real app-server user item completion and ignores synthetic turn aliases', async () => {
+    const run = vi.fn(async (text: string) => `reply:${text}`);
+    const dispatcher = new JaneRealtimeDispatcher(run);
+    const owner = {};
+    handleJaneRealtimeEvent({
+      method: 'item/completed',
+      params: { item: { id: 'item-7', type: 'userMessage', text: 'Check the board' }, turn_id: 'synthetic' },
+    }, 'thread', dispatcher, owner);
+    handleJaneRealtimeEvent({
+      method: 'thread/realtime/transcript/done',
+      params: { role: 'user', text: 'Check the board', item_id: 'item-7', turn_id: 'synthetic' },
+    }, 'thread', dispatcher, owner);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(run).toHaveBeenNthCalledWith(1, 'Check the board', 'jane-turn:item-7');
   });
 
   it('deduplicates canonical background finals while preserving distinct messages', async () => {

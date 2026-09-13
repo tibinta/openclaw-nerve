@@ -26,6 +26,11 @@ const TRANSCRIPT_FINAL_METHODS = new Set([
   'thread/realtime/transcript/done',
   'thread/realtime/transcript/completed',
 ]);
+const REALTIME_ITEM_METHODS = new Set([
+  'item/started',
+  'item/delta',
+  'item/completed',
+]);
 const LANGUAGE_MATCH_PROMPT = 'Speak Nerve-supplied messages in the language the user primarily uses in this live conversation, translating when needed. If the user has not established a language in this realtime session, use Romanian. Short acknowledgements such as "ok", "okay", or "perfect" do not change the established language. Preserve names, numbers, amounts, and task titles.';
 const VOICE_PROMPT = [
   'You are the realtime voice layer for Nerve.',
@@ -279,17 +284,19 @@ export function handleJaneRealtimeEvent(
   dispatcher: JaneRealtimeDispatcher,
   owner: object,
 ): void {
-  if (!message.method || !TRANSCRIPT_FINAL_METHODS.has(message.method) || !isRecord(message.params)) return;
-  const role = message.params.role;
-  const text = message.params.text;
+  if (!message.method || (!TRANSCRIPT_FINAL_METHODS.has(message.method) && message.method !== 'item/completed') || !isRecord(message.params)) return;
+  const item = isRecord(message.params.item) ? message.params.item : null;
+  const role = message.params.role ?? item?.role ?? (item?.type === 'userMessage' ? 'user' : item?.type === 'agentMessage' ? 'assistant' : undefined);
+  const text = message.params.text ?? item?.text;
   if (role === 'user' && typeof text === 'string' && text.trim() && threadId) {
-    const turnID = ['item_id', 'response_id', 'utterance_id', 'turn_id']
+    // App-server item/transcript IDs are replay-stable. Synthetic turn_id
+    // aliases are intentionally ignored because they are not protocol IDs.
+    const itemID = [item?.id, message.params.itemId, message.params.item_id, message.params.responseId, message.params.response_id, message.params.utteranceId, message.params.utterance_id]
+      .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+    const callID = ['callId', 'call_id', 'realtimeSessionId', 'realtime_session_id']
       .map((key) => message.params?.[key])
       .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
-    const callID = ['call_id', 'realtime_session_id']
-      .map((key) => message.params?.[key])
-      .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
-    const interventionKey = turnID ? `${callID ? `${callID}:` : ''}${turnID}` : undefined;
+    const interventionKey = itemID ? `${callID ? `${callID}:` : ''}${itemID}` : undefined;
     void dispatcher.submit(threadId, text, interventionKey);
   } else if (role === 'assistant') {
     dispatcher.acknowledge(owner);
@@ -481,7 +488,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       return;
     }
 
-    if (message.method?.startsWith('thread/realtime/')) {
+    if (message.method?.startsWith('thread/realtime/') || (message.method && REALTIME_ITEM_METHODS.has(message.method))) {
       if (message.method === 'thread/realtime/started' && threadId && dispatcher) {
         dispatcher.attach(owner, async (text) => {
           if (closed || child.stdin.destroyed) throw new Error('Codex voice host is unavailable');
@@ -493,7 +500,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
           writeJson(child, { ...speech, id: nextId++ });
         });
       }
-      if (TRANSCRIPT_FINAL_METHODS.has(message.method) && dispatcher && isRecord(message.params)) {
+      if ((TRANSCRIPT_FINAL_METHODS.has(message.method) || message.method === 'item/completed') && dispatcher && isRecord(message.params)) {
         handleJaneRealtimeEvent(message, threadId, dispatcher, owner);
       }
       sendJson(ws, message);
