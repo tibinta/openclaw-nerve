@@ -32,6 +32,7 @@ const REALTIME_ITEM_METHODS = new Set([
   'thread/realtime/item/transcript/delta',
   'thread/realtime/item/completed',
 ]);
+const REALTIME_STARTED_METHODS = new Set(['thread/realtime/started', 'thread/realtime/item/started']);
 const LANGUAGE_MATCH_PROMPT = 'Speak Nerve-supplied messages in the language the user primarily uses in this live conversation, translating when needed. If the user has not established a language in this realtime session, use Romanian. Short acknowledgements such as "ok", "okay", or "perfect" do not change the established language. Preserve names, numbers, amounts, and task titles.';
 const VOICE_PROMPT = [
   'You are the realtime voice layer for Nerve.',
@@ -364,6 +365,10 @@ export function normalizeCodexRealtimeRequest(message: JsonMessage, threadId: st
   return { id: message.id, method: message.method, params: { threadId } };
 }
 
+export function isJaneRealtimeStartedEvent(method: string | undefined): boolean {
+  return typeof method === 'string' && REALTIME_STARTED_METHODS.has(method);
+}
+
 function loadGenerateToken(): GenerateToken {
   const modulePath = resolveFirst([process.env.CODEX_DEVICECHECK_PATH, DEVICECHECK_MODULE]);
   if (!modulePath) throw new Error('ChatGPT device attestation is unavailable');
@@ -401,6 +406,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
   });
   const lines = createInterface({ input: child.stdout });
   const clientIds = new Map<number, string | number | undefined>();
+  const clientMethods = new Map<number, string>();
   let nextId = 1000;
   let threadId: string | null = null;
   let closed = false;
@@ -498,7 +504,24 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
 
     if (typeof message.id === 'number' && clientIds.has(message.id)) {
       const clientId = clientIds.get(message.id);
+      const clientMethod = clientMethods.get(message.id);
       clientIds.delete(message.id);
+      clientMethods.delete(message.id);
+      // Some app-server builds acknowledge start without emitting the
+      // optional `thread/realtime/started` notification. Attach the Nerve
+      // speech queue on the start response as well, otherwise finals stay
+      // visible in text but can never reach realtime audio.
+      if (clientMethod === 'thread/realtime/start' && threadId && dispatcher && !closed) {
+        dispatcher.attach(owner, async (text) => {
+          if (closed || child.stdin.destroyed) throw new Error('Codex voice host is unavailable');
+          const speech = normalizeCodexRealtimeRequest({
+            method: 'thread/realtime/appendSpeech',
+            params: { text },
+          }, threadId!);
+          if (!speech) throw new Error('Codex voice result is empty');
+          writeJson(child, { ...speech, id: nextId++ });
+        });
+      }
       sendJson(ws, { ...message, id: clientId });
       return;
     }
@@ -507,7 +530,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       && isRecord(message.params)
       && (message.params.threadId === undefined || message.params.threadId === threadId));
     if (message.method?.startsWith('thread/realtime/') || isRealtimeItemEvent) {
-      if (message.method === 'thread/realtime/started' && threadId && dispatcher) {
+      if (isJaneRealtimeStartedEvent(message.method) && threadId && dispatcher) {
         dispatcher.attach(owner, async (text) => {
           if (closed || child.stdin.destroyed) throw new Error('Codex voice host is unavailable');
           const speech = normalizeCodexRealtimeRequest({
@@ -546,8 +569,11 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       sendJson(ws, { id: incoming.id, error: { code: -32601, message: 'Realtime method not allowed' } });
       return;
     }
+    const requestMethod = incoming.method;
+    if (!requestMethod) return;
     const internalId = nextId++;
     clientIds.set(internalId, incoming.id);
+    clientMethods.set(internalId, requestMethod);
     writeJson(child, { ...normalized, id: internalId });
   });
 
