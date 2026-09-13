@@ -314,6 +314,7 @@ export function normalizeCodexRealtimeRequest(message: JsonMessage, threadId: st
         version: 'v3',
         voice: typeof params.voice === 'string' && VOICES.has(params.voice) ? params.voice : 'juniper',
         clientManagedHandoffs: true,
+        delegationAckFiller: false,
         includeStartupContext: false,
         flushTranscriptTailOnSessionEnd: true,
         transport: { type: 'webrtc', sdp },

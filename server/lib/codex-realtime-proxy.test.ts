@@ -30,6 +30,7 @@ describe('Codex realtime boundary', () => {
       version: 'v3',
       voice: 'cove',
       clientManagedHandoffs: true,
+      delegationAckFiller: false,
       includeStartupContext: false,
       flushTranscriptTailOnSessionEnd: true,
       transport: { type: 'webrtc', sdp: 'v=0\r\n' },
