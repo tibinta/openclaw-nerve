@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   codexRealtimeEnvironment,
   dispatchJaneRealtimeRequest,
+  extractJaneCanonicalFinal,
   handleJaneRealtimeEvent,
   JaneRealtimeDispatcher,
   normalizeCodexRealtimeRequest,
@@ -273,5 +274,38 @@ describe('Codex realtime boundary', () => {
     handleJaneRealtimeEvent(message, 'realtime-thread', dispatcher, owner);
     await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
     expect(run).toHaveBeenCalledWith('Move the task to done', expect.any(String));
+  });
+
+  it('deduplicates canonical background finals while preserving distinct messages', async () => {
+    const dispatcher = new JaneRealtimeDispatcher();
+    const owner = {};
+    const speak = vi.fn();
+    dispatcher.attach(owner, speak);
+    const first = extractJaneCanonicalFinal({
+      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      state: 'final',
+      message: { role: 'assistant', content: 'Cron result one', __openclaw: { id: 'msg-1' } },
+    });
+    const duplicate = extractJaneCanonicalFinal({
+      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      state: 'final',
+      message: { role: 'assistant', content: 'Cron result one', __openclaw: { id: 'msg-1' } },
+    });
+    const second = extractJaneCanonicalFinal({
+      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      state: 'final',
+      message: { role: 'assistant', content: 'Cron result two', __openclaw: { id: 'msg-2' } },
+    });
+    expect(first).not.toBeNull();
+    expect(duplicate).not.toBeNull();
+    expect(second).not.toBeNull();
+    dispatcher.enqueueFinal(first!);
+    dispatcher.enqueueFinal(duplicate!);
+    dispatcher.enqueueFinal(second!);
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledWith('Cron result one'));
+    expect(speak).toHaveBeenCalledTimes(1);
+    dispatcher.acknowledge(owner);
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledWith('Cron result two'));
+    expect(speak).toHaveBeenCalledTimes(2);
   });
 });

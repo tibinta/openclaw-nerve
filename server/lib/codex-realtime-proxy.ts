@@ -61,6 +61,11 @@ interface QueuedSpeech {
   text: string;
 }
 
+export interface JaneCanonicalFinal {
+  key: string;
+  text: string;
+}
+
 const defaultJaneDispatchDependencies: JaneDispatchDependencies = {
   codexMessage: async (text) => getCodexDirectService().message(text),
   gatewayCall: gatewayRpcCall,
@@ -86,6 +91,29 @@ function finalChatText(payload: Record<string, unknown>): string {
     if (assistant) return textFromContent(assistant);
   }
   return textFromContent(payload.message) || textFromContent(payload.content);
+}
+
+/** Extract one canonical, text-bearing final from the Jane Live gateway stream. */
+export function extractJaneCanonicalFinal(payload: Record<string, unknown>): JaneCanonicalFinal | null {
+  if (payload.sessionKey !== JANE_LIVE_SESSION_KEY || payload.state !== 'final') return null;
+  const text = finalChatText(payload);
+  if (!text) return null;
+  const message = Array.isArray(payload.messages)
+    ? [...payload.messages].reverse().find((item) => isRecord(item) && item.role === 'assistant') as Record<string, unknown> | undefined
+    : isRecord(payload.message) ? payload.message : null;
+  const metadata = message && isRecord(message.__openclaw) ? message.__openclaw : null;
+  const canonicalID = [
+    payload.message_id,
+    payload.messageId,
+    metadata?.id,
+    message?.id,
+    payload.id,
+    payload.runId,
+  ].find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  return {
+    key: canonicalID ? `jane:${canonicalID}` : `jane:text:${createHash('sha256').update(text).digest('hex')}`,
+    text,
+  };
 }
 
 /** Route one final transcript through the existing Codex coordinator or Jane session. */
@@ -169,6 +197,13 @@ export class JaneRealtimeDispatcher {
     this.run = run;
   }
 
+  /** Queue a final already produced by Nerve (cron/runtime or another gateway producer). */
+  enqueueFinal(final: JaneCanonicalFinal): void {
+    if (!this.remember(final.key)) return;
+    this.queue.push({ key: final.key, text: final.text });
+    void this.flush();
+  }
+
   attach(owner: object, speak: (text: string) => void | Promise<void>): void {
     this.speaker = { owner, speak };
     void this.flush();
@@ -191,10 +226,7 @@ export class JaneRealtimeDispatcher {
     const clean = text.trim();
     if (!clean) return;
     const key = createHash('sha256').update(`${threadId}\0${clean}`).digest('hex');
-    if (this.seen.has(key)) return;
-    this.seen.add(key);
-    this.seenOrder.push(key);
-    if (this.seenOrder.length > 128) this.seen.delete(this.seenOrder.shift()!);
+    if (!this.remember(key)) return;
 
     const dispatch = this.dispatchTail.then(async () => {
       try {
@@ -207,6 +239,14 @@ export class JaneRealtimeDispatcher {
     });
     this.dispatchTail = dispatch.catch(() => undefined);
     await dispatch;
+  }
+
+  private remember(key: string): boolean {
+    if (this.seen.has(key)) return false;
+    this.seen.add(key);
+    this.seenOrder.push(key);
+    if (this.seenOrder.length > 128) this.seen.delete(this.seenOrder.shift()!);
+    return true;
   }
 
   private async flush(): Promise<void> {

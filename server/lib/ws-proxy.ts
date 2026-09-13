@@ -22,14 +22,18 @@ import { randomUUID } from 'node:crypto';
 import { config, WS_ALLOWED_HOSTS, SESSION_COOKIE_NAME } from './config.js';
 import { verifySession, parseSessionCookie } from './session.js';
 import { createDeviceBlock, getDeviceIdentity } from './device-identity.js';
-import { gatewayRpcCall } from './gateway-rpc.js';
+import { gatewayRpcCall, subscribeGatewayEvents } from './gateway-rpc.js';
 import { canInjectGatewayToken } from './trust-utils.js';
 import { isAllowedOrigin } from './origin-utils.js';
 import {
   isInvalidEncryptedContentError,
   rotateSessionAfterInvalidEncryptedContent,
 } from './session-recovery.js';
-import { createCodexRealtimeRelay, JaneRealtimeDispatcher } from './codex-realtime-proxy.js';
+import {
+  createCodexRealtimeRelay,
+  extractJaneCanonicalFinal,
+  JaneRealtimeDispatcher,
+} from './codex-realtime-proxy.js';
 import {
   authorizeJaneMobileBridge,
   createJaneMobileRelayPolicy,
@@ -177,6 +181,17 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
   const janeMobileWss = new WebSocketServer({ noServer: true });
   const janeRealtimeWss = new WebSocketServer({ noServer: true });
   const janeRealtimeDispatcher = new JaneRealtimeDispatcher();
+  subscribeGatewayEvents((event) => {
+    if (event.event !== 'chat' || !isRecord(event.payload)) return;
+    const runId = event.payload.runId;
+    const idempotencyKey = event.payload.idempotencyKey;
+    // Direct Live turns are already resolved by dispatchJaneRealtimeRequest.
+    // Only gateway-produced background finals (cron/runtime injections) enter here.
+    if ((typeof runId === 'string' && runId.startsWith('jane-realtime:'))
+      || (typeof idempotencyKey === 'string' && idempotencyKey.startsWith('jane-realtime:'))) return;
+    const final = extractJaneCanonicalFinal(event.payload);
+    if (final) janeRealtimeDispatcher.enqueueFinal(final);
+  });
   const janeMobileCronController = createJaneMobileCronController();
   activeWssInstances.push(wss, codexRealtimeWss, janeMobileWss, janeRealtimeWss);
 
