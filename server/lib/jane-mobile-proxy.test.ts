@@ -97,7 +97,7 @@ describe('Jane mobile relay policy', () => {
     }), false)).toBe(true);
     expect(policy.allowGatewayFrame(JSON.stringify({
       type: 'event', event: 'chat', payload: { sessionKey, runId: 'jane-realtime:voice-turn', state: 'final' },
-    }), false)).toBe(false);
+    }), false)).toBe(true);
     expect(policy.allowGatewayFrame(JSON.stringify({
       type: 'event', event: 'chat', payload: { sessionKey: 'agent:other:main', state: 'delta' },
     }), false)).toBe(false);

@@ -212,9 +212,9 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
       if (message.event === 'connect.challenge') return data;
       if (!isRecord(message.payload) || message.payload.sessionKey !== JANE_LIVE_SESSION_KEY) return null;
       if (message.event === 'chat') {
-        return typeof message.payload.runId === 'string' && message.payload.runId.startsWith('jane-realtime:')
-          ? null
-          : data;
+        // Live finals are the canonical result the native client must render;
+        // suppressing them here left the phone with only the realtime filler.
+        return data;
       }
       const progress = extractJanePublicProgress(message);
       if (!progress) return null;
