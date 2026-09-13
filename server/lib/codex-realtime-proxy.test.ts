@@ -312,7 +312,7 @@ describe('Codex realtime boundary', () => {
     const dispatcher = new JaneRealtimeDispatcher(run);
     const owner = {};
     handleJaneRealtimeEvent({
-      method: 'item/completed',
+      method: 'thread/realtime/item/completed',
       params: { item: { id: 'item-7', type: 'userMessage', text: 'Check the board' }, turn_id: 'synthetic' },
     }, 'thread', dispatcher, owner);
     handleJaneRealtimeEvent({

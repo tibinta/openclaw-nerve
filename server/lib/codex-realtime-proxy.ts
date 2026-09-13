@@ -27,9 +27,9 @@ const TRANSCRIPT_FINAL_METHODS = new Set([
   'thread/realtime/transcript/completed',
 ]);
 const REALTIME_ITEM_METHODS = new Set([
-  'item/started',
-  'item/delta',
-  'item/completed',
+  'thread/realtime/item/started',
+  'thread/realtime/item/transcript/delta',
+  'thread/realtime/item/completed',
 ]);
 const LANGUAGE_MATCH_PROMPT = 'Speak Nerve-supplied messages in the language the user primarily uses in this live conversation, translating when needed. If the user has not established a language in this realtime session, use Romanian. Short acknowledgements such as "ok", "okay", or "perfect" do not change the established language. Preserve names, numbers, amounts, and task titles.';
 const VOICE_PROMPT = [
@@ -284,7 +284,7 @@ export function handleJaneRealtimeEvent(
   dispatcher: JaneRealtimeDispatcher,
   owner: object,
 ): void {
-  if (!message.method || (!TRANSCRIPT_FINAL_METHODS.has(message.method) && message.method !== 'item/completed') || !isRecord(message.params)) return;
+  if (!message.method || (!TRANSCRIPT_FINAL_METHODS.has(message.method) && message.method !== 'thread/realtime/item/completed') || !isRecord(message.params)) return;
   const item = isRecord(message.params.item) ? message.params.item : null;
   const role = message.params.role ?? item?.role ?? (item?.type === 'userMessage' ? 'user' : item?.type === 'agentMessage' ? 'assistant' : undefined);
   const text = message.params.text ?? item?.text;
@@ -502,7 +502,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
         });
       }
       const method = message.method;
-      if (method && (TRANSCRIPT_FINAL_METHODS.has(method) || method === 'item/completed') && dispatcher && isRecord(message.params)) {
+      if (method && (TRANSCRIPT_FINAL_METHODS.has(method) || method === 'thread/realtime/item/completed') && dispatcher && isRecord(message.params)) {
         handleJaneRealtimeEvent(message, threadId, dispatcher, owner);
       }
       sendJson(ws, message);
