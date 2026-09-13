@@ -30,7 +30,7 @@ describe('Codex realtime boundary', () => {
       version: 'v3',
       voice: 'cove',
       clientManagedHandoffs: true,
-      delegationAckFiller: false,
+      delegationAckFiller: true,
       includeStartupContext: false,
       realtimeStartInstructions: expect.stringContaining('Only speak text explicitly supplied by Nerve'),
       flushTranscriptTailOnSessionEnd: true,
@@ -61,6 +61,24 @@ describe('Codex realtime boundary', () => {
     }, 'nerve-thread');
 
     expect(request?.params?.voice).toBe('juniper');
+  });
+
+  it('keeps acknowledgement fillers on unless explicitly disabled', () => {
+    const enabled = normalizeCodexRealtimeRequest({
+      method: 'thread/realtime/start',
+      params: { delegationAckFiller: true, transport: { type: 'webrtc', sdp: 'v=0\\r\\n' } },
+    }, 'nerve-thread');
+    const defaulted = normalizeCodexRealtimeRequest({
+      method: 'thread/realtime/start',
+      params: { transport: { type: 'webrtc', sdp: 'v=0\\r\\n' } },
+    }, 'nerve-thread');
+    const disabled = normalizeCodexRealtimeRequest({
+      method: 'thread/realtime/start',
+      params: { delegationAckFiller: false, transport: { type: 'webrtc', sdp: 'v=0\\r\\n' } },
+    }, 'nerve-thread');
+    expect(enabled?.params?.delegationAckFiller).toBe(true);
+    expect(defaulted?.params?.delegationAckFiller).toBe(true);
+    expect(disabled?.params?.delegationAckFiller).toBe(false);
   });
 
   it('translates Nerve readback into the language established by the user', () => {
