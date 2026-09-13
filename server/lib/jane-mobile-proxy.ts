@@ -42,7 +42,7 @@ function publicToolMetadata(detail: Record<string, unknown>): {
   if (rawUrl) {
     try { domain = new URL(rawUrl).hostname.slice(0, 120); } catch { /* keep malformed URLs out of the public envelope */ }
   }
-  const progress = boundedText(detail.progress ?? detail.summary ?? detail.message, 160);
+  const progress = boundedText(detail.progress ?? detail.summary, 160);
   return { ...(tool ? { tool } : {}), ...(phase ? { phase } : {}), ...(query ? { query } : {}), ...(domain ? { domain } : {}), ...(progress ? { progress } : {}) };
 }
 
