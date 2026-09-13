@@ -19,6 +19,7 @@ describe('Codex realtime boundary', () => {
         model: 'attacker-model',
         version: 'v1',
         clientManagedHandoffs: false,
+        delegationAckFiller: true,
         voice: 'cove',
         transport: { type: 'webrtc', sdp: 'v=0\r\n' },
       },
@@ -63,7 +64,7 @@ describe('Codex realtime boundary', () => {
     expect(request?.params?.voice).toBe('juniper');
   });
 
-  it('keeps acknowledgement fillers on unless explicitly disabled', () => {
+  it('keeps acknowledgement fillers off unless explicitly enabled', () => {
     const enabled = normalizeCodexRealtimeRequest({
       method: 'thread/realtime/start',
       params: { delegationAckFiller: true, transport: { type: 'webrtc', sdp: 'v=0\\r\\n' } },
@@ -77,7 +78,7 @@ describe('Codex realtime boundary', () => {
       params: { delegationAckFiller: false, transport: { type: 'webrtc', sdp: 'v=0\\r\\n' } },
     }, 'nerve-thread');
     expect(enabled?.params?.delegationAckFiller).toBe(true);
-    expect(defaulted?.params?.delegationAckFiller).toBe(true);
+    expect(defaulted?.params?.delegationAckFiller).toBe(false);
     expect(disabled?.params?.delegationAckFiller).toBe(false);
   });
 
