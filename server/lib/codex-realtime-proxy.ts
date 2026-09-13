@@ -22,6 +22,10 @@ const CLIENT_METHODS = new Set([
   'thread/realtime/stop',
   'thread/realtime/listVoices',
 ]);
+const TRANSCRIPT_FINAL_METHODS = new Set([
+  'thread/realtime/transcript/done',
+  'thread/realtime/transcript/completed',
+]);
 const LANGUAGE_MATCH_PROMPT = 'Speak Nerve-supplied messages in the language the user primarily uses in this live conversation, translating when needed. If the user has not established a language in this realtime session, use Romanian. Short acknowledgements such as "ok", "okay", or "perfect" do not change the established language. Preserve names, numbers, amounts, and task titles.';
 const VOICE_PROMPT = [
   'You are the realtime voice layer for Nerve.',
@@ -272,7 +276,7 @@ export function handleJaneRealtimeEvent(
   dispatcher: JaneRealtimeDispatcher,
   owner: object,
 ): void {
-  if (message.method !== 'thread/realtime/transcript/done' || !isRecord(message.params)) return;
+  if (!message.method || !TRANSCRIPT_FINAL_METHODS.has(message.method) || !isRecord(message.params)) return;
   const role = message.params.role;
   const text = message.params.text;
   if (role === 'user' && typeof text === 'string' && text.trim() && threadId) {
@@ -480,7 +484,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
           writeJson(child, { ...speech, id: nextId++ });
         });
       }
-      if (message.method === 'thread/realtime/transcript/done' && dispatcher && isRecord(message.params)) {
+      if (TRANSCRIPT_FINAL_METHODS.has(message.method) && dispatcher && isRecord(message.params)) {
         handleJaneRealtimeEvent(message, threadId, dispatcher, owner);
       }
       sendJson(ws, message);

@@ -296,6 +296,21 @@ describe('Codex realtime boundary', () => {
     expect(run).toHaveBeenCalledWith('Move the task to done', expect.any(String));
   });
 
+  it('dispatches the active-session completed transcript alias once', async () => {
+    const run = vi.fn(async (text: string) => `reply:${text}`);
+    const dispatcher = new JaneRealtimeDispatcher(run);
+    const owner = {};
+    const message = {
+      method: 'thread/realtime/transcript/completed',
+      params: { role: 'user', text: 'Răspunde cât timp apelul rămâne deschis' },
+    };
+
+    handleJaneRealtimeEvent(message, 'realtime-thread', dispatcher, owner);
+    handleJaneRealtimeEvent(message, 'realtime-thread', dispatcher, owner);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(run).toHaveBeenCalledWith('Răspunde cât timp apelul rămâne deschis', expect.any(String));
+  });
+
   it('deduplicates canonical background finals while preserving distinct messages', async () => {
     const dispatcher = new JaneRealtimeDispatcher();
     const owner = {};
