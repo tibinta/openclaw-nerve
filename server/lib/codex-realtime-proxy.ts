@@ -226,10 +226,13 @@ export class JaneRealtimeDispatcher {
     void this.flush();
   }
 
-  async submit(threadId: string, text: string): Promise<void> {
+  async submit(threadId: string, text: string, interventionKey?: string): Promise<void> {
     const clean = text.trim();
     if (!clean) return;
-    const key = createHash('sha256').update(`${threadId}\0${clean}`).digest('hex');
+    // Replayed events carry a stable turn identity; text is only the legacy fallback.
+    const key = interventionKey?.trim()
+      ? `jane-turn:${interventionKey.trim()}`
+      : createHash('sha256').update(`${threadId}\0${clean}`).digest('hex');
     if (!this.remember(key)) return;
 
     const dispatch = this.dispatchTail.then(async () => {
@@ -280,7 +283,14 @@ export function handleJaneRealtimeEvent(
   const role = message.params.role;
   const text = message.params.text;
   if (role === 'user' && typeof text === 'string' && text.trim() && threadId) {
-    void dispatcher.submit(threadId, text);
+    const turnID = ['item_id', 'response_id', 'utterance_id', 'turn_id']
+      .map((key) => message.params?.[key])
+      .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+    const callID = ['call_id', 'realtime_session_id']
+      .map((key) => message.params?.[key])
+      .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+    const interventionKey = turnID ? `${callID ? `${callID}:` : ''}${turnID}` : undefined;
+    void dispatcher.submit(threadId, text, interventionKey);
   } else if (role === 'assistant') {
     dispatcher.acknowledge(owner);
   }

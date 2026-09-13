@@ -311,6 +311,21 @@ describe('Codex realtime boundary', () => {
     expect(run).toHaveBeenCalledWith('Răspunde cât timp apelul rămâne deschis', expect.any(String));
   });
 
+  it('uses the realtime turn identity so an intentional repeated phrase is not dropped', async () => {
+    const run = vi.fn(async (text: string) => `reply:${text}`);
+    const dispatcher = new JaneRealtimeDispatcher(run);
+    const owner = {};
+    const base = { role: 'user', text: 'Spune aceeași frază' };
+
+    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/completed', params: { ...base, turn_id: 'turn-1' } }, 'thread', dispatcher, owner);
+    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/completed', params: { ...base, turn_id: 'turn-2' } }, 'thread', dispatcher, owner);
+    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/completed', params: { ...base, turn_id: 'turn-1' } }, 'thread', dispatcher, owner);
+
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(run).toHaveBeenNthCalledWith(1, base.text, 'jane-turn:turn-1');
+    expect(run).toHaveBeenNthCalledWith(2, base.text, 'jane-turn:turn-2');
+  });
+
   it('deduplicates canonical background finals while preserving distinct messages', async () => {
     const dispatcher = new JaneRealtimeDispatcher();
     const owner = {};
