@@ -347,6 +347,32 @@ describe('Codex realtime boundary', () => {
     await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
   });
 
+  it('advances two queued finals after appendSpeech RPC success without manual acknowledgement', async () => {
+    const dispatcher = new JaneRealtimeDispatcher();
+    const owner = {};
+    const speak = vi.fn(async () => undefined);
+    dispatcher.attach(owner, speak, true);
+    dispatcher.enqueueFinal({ key: 'one', text: 'one' });
+    dispatcher.enqueueFinal({ key: 'two', text: 'two' });
+    await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
+    expect(speak).toHaveBeenNthCalledWith(1, 'one');
+    expect(speak).toHaveBeenNthCalledWith(2, 'two');
+  });
+
+  it('retains an appendSpeech failure for replay on a new socket', async () => {
+    const dispatcher = new JaneRealtimeDispatcher();
+    const firstOwner = {};
+    const firstSpeak = vi.fn(async () => { throw new Error('appendSpeech rejected'); });
+    dispatcher.attach(firstOwner, firstSpeak, true);
+    dispatcher.enqueueFinal({ key: 'retry', text: 'retry me' });
+    await vi.waitFor(() => expect(firstSpeak).toHaveBeenCalledOnce());
+    dispatcher.detach(firstOwner);
+    const secondOwner = {};
+    const secondSpeak = vi.fn(async () => undefined);
+    dispatcher.attach(secondOwner, secondSpeak, true);
+    await vi.waitFor(() => expect(secondSpeak).toHaveBeenCalledWith('retry me'));
+  });
+
   it('deduplicates canonical background finals while preserving distinct messages', async () => {
     const dispatcher = new JaneRealtimeDispatcher();
     const owner = {};

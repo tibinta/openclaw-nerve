@@ -195,7 +195,7 @@ export async function dispatchJaneRealtimeRequest(
 
 /** Keep one private Jane result alive until GPT-Live confirms its spoken caption. */
 export class JaneRealtimeDispatcher {
-  private speaker: { owner: object; speak: (text: string) => void | Promise<void> } | null = null;
+  private speaker: { owner: object; speak: (text: string) => void | Promise<void>; autoAdvance: boolean } | null = null;
   private readonly seen = new Set<string>();
   private readonly seenOrder: string[] = [];
   private readonly queue: QueuedSpeech[] = [];
@@ -215,8 +215,8 @@ export class JaneRealtimeDispatcher {
     void this.flush();
   }
 
-  attach(owner: object, speak: (text: string) => void | Promise<void>): void {
-    this.speaker = { owner, speak };
+  attach(owner: object, speak: (text: string) => void | Promise<void>, autoAdvance = false): void {
+    this.speaker = { owner, speak, autoAdvance };
     void this.flush();
   }
 
@@ -269,13 +269,20 @@ export class JaneRealtimeDispatcher {
     const speaker = this.speaker;
     try {
       await speaker.speak(this.queue[0].text);
-      if (this.speaker?.owner === speaker.owner) this.awaitingOwner = speaker.owner;
-    } catch {
-      // A new realtime socket replays the still-queued result.
+      if (this.speaker?.owner === speaker.owner) {
+        if (speaker.autoAdvance) {
+          this.queue.shift();
+        } else {
+          this.awaitingOwner = speaker.owner;
+        }
+      }
+    } catch (error) {
+      // Keep the item for a reconnect and leave an observable failure trail.
+      console.warn('[jane-realtime] Speech delivery failed:', error instanceof Error ? error.message : 'unknown error');
     } finally {
       this.flushing = false;
     }
-    if (!this.awaitingOwner && this.speaker && this.speaker.owner !== speaker.owner) void this.flush();
+    if (!this.awaitingOwner && this.speaker && (this.speaker.owner !== speaker.owner || (speaker.autoAdvance && this.queue.length > 0))) void this.flush();
   }
 }
 
@@ -412,6 +419,25 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
   let closed = false;
   let lastStderr = '';
   const owner = {};
+  const speechRequests = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
+  const attachSpeechQueue = () => {
+    if (!threadId || !dispatcher || closed) return;
+    dispatcher.attach(owner, (text) => new Promise<void>((resolve, reject) => {
+      if (child.stdin.destroyed) {
+        reject(new Error('Codex voice host is unavailable'));
+        return;
+      }
+      const id = nextId++;
+      speechRequests.set(id, { resolve, reject });
+      const speech = normalizeCodexRealtimeRequest({ method: 'thread/realtime/appendSpeech', params: { text } }, threadId!);
+      if (!speech) {
+        speechRequests.delete(id);
+        reject(new Error('Codex voice result is empty'));
+        return;
+      }
+      writeJson(child, { ...speech, id });
+    }), true);
+  };
   const forwardedFinals = new Set<string>();
   const unsubscribeGateway = subscribeGatewayEvents((event) => {
     if (closed) return;
@@ -504,6 +530,13 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       return;
     }
 
+    if (typeof message.id === 'number' && speechRequests.has(message.id)) {
+      const request = speechRequests.get(message.id)!;
+      speechRequests.delete(message.id);
+      if (message.error) request.reject(new Error('Codex rejected speech')); else request.resolve();
+      return;
+    }
+
     if (typeof message.id === 'number' && clientIds.has(message.id)) {
       const clientId = clientIds.get(message.id);
       const clientMethod = clientMethods.get(message.id);
@@ -513,17 +546,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       // optional `thread/realtime/started` notification. Attach the Nerve
       // speech queue on the start response as well, otherwise finals stay
       // visible in text but can never reach realtime audio.
-      if (clientMethod === 'thread/realtime/start' && threadId && dispatcher && !closed) {
-        dispatcher.attach(owner, async (text) => {
-          if (closed || child.stdin.destroyed) throw new Error('Codex voice host is unavailable');
-          const speech = normalizeCodexRealtimeRequest({
-            method: 'thread/realtime/appendSpeech',
-            params: { text },
-          }, threadId!);
-          if (!speech) throw new Error('Codex voice result is empty');
-          writeJson(child, { ...speech, id: nextId++ });
-        });
-      }
+      if (clientMethod === 'thread/realtime/start') attachSpeechQueue();
       sendJson(ws, { ...message, id: clientId });
       return;
     }
@@ -532,17 +555,7 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       && isRecord(message.params)
       && (message.params.threadId === undefined || message.params.threadId === threadId));
     if (message.method?.startsWith('thread/realtime/') || isRealtimeItemEvent) {
-      if (isJaneRealtimeStartedEvent(message.method) && threadId && dispatcher) {
-        dispatcher.attach(owner, async (text) => {
-          if (closed || child.stdin.destroyed) throw new Error('Codex voice host is unavailable');
-          const speech = normalizeCodexRealtimeRequest({
-            method: 'thread/realtime/appendSpeech',
-            params: { text },
-          }, threadId!);
-          if (!speech) throw new Error('Codex voice result is empty');
-          writeJson(child, { ...speech, id: nextId++ });
-        });
-      }
+      if (isJaneRealtimeStartedEvent(message.method)) attachSpeechQueue();
       const method = message.method;
       if (method && (TRANSCRIPT_FINAL_METHODS.has(method) || method === 'thread/realtime/item/completed') && dispatcher && isRecord(message.params)) {
         handleJaneRealtimeEvent(message, threadId, dispatcher, owner);
