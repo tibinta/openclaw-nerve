@@ -2,12 +2,15 @@ import crypto from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { isJaneMobileCronControlRequest } from './jane-mobile-cron-control.js';
 
-const JANE_LIVE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
+export const JANE_LIVE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
 const MAX_MESSAGE_CHARS = 64_000;
 const MAX_HISTORY_LIMIT = 20;
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const APPROVAL_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const APPROVAL_DECISIONS = ['allow-once', 'allow-always', 'deny'] as const;
+type ApprovalDecision = typeof APPROVAL_DECISIONS[number];
 
 export interface JanePublicProgress {
   state: 'started' | 'running' | 'completed' | 'failed';
@@ -26,6 +29,68 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function boundedText(value: unknown, limit: number): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, limit) : undefined;
+}
+
+function approvalId(value: unknown): string | undefined {
+  return typeof value === 'string' && APPROVAL_ID_RE.test(value) ? value : undefined;
+}
+
+function approvalDecision(value: unknown): ApprovalDecision | undefined {
+  return typeof value === 'string' && (APPROVAL_DECISIONS as readonly string[]).includes(value)
+    ? value as ApprovalDecision : undefined;
+}
+
+function approvalSessionIsJane(payload: Record<string, unknown>): boolean {
+  for (const candidate of [payload.sessionKey, payload.sessionId, payload.session]) {
+    if (candidate !== undefined && candidate !== JANE_LIVE_SESSION_KEY) return false;
+  }
+  const request = isRecord(payload.request) ? payload.request : undefined;
+  for (const candidate of [request?.sessionKey, request?.sessionId, request?.session]) {
+    if (candidate !== undefined && candidate !== JANE_LIVE_SESSION_KEY) return false;
+  }
+  return true;
+}
+
+function sanitizeApprovalEnvelope(payload: unknown, kind: 'exec' | 'plugin'): Record<string, unknown> | null {
+  if (!isRecord(payload) || !approvalSessionIsJane(payload)) return null;
+  const id = approvalId(payload.id);
+  const createdAtMs = typeof payload.createdAtMs === 'number' && Number.isFinite(payload.createdAtMs) ? payload.createdAtMs : undefined;
+  const expiresAtMs = typeof payload.expiresAtMs === 'number' && Number.isFinite(payload.expiresAtMs) ? payload.expiresAtMs : undefined;
+  const request = isRecord(payload.request) ? payload.request : null;
+  if (!id || !createdAtMs || !expiresAtMs || !request) return null;
+  const safeRequest: Record<string, unknown> = {};
+  const textKeys = kind === 'exec'
+    ? ['command', 'commandPreview', 'warningText', 'agentId', 'host', 'cwd', 'security', 'ask']
+    : ['title', 'description', 'pluginId', 'toolName', 'agentId', 'severity'];
+  for (const key of textKeys) {
+    const value = boundedText(request[key], key === 'description' ? 2_000 : 512);
+    if (value) safeRequest[key] = value;
+  }
+  if (Array.isArray(request.allowedDecisions)) {
+    const decisions = request.allowedDecisions.filter((value): value is ApprovalDecision => approvalDecision(value) !== undefined);
+    if (decisions.length) safeRequest.allowedDecisions = decisions;
+  }
+  return { id, createdAtMs, expiresAtMs, request: safeRequest };
+}
+
+function sanitizeApprovalResolved(payload: unknown): Record<string, unknown> | null {
+  if (!isRecord(payload) || !approvalSessionIsJane(payload)) return null;
+  const id = approvalId(payload.id);
+  if (!id) return null;
+  const decision = approvalDecision(payload.decision);
+  return { id, ...(decision ? { decision } : {}) };
+}
+
+function sanitizeApprovalListPayload(payload: unknown, kind: 'exec' | 'plugin'): unknown {
+  if (Array.isArray(payload)) return payload.flatMap((item) => {
+    const safe = sanitizeApprovalEnvelope(item, kind);
+    return safe ? [safe] : [];
+  });
+  if (!isRecord(payload)) return [];
+  for (const key of ['approvals', 'pending', 'requests']) {
+    if (Array.isArray(payload[key])) return { [key]: sanitizeApprovalListPayload(payload[key], kind) };
+  }
+  return [];
 }
 
 function nestedText(detail: Record<string, unknown>, key: string): string | undefined {
@@ -141,7 +206,7 @@ function isAllowedJaneMobileConnect(message: Record<string, unknown>): boolean {
     && (reservedBackend
       ? params.scopes.length === 2 && params.scopes[0] === 'operator.read' && params.scopes[1] === 'operator.write'
       : client.id === 'jane-mobile-bridge'
-        ? params.scopes.length === 2 && params.scopes[0] === 'operator.read' && params.scopes[1] === 'operator.write'
+        ? params.scopes.length === 3 && params.scopes[0] === 'operator.read' && params.scopes[1] === 'operator.write' && params.scopes[2] === 'operator.approvals'
         : params.scopes.length === 5
         && params.scopes[0] === 'operator.admin'
         && params.scopes[1] === 'operator.approvals'
@@ -189,6 +254,30 @@ export function isAllowedJaneMobileChatHistory(message: Record<string, unknown>)
   return Number.isInteger(params.limit) && (params.limit as number) > 0 && (params.limit as number) <= MAX_HISTORY_LIMIT;
 }
 
+/** Allow only live-session model controls; never expose a general RPC tunnel. */
+export function isAllowedJaneMobileSessionPatch(message: Record<string, unknown>): boolean {
+  if (message.type !== 'req' || message.method !== 'sessions.patch' || typeof message.id !== 'string') return false;
+  if (!isRecord(message.params)) return false;
+  const params = message.params;
+  const allowedKeys = new Set(['key', 'model', 'thinkingLevel', 'fastMode']);
+  if (Object.keys(params).some((key) => !allowedKeys.has(key))) return false;
+  if (params.key !== JANE_LIVE_SESSION_KEY) return false;
+  if (params.model !== undefined && (typeof params.model !== 'string' || !/^[A-Za-z0-9._/@:+-]{1,200}$/.test(params.model))) return false;
+  if (params.thinkingLevel !== undefined && !['off', 'low', 'medium', 'high'].includes(String(params.thinkingLevel))) return false;
+  return params.fastMode === undefined || typeof params.fastMode === 'boolean';
+}
+
+export function isAllowedJaneMobileApprovalRequest(message: Record<string, unknown>): boolean {
+  if (message.type !== 'req' || typeof message.id !== 'string') return false;
+  const method = typeof message.method === 'string' ? message.method : '';
+  if (!['exec.approval.list', 'plugin.approval.list', 'exec.approval.resolve', 'plugin.approval.resolve'].includes(method)) return false;
+  if (!isRecord(message.params)) return false;
+  const params = message.params;
+  if (method.endsWith('.list')) return Object.keys(params).length === 0;
+  if (Object.keys(params).length !== 2 || !Object.prototype.hasOwnProperty.call(params, 'id') || !Object.prototype.hasOwnProperty.call(params, 'decision')) return false;
+  return approvalId(params.id) !== undefined && approvalDecision(params.decision) !== undefined;
+}
+
 export interface JaneMobileRelayPolicy {
   allowClientFrame(data: Buffer | string, isBinary: boolean): boolean;
   allowGatewayFrame(data: Buffer | string, isBinary: boolean): boolean;
@@ -197,6 +286,7 @@ export interface JaneMobileRelayPolicy {
 
 export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
   const requestIds = new Set<string>();
+  const requestMethods = new Map<string, string>();
 
   const gatewayFrame = (data: Buffer | string, isBinary: boolean): Buffer | string | null => {
     if (isBinary) return null;
@@ -205,11 +295,32 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
       if (!isRecord(message)) return null;
       if (message.type === 'res' && typeof message.id === 'string') {
         const allowed = requestIds.has(message.id);
+        const method = requestMethods.get(message.id);
         requestIds.delete(message.id);
-        return allowed ? data : null;
+        requestMethods.delete(message.id);
+        if (!allowed) return null;
+        if ((method === 'exec.approval.list' || method === 'plugin.approval.list') && message.ok) {
+          return JSON.stringify({
+            ...message,
+            payload: sanitizeApprovalListPayload(message.payload, method.startsWith('exec.') ? 'exec' : 'plugin'),
+          });
+        }
+        return data;
       }
       if (message.type !== 'event') return null;
       if (message.event === 'connect.challenge') return data;
+      if (message.event === 'exec.approval.requested' || message.event === 'exec.approval.request') {
+        const payload = sanitizeApprovalEnvelope(message.payload, 'exec');
+        return payload ? JSON.stringify({ type: 'event', event: message.event, payload }) : null;
+      }
+      if (message.event === 'plugin.approval.requested') {
+        const payload = sanitizeApprovalEnvelope(message.payload, 'plugin');
+        return payload ? JSON.stringify({ type: 'event', event: message.event, payload }) : null;
+      }
+      if (message.event === 'exec.approval.resolved' || message.event === 'plugin.approval.resolved') {
+        const payload = sanitizeApprovalResolved(message.payload);
+        return payload ? JSON.stringify({ type: 'event', event: message.event, payload }) : null;
+      }
       if (!isRecord(message.payload) || message.payload.sessionKey !== JANE_LIVE_SESSION_KEY) return null;
       if (message.event === 'chat') {
         // Live finals are the canonical result the native client must render;
@@ -237,15 +348,28 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
         if (requestIds.size >= 256) return false;
         if (message.method === 'connect' && isAllowedJaneMobileConnect(message)) {
           requestIds.add(message.id);
+          requestMethods.set(message.id, message.method);
+          return true;
+        }
+        if (isAllowedJaneMobileApprovalRequest(message)) {
+          requestIds.add(message.id);
+          requestMethods.set(message.id, message.method as string);
           return true;
         }
         if (isJaneMobileCronControlRequest(message)) return true;
+        if (isAllowedJaneMobileSessionPatch(message)) {
+          requestIds.add(message.id);
+          requestMethods.set(message.id, message.method as string);
+          return true;
+        }
         if (isAllowedJaneMobileChatHistory(message)) {
           requestIds.add(message.id);
+          requestMethods.set(message.id, message.method as string);
           return true;
         }
         if (!isAllowedJaneMobileChatSend(message)) return false;
         requestIds.add(message.id);
+        requestMethods.set(message.id, message.method as string);
         return true;
       } catch {
         return false;
