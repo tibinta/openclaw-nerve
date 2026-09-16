@@ -14,6 +14,8 @@ interface RealtimeCaption {
 
 export interface RealtimeTranscriptUpdate extends RealtimeCaption {
   final: boolean;
+  id?: string;
+  seq?: number;
 }
 
 interface ProtocolMessage {
@@ -167,6 +169,24 @@ export function useCodexRealtimeVoice(
         }
         const params = message.params ?? {};
 
+        if (message.method === 'nerve/realtime/history' && Array.isArray(params.entries)) {
+          for (const value of params.entries) {
+            if (!value || typeof value !== 'object') continue;
+            const entry = value as Record<string, unknown>;
+            const role = entry.role === 'assistant' ? 'assistant' : entry.role === 'user' ? 'user' : null;
+            const text = typeof entry.text === 'string' ? entry.text.trim() : '';
+            if (!role || !text) continue;
+            onTranscript?.({
+              role,
+              text,
+              final: true,
+              id: typeof entry.id === 'string' ? entry.id : undefined,
+              seq: typeof entry.seq === 'number' ? entry.seq : undefined,
+            });
+          }
+          return;
+        }
+
         if (message.id !== undefined && (message.method === 'item/commandExecution/requestApproval'
           || message.method === 'item/fileChange/requestApproval')) {
           publishCodexRealtimeApproval({ id: message.id, method: message.method, params });
@@ -232,7 +252,14 @@ export function useCodexRealtimeVoice(
           transcriptRef.current[role] = '';
           cancelPendingCaption();
           if (text) setCaption({ role, text });
-          if (text) onTranscript?.({ role, text, final: true });
+          if (text) onTranscript?.({
+            role,
+            text,
+            final: true,
+            id: typeof params.eventId === 'string' ? params.eventId
+              : typeof params.itemId === 'string' ? params.itemId : undefined,
+            seq: typeof params.journalSeq === 'number' ? params.journalSeq : undefined,
+          });
           setStatus('listening');
           return;
         }

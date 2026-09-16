@@ -4,9 +4,11 @@ import {
   codexRealtimeEnvironment,
   nativeApprovalDecision,
   nativeApprovalForClient,
+  nativeApprovalExpiresAt,
   normalizeCodexRealtimeRequest,
   resumeErrorMeansMissingThread,
   realtimeTranscriptEntry,
+  realtimeHistoryForClient,
 } from './codex-realtime-proxy.js';
 
 describe('Codex realtime boundary', () => {
@@ -95,6 +97,7 @@ describe('Codex realtime boundary', () => {
     const second = realtimeTranscriptEntry({ method: 'thread/realtime/transcript/done', params: { role: 'user', text: 'da', itemId: 'two' } }, 8);
     expect(first).toMatchObject({ id: 'one', seq: 7, text: 'da' });
     expect(second).toMatchObject({ id: 'two', seq: 8, text: 'da' });
+    expect(realtimeHistoryForClient([first!, second!]).params?.entries).toEqual([first, second]);
   });
 
   it('defaults an invalid voice and rejects invalid SDP', () => {
@@ -126,5 +129,6 @@ describe('Codex realtime boundary', () => {
     });
     expect(nativeApprovalDecision({ id: 42, result: { decision: 'accept' } })).toBe('accept');
     expect(nativeApprovalDecision({ id: 42, result: { decision: 'allow-always' } })).toBeNull();
+    expect(nativeApprovalExpiresAt({ params: { startedAtMs: 1_000 } }, 2_000)).toBe(602_000);
   });
 });

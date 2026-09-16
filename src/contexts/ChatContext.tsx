@@ -87,7 +87,7 @@ interface ChatContextValue {
   activityLog: ActivityLogEntry[];
   currentToolDescription: string | null;
   handleSend: (text: string, images?: ImageAttachment[]) => Promise<void>;
-  handleLiveTranscript: (update: { role: 'user' | 'assistant'; text: string; final: boolean }) => void;
+  handleLiveTranscript: (update: { role: 'user' | 'assistant'; text: string; final: boolean; id?: string; seq?: number }) => void;
   handleAbort: () => Promise<void>;
   handleReset: () => void;
   loadHistory: (session?: string) => Promise<void>;
@@ -180,11 +180,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setStream: streamHook.setStream,
   });
 
-  const handleLiveTranscript = useCallback((update: { role: 'user' | 'assistant'; text: string; final: boolean }) => {
+  const handleLiveTranscript = useCallback((update: { role: 'user' | 'assistant'; text: string; final: boolean; id?: string; seq?: number }) => {
     const text = update.text.trim();
     if (!text) return;
     const existingId = liveTranscriptIdsRef.current[update.role];
-    const id = existingId ?? `live-${update.role}-${generateMsgId()}`;
+    const id = update.id
+      ? `live-history-${update.role}-${update.id}`
+      : existingId ?? `live-${update.role}-${generateMsgId()}`;
     liveTranscriptIdsRef.current[update.role] = update.final ? undefined : id;
     const apply = (messages: ChatMsg[]) => {
       const index = messages.findIndex((message) => message.msgId === id);

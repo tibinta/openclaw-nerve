@@ -32,6 +32,7 @@ const NATIVE_APPROVAL_DECISIONS = new Set(['accept', 'acceptForSession', 'declin
 const VOICE_PROMPT = 'Ești Jane, asistenta live a lui Alex. Vorbește natural și concis în limba conversației, implicit română. Răspunde direct din context când poți. Când cererea are nevoie de date, instrumente sau o acțiune, deleagă o singură dată către backendul Codex al acestei conversații și continuă numai cu rezultate confirmate. Nu spune automat că verifici și nu pretinde că o acțiune a reușit înainte de confirmare.';
 const JANE_REALTIME_STATE_PATH = 'jane-live-realtime.json';
 const MAX_TRANSCRIPT_ENTRIES = 200;
+const NATIVE_APPROVAL_TTL_MS = 10 * 60_000;
 
 interface JsonMessage {
   id?: string | number;
@@ -77,10 +78,18 @@ function janeRealtimeStatePath(): string {
 
 async function readPersistedRealtimeThreadId(): Promise<string | null> {
   try {
-    const state = JSON.parse(await readFile(janeRealtimeStatePath(), 'utf8')) as RealtimeState;
+    const state = await readPersistedRealtimeState();
     return typeof state.threadId === 'string' && state.threadId.trim() ? state.threadId.trim() : null;
   } catch {
     return null;
+  }
+}
+
+async function readPersistedRealtimeState(): Promise<RealtimeState> {
+  try {
+    return JSON.parse(await readFile(janeRealtimeStatePath(), 'utf8')) as RealtimeState;
+  } catch {
+    return {};
   }
 }
 
@@ -121,6 +130,10 @@ function persistRealtimeTranscript(entry: RealtimeTranscriptEntry): Promise<void
     ...state,
     transcript: [...(state.transcript ?? []), entry].slice(-MAX_TRANSCRIPT_ENTRIES),
   }));
+}
+
+export function realtimeHistoryForClient(entries: RealtimeTranscriptEntry[]): JsonMessage {
+  return { method: 'nerve/realtime/history', params: { entries: entries.slice(-50) } };
 }
 
 export function codexRealtimeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -227,6 +240,11 @@ export function nativeApprovalDecision(message: JsonMessage): string | null {
   return NATIVE_APPROVAL_DECISIONS.has(message.result.decision) ? message.result.decision : null;
 }
 
+export function nativeApprovalExpiresAt(message: JsonMessage, now = Date.now()): number {
+  void message;
+  return now + NATIVE_APPROVAL_TTL_MS;
+}
+
 export function resumeErrorMeansMissingThread(error: unknown): boolean {
   const detail = JSON.stringify(error).toLowerCase();
   return detail.includes('thread not found')
@@ -238,6 +256,7 @@ export function resumeErrorMeansMissingThread(error: unknown): boolean {
 interface PendingNativeApproval {
   childId: string | number;
   message: JsonMessage;
+  expiresAtMs: number;
 }
 
 class CodexRealtimeHost {
@@ -279,7 +298,17 @@ class CodexRealtimeHost {
     this.clientIds.clear();
     if (replaced && replaced.readyState === WebSocket.OPEN) replaced.close(1001, 'Reconnected');
     if (this.threadId) sendJson(ws, { method: 'nerve/realtime/ready', params: {} });
-    for (const approval of this.nativeApprovals.values()) sendJson(ws, approval.message);
+    for (const [id, approval] of this.nativeApprovals) {
+      if (approval.expiresAtMs <= Date.now()) {
+        this.expireNativeApproval(id, approval);
+      } else {
+        sendJson(ws, approval.message);
+      }
+    }
+    void readPersistedRealtimeState().then((state) => {
+      if (this.ws !== ws || !state.transcript?.length) return;
+      sendJson(ws, realtimeHistoryForClient(state.transcript));
+    });
 
     ws.on('message', (data, isBinary) => this.onSocketMessage(ws, data, isBinary));
     ws.on('close', () => this.detach(ws));
@@ -308,6 +337,12 @@ class CodexRealtimeHost {
     if (this.ws) sendJson(this.ws, { method: 'nerve/realtime/ready', params: {} });
   }
 
+  private expireNativeApproval(id: string | number, approval: PendingNativeApproval): void {
+    if (this.nativeApprovals.get(id) !== approval) return;
+    this.nativeApprovals.delete(id);
+    writeJson(this.child, { id: approval.childId, result: { decision: 'decline' } });
+  }
+
   private bindChild(): void {
     this.lines.on('line', (line) => {
       let message: JsonMessage;
@@ -318,7 +353,13 @@ class CodexRealtimeHost {
       }
 
       const transcript = realtimeTranscriptEntry(message, this.nextTranscriptSeq++);
-      if (transcript) void persistRealtimeTranscript(transcript);
+      if (transcript) {
+        void persistRealtimeTranscript(transcript);
+        message = {
+          ...message,
+          params: { ...message.params, eventId: transcript.id, journalSeq: transcript.seq },
+        };
+      }
 
       if (message.method === 'attestation/generate' && message.id !== undefined) {
         void Promise.resolve()
@@ -377,7 +418,17 @@ class CodexRealtimeHost {
       const clientApprovalId = `codex-approval:${this.nextApprovalId++}`;
       const nativeApproval = nativeApprovalForClient(message, clientApprovalId);
       if (nativeApproval) {
-        this.nativeApprovals.set(clientApprovalId, { childId: message.id!, message: nativeApproval });
+        const approval = {
+          childId: message.id!,
+          message: nativeApproval,
+          expiresAtMs: nativeApprovalExpiresAt(message),
+        };
+        this.nativeApprovals.set(clientApprovalId, approval);
+        const expiryTimer = setTimeout(
+          () => this.expireNativeApproval(clientApprovalId, approval),
+          Math.max(0, approval.expiresAtMs - Date.now()),
+        );
+        expiryTimer.unref();
         if (this.ws) sendJson(this.ws, nativeApproval);
         return;
       }
@@ -425,6 +476,11 @@ class CodexRealtimeHost {
         return;
       }
       const approval = this.nativeApprovals.get(incoming.id)!;
+      if (approval.expiresAtMs <= Date.now()) {
+        this.expireNativeApproval(incoming.id, approval);
+        sendJson(ws, { id: incoming.id, error: { code: -32001, message: 'Approval request expired' } });
+        return;
+      }
       this.nativeApprovals.delete(incoming.id);
       writeJson(this.child, { id: approval.childId, result: { decision } });
       return;

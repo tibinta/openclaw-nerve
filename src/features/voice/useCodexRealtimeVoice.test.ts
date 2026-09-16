@@ -184,6 +184,36 @@ describe('useCodexRealtimeVoice', () => {
     unmount();
   });
 
+  it('replays persisted history with the same identity as a matching live final', async () => {
+    const onTranscript = vi.fn();
+    const { result, unmount } = renderHook(() => useCodexRealtimeVoice(onTranscript));
+    let started!: Promise<boolean>;
+    await act(async () => { started = result.current.start(); });
+    act(() => FakeSocket.instance.emit({ method: 'nerve/realtime/ready', params: {} }));
+    await waitFor(() => expect(FakeSocket.instance.sent).toHaveLength(1));
+    act(() => FakeSocket.instance.emit({ method: 'thread/realtime/started', params: {} }));
+    await expect(started).resolves.toBe(true);
+
+    act(() => {
+      FakeSocket.instance.emit({
+        method: 'nerve/realtime/history',
+        params: { entries: [{ id: 'turn-1', seq: 4, role: 'assistant', text: 'Gata.' }] },
+      });
+      FakeSocket.instance.emit({
+        method: 'thread/realtime/transcript/done',
+        params: { eventId: 'turn-1', journalSeq: 4, role: 'assistant', text: 'Gata.' },
+      });
+    });
+
+    expect(onTranscript).toHaveBeenNthCalledWith(1, {
+      id: 'turn-1', seq: 4, role: 'assistant', text: 'Gata.', final: true,
+    });
+    expect(onTranscript).toHaveBeenNthCalledWith(2, {
+      id: 'turn-1', seq: 4, role: 'assistant', text: 'Gata.', final: true,
+    });
+    unmount();
+  });
+
   it('reports an unexpected disconnect and leaves realtime idle', async () => {
     const getUserMedia = vi.mocked(navigator.mediaDevices.getUserMedia);
     const { result, unmount } = renderHook(() => useCodexRealtimeVoice(vi.fn()));
