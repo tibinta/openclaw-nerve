@@ -133,7 +133,10 @@ function persistRealtimeTranscript(entry: RealtimeTranscriptEntry): Promise<void
 }
 
 export function realtimeHistoryForClient(entries: RealtimeTranscriptEntry[]): JsonMessage {
-  return { method: 'nerve/realtime/history', params: { entries: entries.slice(-50) } };
+  return {
+    method: 'nerve/realtime/history',
+    params: { entries: entries.slice(-50).map((entry) => ({ ...entry, eventId: entry.id })) },
+  };
 }
 
 export function codexRealtimeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

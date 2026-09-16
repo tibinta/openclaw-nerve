@@ -180,7 +180,8 @@ export function useCodexRealtimeVoice(
               role,
               text,
               final: true,
-              id: typeof entry.id === 'string' ? entry.id : undefined,
+              id: typeof entry.eventId === 'string' ? entry.eventId
+                : typeof entry.id === 'string' ? entry.id : undefined,
               seq: typeof entry.seq === 'number' ? entry.seq : undefined,
             });
           }

@@ -97,7 +97,10 @@ describe('Codex realtime boundary', () => {
     const second = realtimeTranscriptEntry({ method: 'thread/realtime/transcript/done', params: { role: 'user', text: 'da', itemId: 'two' } }, 8);
     expect(first).toMatchObject({ id: 'one', seq: 7, text: 'da' });
     expect(second).toMatchObject({ id: 'two', seq: 8, text: 'da' });
-    expect(realtimeHistoryForClient([first!, second!]).params?.entries).toEqual([first, second]);
+    expect(realtimeHistoryForClient([first!, second!]).params?.entries).toEqual([
+      { ...first, eventId: 'one' },
+      { ...second, eventId: 'two' },
+    ]);
   });
 
   it('defaults an invalid voice and rejects invalid SDP', () => {
