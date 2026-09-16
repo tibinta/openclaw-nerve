@@ -161,7 +161,7 @@ describe('Jane mobile relay policy', () => {
     const requested = policy.gatewayFrame(JSON.stringify({
       type: 'event', event: 'exec.approval.requested', payload: {
         id: 'approval-1', createdAtMs: 1, expiresAtMs: 2,
-        request: { command: 'echo secret', commandPreview: 'echo secret', cwd: '/private', sessionKey, allowedDecisions: ['allow-once', 'deny'], token: 'omit' },
+        request: { command: 'echo secret', commandPreview: 'echo secret', cwd: '/private', sessionKey, sessionId: null, allowedDecisions: ['allow-once', 'deny'], token: 'omit' },
       },
     }), false);
     expect(JSON.parse(String(requested))).toEqual({
@@ -171,6 +171,9 @@ describe('Jane mobile relay policy', () => {
       },
     });
     expect(String(requested)).not.toContain('token');
+    expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'resolve-unknown', method: 'exec.approval.resolve', params: { id: 'unknown', decision: 'deny' } }), false)).toBe(false);
+    expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'resolve-live', method: 'exec.approval.resolve', params: { id: 'approval-1', decision: 'deny' } }), false)).toBe(true);
+    expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'resolve-too-broad', method: 'exec.approval.resolve', params: { id: 'approval-1', decision: 'allow-always' } }), false)).toBe(false);
     const listed = policy.gatewayFrame(JSON.stringify({ type: 'res', id: 'list', ok: true, payload: {
       approvals: [
         { id: 'approval-1', createdAtMs: 1, expiresAtMs: 2, request: { title: 'safe', command: 'echo safe', sessionKey } },
@@ -178,7 +181,7 @@ describe('Jane mobile relay policy', () => {
       ],
     } }), false);
     expect(JSON.parse(String(listed))).toEqual({ type: 'res', id: 'list', ok: true, payload: {
-      approvals: [{ id: 'approval-1', createdAtMs: 1, expiresAtMs: 2, request: { command: 'echo safe' } }],
+      approvals: [{ id: 'approval-1', createdAtMs: 1, expiresAtMs: 2, request: { command: 'echo safe', allowedDecisions: ['allow-once', 'deny'] } }],
     } });
     expect(policy.gatewayFrame(JSON.stringify({ type: 'event', event: 'exec.approval.requested', payload: {
       id: 'other', createdAtMs: 1, expiresAtMs: 2, sessionKey: 'agent:other:main', request: { command: 'no' },
@@ -188,6 +191,53 @@ describe('Jane mobile relay policy', () => {
     } }), false)).toBeNull();
     const resolved = policy.gatewayFrame(JSON.stringify({ type: 'event', event: 'exec.approval.resolved', payload: { id: 'approval-1', decision: 'deny', sessionKey } }), false);
     expect(JSON.parse(String(resolved))).toEqual({ type: 'event', event: 'exec.approval.resolved', payload: { id: 'approval-1', decision: 'deny' } });
+  });
+
+  it('forwards approvals for the maintained isolated Jane cron scope', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const frame = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'cron-approval', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey: 'agent:jane-whitmore---ceo:cron:gated:mentoring', command: 'echo safe' },
+      },
+    }), false);
+    expect(JSON.parse(String(frame))).toMatchObject({ event: 'exec.approval.requested', payload: { id: 'cron-approval' } });
+    expect(policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'other-approval', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey: 'agent:jane-whitmore---ceo:main', command: 'echo no' },
+      },
+    }), false)).toBeNull();
+  });
+
+  it('accepts opaque OpenClaw session IDs but rejects conflicting Jane agent identities', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const approved = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'uuid-session', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey, sessionId: '16e98294-1f94-4a9d-bdd0-2c06315b6eee', command: 'echo safe' },
+      },
+    }), false);
+    expect(approved).not.toBeNull();
+    expect(String(approved)).not.toContain('sessionId');
+    expect(policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'wrong-agent', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey, agentId: 'other', command: 'echo no' },
+      },
+    }), false)).toBeNull();
+  });
+
+  it('does not broaden an explicit empty approval decision list', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const requested = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'no-decisions', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey, command: 'echo safe', allowedDecisions: [] },
+      },
+    }), false);
+    expect(JSON.parse(String(requested))).toMatchObject({ payload: { request: { allowedDecisions: [] } } });
+    expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'resolve-empty', method: 'exec.approval.resolve', params: { id: 'no-decisions', decision: 'allow-once' } }), false)).toBe(false);
   });
 
   it('exposes only concrete tool activity to the realtime orb', () => {

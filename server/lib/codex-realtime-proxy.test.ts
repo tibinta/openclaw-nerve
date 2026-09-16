@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildJaneRealtimeThreadRequest,
   codexRealtimeEnvironment,
+  extractJaneCanonicalFinal,
+  buildJaneRealtimeSpeechRequest,
   nativeApprovalDecision,
   nativeApprovalForClient,
   nativeApprovalExpiresAt,
@@ -9,9 +11,73 @@ import {
   resumeErrorMeansMissingThread,
   realtimeTranscriptEntry,
   realtimeHistoryForClient,
+  JaneRealtimeSpeechQueue,
+  SpeechAckTimeoutError,
 } from './codex-realtime-proxy.js';
 
 describe('Codex realtime boundary', () => {
+  it('extracts one useful canonical gateway final and suppresses NO_REPLY', () => {
+    expect(extractJaneCanonicalFinal({
+      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', runId: 'run-1',
+      messages: [{ role: 'assistant', content: [{ text: '  Buna, Alex.  ' }] }],
+    })).toEqual({ key: 'jane:run-1', text: 'Buna, Alex.', runId: 'run-1' });
+    expect(extractJaneCanonicalFinal({
+      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', content: 'NO_REPLY',
+    })).toBeNull();
+    expect(extractJaneCanonicalFinal({ sessionKey: 'agent:other', state: 'final', content: 'ignore' })).toBeNull();
+  });
+
+  it('uses the server-only realtime speech protocol with bounded text', () => {
+    expect(buildJaneRealtimeSpeechRequest(42, 'thread-1', 'Salut')).toEqual({
+      id: 42, method: 'thread/realtime/appendSpeech', params: { threadId: 'thread-1', text: 'Salut' },
+    });
+  });
+
+  it('holds finals until Live starts, preserves order, and deduplicates canonical events', async () => {
+    const sent: string[] = [];
+    const queue = new JaneRealtimeSpeechQueue(async (text) => { sent.push(text); });
+    queue.enqueue({ key: 'one', text: 'First' });
+    queue.enqueue({ key: 'one', text: 'Duplicate' });
+    queue.enqueue({ key: 'two', text: 'Second' });
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['First', 'Second']);
+  });
+
+  it('keeps a rejected final for the next Live reconnect', async () => {
+    const sent: string[] = [];
+    let reject = true;
+    const queue = new JaneRealtimeSpeechQueue(async (text) => {
+      sent.push(text);
+      if (reject) throw new Error('session closed');
+    });
+    queue.enqueue({ key: 'one', text: 'Retry me' });
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Retry me']);
+    reject = false;
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Retry me', 'Retry me']);
+  });
+
+  it('quarantines an uncertain final without blocking later finals after reconnect', async () => {
+    const sent: string[] = [];
+    const queue = new JaneRealtimeSpeechQueue(async (text) => {
+      sent.push(text);
+      if (text === 'Uncertain') throw new SpeechAckTimeoutError('ack timed out');
+    });
+    queue.enqueue({ key: 'one', text: 'Uncertain' });
+    queue.enqueue({ key: 'two', text: 'Later' });
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Uncertain']);
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Uncertain', 'Later']);
+  });
   it('resumes Jane\'s persistent conversation and starts a durable fallback', () => {
     expect(buildJaneRealtimeThreadRequest(2, 'persisted-thread')).toEqual({
       id: 2,
