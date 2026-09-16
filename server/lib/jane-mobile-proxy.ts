@@ -69,10 +69,11 @@ function sanitizeApprovalEnvelope(payload: unknown, kind: 'exec' | 'plugin'): Re
     const value = boundedText(request[key], key === 'description' ? 2_000 : 512);
     if (value) safeRequest[key] = value;
   }
-  const decisions = Array.isArray(request.allowedDecisions)
-    ? request.allowedDecisions.filter((value): value is ApprovalDecision => approvalDecision(value) !== undefined)
+  const suppliedDecisions = request.allowedDecisions;
+  const decisions = Array.isArray(suppliedDecisions)
+    ? suppliedDecisions.filter((value): value is ApprovalDecision => approvalDecision(value) !== undefined)
     : [];
-  safeRequest.allowedDecisions = decisions.length ? decisions : ['allow-once', 'deny'];
+  safeRequest.allowedDecisions = Array.isArray(suppliedDecisions) ? decisions : ['allow-once', 'deny'];
   return { id, createdAtMs, expiresAtMs, request: safeRequest };
 }
 

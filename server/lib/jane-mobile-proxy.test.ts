@@ -228,6 +228,18 @@ describe('Jane mobile relay policy', () => {
     }), false)).toBeNull();
   });
 
+  it('does not broaden an explicit empty approval decision list', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const requested = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'no-decisions', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey, command: 'echo safe', allowedDecisions: [] },
+      },
+    }), false);
+    expect(JSON.parse(String(requested))).toMatchObject({ payload: { request: { allowedDecisions: [] } } });
+    expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'resolve-empty', method: 'exec.approval.resolve', params: { id: 'no-decisions', decision: 'allow-once' } }), false)).toBe(false);
+  });
+
   it('exposes only concrete tool activity to the realtime orb', () => {
     expect(extractJanePublicProgress({
       type: 'event', event: 'agent', payload: { sessionKey, stream: 'lifecycle', data: { phase: 'start' } },
