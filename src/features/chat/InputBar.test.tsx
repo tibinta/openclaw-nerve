@@ -14,6 +14,12 @@ const voiceInputMockState = vi.hoisted(() => ({
   clearError: vi.fn(),
 }));
 
+const realtimeMockState = vi.hoisted(() => ({
+  start: vi.fn(async () => true),
+  stop: vi.fn(),
+  sendText: vi.fn(),
+}));
+
 const settingsMockState = vi.hoisted(() => ({
   continuousVoiceEnabled: false,
   isTtsSpeaking: false,
@@ -48,6 +54,14 @@ vi.mock('@/features/voice/useVoiceInput', () => ({
     discardRecording: voiceInputMockState.discardRecording,
     error: null,
     clearError: voiceInputMockState.clearError,
+  }),
+}));
+
+vi.mock('@/features/voice/useCodexRealtimeVoice', () => ({
+  useCodexRealtimeVoice: () => ({
+    status: 'idle', caption: null, error: null, isMicrophoneMuted: false,
+    toggleMicrophoneMuted: vi.fn(), start: realtimeMockState.start,
+    stop: realtimeMockState.stop, sendText: realtimeMockState.sendText, clearError: vi.fn(),
   }),
 }));
 
@@ -118,6 +132,9 @@ describe('InputBar', () => {
     voiceInputMockState.discardRecording.mockClear();
     voiceInputMockState.toggleWakeWord.mockClear();
     voiceInputMockState.clearError.mockClear();
+    realtimeMockState.start.mockClear();
+    realtimeMockState.stop.mockClear();
+    realtimeMockState.sendText.mockClear();
     settingsMockState.continuousVoiceEnabled = false;
     settingsMockState.isTtsSpeaking = false;
     settingsMockState.toggleContinuousVoice.mockClear();
@@ -303,7 +320,7 @@ describe('InputBar', () => {
     expect(screen.queryByRole('button', { name: /Browse by path/i })).not.toBeInTheDocument();
   });
 
-  it('restarts live voice after a quiet-pause transcription settles before generation flips', async () => {
+  it('uses GPT-Live instead of redispatching quiet-pause transcripts', async () => {
     vi.useFakeTimers();
     settingsMockState.continuousVoiceEnabled = true;
     voiceInputMockState.voiceState = 'transcribing';
@@ -315,7 +332,8 @@ describe('InputBar', () => {
 
     await vi.advanceTimersByTimeAsync(1400);
 
-    expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
+    expect(voiceInputMockState.startRecording).not.toHaveBeenCalled();
+    expect(realtimeMockState.start).toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -338,7 +356,8 @@ describe('InputBar', () => {
     rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
     await vi.advanceTimersByTimeAsync(700);
 
-    expect(voiceInputMockState.startRecording).toHaveBeenCalledTimes(1);
+    expect(voiceInputMockState.startRecording).not.toHaveBeenCalled();
+    expect(realtimeMockState.start).toHaveBeenCalled();
     vi.useRealTimers();
   });
 

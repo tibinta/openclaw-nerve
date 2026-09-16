@@ -54,6 +54,7 @@ import { useChatMessages, mergeFinalMessages, patchThinkingDuration } from '@/ho
 import { useChatStreaming } from '@/hooks/useChatStreaming';
 import { useChatRecovery } from '@/hooks/useChatRecovery';
 import { useChatTTS } from '@/hooks/useChatTTS';
+import { renderMarkdown } from '@/utils/helpers';
 
 // ─── Exported types (consumed by features/chat components) ──────────────────────
 
@@ -86,6 +87,7 @@ interface ChatContextValue {
   activityLog: ActivityLogEntry[];
   currentToolDescription: string | null;
   handleSend: (text: string, images?: ImageAttachment[]) => Promise<void>;
+  handleLiveTranscript: (update: { role: 'user' | 'assistant'; text: string; final: boolean; id?: string; seq?: number }) => void;
   handleAbort: () => Promise<void>;
   handleReset: () => void;
   loadHistory: (session?: string) => Promise<void>;
@@ -163,6 +165,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ─── Compose hooks ────────────────────────────────────────────────────────
   const msgHook = useChatMessages({ rpc, currentSessionRef });
+  const liveTranscriptIdsRef = useRef<Partial<Record<'user' | 'assistant', string>>>({});
   const streamHook = useChatStreaming();
   const ttsHook = useChatTTS({ soundEnabled: soundEnabledRef, speak: speakRef });
 
@@ -176,6 +179,34 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     applyMessageWindow: msgHook.applyMessageWindow,
     setStream: streamHook.setStream,
   });
+
+  const handleLiveTranscript = useCallback((update: { role: 'user' | 'assistant'; text: string; final: boolean; id?: string; seq?: number }) => {
+    const text = update.text.trim();
+    if (!text) return;
+    const existingId = liveTranscriptIdsRef.current[update.role];
+    const id = update.id
+      ? `live-history-${update.role}-${update.id}`
+      : existingId ?? `live-${update.role}-${generateMsgId()}`;
+    liveTranscriptIdsRef.current[update.role] = update.final ? undefined : id;
+    const apply = (messages: ChatMsg[]) => {
+      const index = messages.findIndex((message) => message.msgId === id || message.msgId === existingId);
+      const message: ChatMsg = {
+        msgId: id,
+        role: update.role,
+        rawText: text,
+        html: renderMarkdown(text),
+        timestamp: index >= 0 ? messages[index].timestamp : new Date(),
+        streaming: !update.final,
+        isVoice: true,
+      };
+      if (index < 0) return [...messages, message];
+      const next = [...messages];
+      next[index] = message;
+      return next;
+    };
+    msgHook.setAllMessages(apply);
+    msgHook.setMessages(apply);
+  }, [msgHook]);
 
   // ─── Reset transient state on session switch ──────────────────────────────
   useEffect(() => {
@@ -755,6 +786,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     activityLog: streamHook.activityLog,
     currentToolDescription: streamHook.currentToolDescription,
     handleSend,
+    handleLiveTranscript,
     handleAbort,
     handleReset,
     loadHistory: msgHook.loadHistory,
@@ -772,6 +804,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     streamHook.activityLog,
     streamHook.currentToolDescription,
     handleSend,
+    handleLiveTranscript,
     handleAbort,
     handleReset,
     msgHook.loadHistory,

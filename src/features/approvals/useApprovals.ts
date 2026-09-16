@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useGateway } from '@/contexts/GatewayContext';
 import type { GatewayEvent } from '@/types';
+import {
+  resolveCodexRealtimeApproval,
+  subscribeCodexRealtimeApprovals,
+  type CodexRealtimeApproval,
+} from '@/features/voice/codexRealtimeBridge';
 
 export type ApprovalDecision = 'allow-once' | 'allow-always' | 'deny';
-export type ApprovalKind = 'exec' | 'plugin';
+export type ApprovalKind = 'exec' | 'plugin' | 'codex';
 export type ApprovalSeverity = 'info' | 'warning' | 'critical';
 
 export interface PendingApproval {
@@ -16,6 +21,7 @@ export interface PendingApproval {
   allowedDecisions: ApprovalDecision[];
   createdAtMs: number;
   expiresAtMs: number;
+  nativeId?: string | number;
 }
 
 export interface UseApprovalsState {
@@ -170,6 +176,33 @@ export function normalizePluginApproval(raw: unknown): PendingApproval | null {
   };
 }
 
+export function normalizeCodexApproval(raw: CodexRealtimeApproval): PendingApproval {
+  const command = stringValue(raw.params.command);
+  const reason = stringValue(raw.params.reason);
+  const decisions = Array.isArray(raw.params.availableDecisions) ? raw.params.availableDecisions : [];
+  const allowedDecisions: ApprovalDecision[] = [
+    ...(decisions.includes('accept') ? ['allow-once' as const] : []),
+    ...(decisions.includes('acceptForSession') ? ['allow-always' as const] : []),
+    ...(decisions.includes('decline') || decisions.length === 0 ? ['deny' as const] : []),
+  ];
+  const createdAtMs = numberValue(raw.params.startedAtMs) ?? Date.now();
+  return {
+    id: String(raw.id),
+    nativeId: raw.id,
+    kind: 'codex',
+    title: command ? 'Command approval' : 'File change approval',
+    description: redactApprovalText(command ?? reason ?? 'Jane needs permission to continue.'),
+    severity: 'warning',
+    metadata: buildMetadata([
+      ['Working dir', raw.params.cwd],
+      ['Reason', raw.params.reason],
+    ]),
+    allowedDecisions: allowedDecisions.length ? allowedDecisions : ['allow-once', 'deny'],
+    createdAtMs,
+    expiresAtMs: createdAtMs + 10 * 60_000,
+  };
+}
+
 function readApprovalListPayload(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
   if (!isRecord(payload)) return [];
@@ -242,6 +275,14 @@ export function useApprovals(): UseApprovalsState {
     const key = approvalKey(approval);
     setResolvingKeys((current) => new Set(current).add(key));
     try {
+      if (approval.kind === 'codex') {
+        const nativeDecision = decision === 'allow-once' ? 'accept'
+          : decision === 'allow-always' ? 'acceptForSession' : 'decline';
+        resolveCodexRealtimeApproval(approval.nativeId ?? approval.id, nativeDecision);
+        setPendingApprovals((current) => current.filter((item) => approvalKey(item) !== key));
+        setError(null);
+        return;
+      }
       const method = approval.kind === 'exec' ? 'exec.approval.resolve' : 'plugin.approval.resolve';
       await rpc(method, { id: approval.id, decision });
       setPendingApprovals((current) => current.filter((item) => approvalKey(item) !== key));
@@ -292,6 +333,16 @@ export function useApprovals(): UseApprovalsState {
       }
     });
   }, [connectionState, subscribe]);
+
+  useEffect(() => subscribeCodexRealtimeApprovals((approval) => {
+    if (!approval) {
+      setPendingApprovals((current) => current.filter((item) => item.kind !== 'codex'));
+      return;
+    }
+    const normalized = normalizeCodexApproval(approval);
+    setPendingApprovals((current) => pruneExpired(dedupeApprovals([normalized, ...current])));
+    setError(null);
+  }), []);
 
   useEffect(() => {
     const interval = window.setInterval(() => {

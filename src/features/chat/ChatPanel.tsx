@@ -8,10 +8,12 @@ import { useMessageSearch } from './useMessageSearch';
 import { ActivityLog, ChatHeader, ProcessingIndicator, ScrollToBottomButton, StreamingMessage, ToolGroupBlock } from './components';
 import { isMessageCollapsible } from './types';
 import type { ChatMsg, ImageAttachment, OutgoingUploadPayload } from './types';
+import type { RealtimeTranscriptUpdate } from '@/features/voice/useCodexRealtimeVoice';
 
 interface ChatPanelProps {
   messages: ChatMsg[];
   onSend: (text: string, attachments?: ImageAttachment[], uploadPayload?: OutgoingUploadPayload) => void | Promise<void>;
+  onLiveTranscript?: (update: RealtimeTranscriptUpdate) => void;
   onAbort: () => void;
   isGenerating: boolean;
   stream: ChatStreamState;
@@ -56,7 +58,7 @@ export interface ChatPanelHandle {
 /** Main chat panel with message list, infinite scroll, search, and input bar. */
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel({
   messages,
-  onSend, onAbort, isGenerating, stream,
+  onSend, onLiveTranscript, onAbort, isGenerating, stream,
   processingStage,
   lastEventTimestamp = 0, currentToolDescription = null, activityLog = [],
   onWakeWordState, onReset, searchOpen, onSearchClose, id, agentName = 'Agent',
@@ -382,6 +384,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
       <InputBar
         ref={inputBarRef}
         onSend={onSend}
+        onLiveTranscript={onLiveTranscript}
         isGenerating={isGenerating}
         onWakeWordState={onWakeWordState}
         agentName={agentName}

@@ -110,7 +110,7 @@ export default function App({ onLogout }: AppProps) {
   const {
     messages, isGenerating, stream, processingStage,
     lastEventTimestamp, activityLog, currentToolDescription,
-    handleSend, handleAbort, handleReset,
+    handleSend, handleLiveTranscript, handleAbort, handleReset,
     loadMore, hasMore,
     showResetConfirm, confirmReset, cancelReset,
   } = useChat();
@@ -691,6 +691,7 @@ export default function App({ onLogout }: AppProps) {
             id="main-chat"
             messages={messages}
             onSend={handleSend}
+            onLiveTranscript={handleLiveTranscript}
             onAbort={handleAbort}
             isGenerating={isGenerating}
             stream={stream}

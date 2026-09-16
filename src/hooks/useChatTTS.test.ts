@@ -3,11 +3,25 @@ import { renderHook, act } from '@testing-library/react';
 import type { RefObject } from 'react';
 import { buildVoiceFallbackText, FALLBACK_MAX_CHARS, VOICE_REPLY_SPOKEN_EVENT, useChatTTS } from './useChatTTS';
 
+const voiceControlMockState = vi.hoisted(() => ({ continuousVoiceEnabled: false }));
+vi.mock('@/features/voice/voiceControlBridge', () => ({
+  getLatestVoiceControlSnapshot: () => ({ ...voiceControlMockState }),
+}));
+
 function makeRef<T>(value: T) {
   return { current: value } as RefObject<T>;
 }
 
 describe('useChatTTS', () => {
+  it('does not replay gateway speech while GPT-Live owns audio', () => {
+    const speak = vi.fn();
+    voiceControlMockState.continuousVoiceEnabled = true;
+    const { result } = renderHook(() => useChatTTS({ soundEnabled: makeRef(true), speak: makeRef(speak) }));
+    act(() => result.current.handleFinalTTS({ text: 'duplicate', ttsText: 'duplicate' } as never, true));
+    expect(speak).not.toHaveBeenCalled();
+    voiceControlMockState.continuousVoiceEnabled = false;
+  });
+
   it('speaks an explicit marker even when sound effects are off', () => {
     const speak = vi.fn();
     const { result } = renderHook(() => useChatTTS({

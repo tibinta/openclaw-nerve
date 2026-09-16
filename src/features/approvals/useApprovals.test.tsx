@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayEvent } from '@/types';
 import {
   normalizeExecApproval,
+  normalizeCodexApproval,
   redactApprovalText,
   useApprovals,
   type PendingApproval,
@@ -101,6 +102,18 @@ describe('approval normalization', () => {
     expect(approval?.description).toContain('[link]');
     expect(approval?.description).not.toContain('+447494');
     expect(approval?.metadata.some((item) => item.label === 'Session')).toBe(false);
+  });
+
+  it('maps native Codex decisions into the existing approval card', () => {
+    const approval = normalizeCodexApproval({
+      id: 42,
+      method: 'item/commandExecution/requestApproval',
+      params: { command: 'git status', cwd: '/workspace', availableDecisions: ['accept', 'decline'] },
+    });
+    expect(approval).toMatchObject({
+      id: '42', nativeId: 42, kind: 'codex', title: 'Command approval',
+      description: 'git status', allowedDecisions: ['allow-once', 'deny'],
+    });
   });
 });
 

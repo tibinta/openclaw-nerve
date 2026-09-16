@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, useImperativeHandle, forwardR
 import { Mic, Paperclip, X, Loader2, ArrowUp, FileText, FolderOpen, Radio } from 'lucide-react';
 import type { TreeEntry } from '@/features/file-browser';
 import { useVoiceInput } from '@/features/voice/useVoiceInput';
+import { useCodexRealtimeVoice, type RealtimeTranscriptUpdate } from '@/features/voice/useCodexRealtimeVoice';
 import { VOICE_REPLY_SPOKEN_EVENT } from '@/hooks/useChatTTS';
 import { useTabCompletion } from '@/hooks/useTabCompletion';
 import { useInputHistory } from '@/hooks/useInputHistory';
@@ -42,6 +43,7 @@ interface InputBarProps {
   onWakeWordState?: (enabled: boolean, toggle: () => void) => void;
   /** Agent name for dynamic wake phrase (e.g., "Hey Helena") */
   agentName?: string;
+  onLiveTranscript?: (update: RealtimeTranscriptUpdate) => void;
 }
 
 export interface InputBarHandle {
@@ -252,7 +254,7 @@ async function resolveWorkspacePathToCanonicalReference(targetPath: string): Pro
 }
 
 /** Chat input bar with file attachments, voice input, and model effort selector. */
-export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar({ onSend, isGenerating, onWakeWordState, agentName = 'Agent' }, ref) {
+export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar({ onSend, isGenerating, onWakeWordState, agentName = 'Agent', onLiveTranscript }, ref) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const deferredResizeFrameRef = useRef<number | null>(null);
@@ -495,7 +497,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     startRecording,
     startOneShotReplyRecording,
     stopAndTranscribe,
-    discardRecording,
     error: voiceError,
     clearError: clearVoiceError,
   } = useVoiceInput((text) => {
@@ -509,47 +510,21 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setDraftText('');
     onSend('[voice] ' + text);
   }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? liveVoicePauseMs : undefined, continuousVoiceEnabled, wakeVoicePauseMs);
-  const wasGeneratingRef = useRef(isGenerating);
-  const pendingLiveVoiceRestartRef = useRef(false);
-  const previousVoiceStateRef = useRef(voiceState);
+  const {
+    status: realtimeStatus,
+    error: realtimeError,
+    start: startRealtimeVoice,
+    stop: stopRealtimeVoice,
+    sendText: sendRealtimeText,
+    clearError: clearRealtimeError,
+  } = useCodexRealtimeVoice(onLiveTranscript);
+  const visibleVoiceError = realtimeError || voiceError;
   const latestLiveVoiceStateRef = useRef({ isGenerating, isTtsSpeaking, voiceState, continuousVoiceEnabled });
   latestLiveVoiceStateRef.current = { isGenerating, isTtsSpeaking, voiceState, continuousVoiceEnabled };
 
   useEffect(() => {
-    const wasGenerating = wasGeneratingRef.current;
-    wasGeneratingRef.current = isGenerating;
-    const previousVoiceState = previousVoiceStateRef.current;
-    previousVoiceStateRef.current = voiceState;
-    if (!continuousVoiceEnabled) {
-      pendingLiveVoiceRestartRef.current = false;
-      return;
-    }
-    if (isGenerating || voiceState !== 'idle') return;
-    if (wasGenerating || previousVoiceState === 'transcribing') {
-      // Live voice can finish a quiet-pause transcription before the outgoing
-      // chat request flips into generating. Mark a restart here too, so a
-      // second dictation after a short break is not lost.
-      pendingLiveVoiceRestartRef.current = true;
-    }
-    if (!pendingLiveVoiceRestartRef.current || isTtsSpeaking) return;
-    const id = window.setTimeout(() => {
-      const latest = latestLiveVoiceStateRef.current;
-      if (
-        !latest.continuousVoiceEnabled ||
-        latest.isGenerating ||
-        latest.isTtsSpeaking ||
-        latest.voiceState !== 'idle'
-      ) {
-        return;
-      }
-      pendingLiveVoiceRestartRef.current = false;
-      void startRecording();
-    }, previousVoiceState === 'transcribing' ? 1400 : 700);
-    return () => window.clearTimeout(id);
-  }, [continuousVoiceEnabled, isGenerating, isTtsSpeaking, startRecording, voiceState]);
-
-  useEffect(() => {
     const handleVoiceReplySpoken = () => {
+      if (continuousVoiceEnabled) return;
       let attempts = 0;
       const tryStart = () => {
         const latest = latestLiveVoiceStateRef.current;
@@ -572,7 +547,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
     window.addEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);
     return () => window.removeEventListener(VOICE_REPLY_SPOKEN_EVENT, handleVoiceReplySpoken);
-  }, [startOneShotReplyRecording, wakeVoicePauseMs]);
+  }, [continuousVoiceEnabled, startOneShotReplyRecording, wakeVoicePauseMs]);
 
   const handleVoiceButton = useCallback(() => {
     clearVoiceError();
@@ -587,19 +562,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const handleContinuousVoiceButton = useCallback(() => {
     clearVoiceError();
-    const next = !continuousVoiceEnabled;
+    clearRealtimeError();
+    if (continuousVoiceEnabled) {
+      stopRealtimeVoice();
+      toggleContinuousVoice();
+      return;
+    }
     toggleContinuousVoice();
-    if (next && (voiceState === 'idle' || voiceState === 'listening')) {
-      void startRecording();
-    }
-    if (!next && voiceState === 'recording') {
-      discardRecording();
-    }
-  }, [clearVoiceError, continuousVoiceEnabled, discardRecording, startRecording, toggleContinuousVoice, voiceState]);
+    void startRealtimeVoice();
+  }, [clearRealtimeError, clearVoiceError, continuousVoiceEnabled, startRealtimeVoice, stopRealtimeVoice, toggleContinuousVoice]);
 
   useEffect(() => {
-    publishVoiceControlSnapshot({ voiceState, continuousVoiceEnabled, wakeWordEnabled, voiceError });
-  }, [continuousVoiceEnabled, voiceError, voiceState, wakeWordEnabled]);
+    if (!continuousVoiceEnabled || realtimeStatus !== 'idle') return;
+    const timer = window.setTimeout(() => { void startRealtimeVoice(); }, 800);
+    return () => window.clearTimeout(timer);
+  }, [continuousVoiceEnabled, realtimeStatus, startRealtimeVoice]);
+
+  useEffect(() => {
+    publishVoiceControlSnapshot({ voiceState, continuousVoiceEnabled, wakeWordEnabled, voiceError: visibleVoiceError });
+  }, [continuousVoiceEnabled, visibleVoiceError, voiceState, wakeWordEnabled]);
 
   useEffect(() => {
     const handleVoiceCommand = (event: Event) => {
@@ -1146,7 +1127,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       }
       setDraftText('');
 
-      await onSend(text || '', inlineAttachments.length > 0 ? inlineAttachments : undefined, uploadPayload);
+      if (continuousVoiceEnabled && text && inlineAttachments.length === 0 && !uploadPayload) {
+        sendRealtimeText(text);
+      } else {
+        await onSend(text || '', inlineAttachments.length > 0 ? inlineAttachments : undefined, uploadPayload);
+      }
       clearStagedAttachments();
       setAttachmentError(null);
       clearVoiceError();
@@ -1166,6 +1151,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     inputHistory,
     buildFileReferenceDescriptor,
     onSend,
+    continuousVoiceEnabled,
+    sendRealtimeText,
     prepareInlineItem,
     clearStagedAttachments,
     clearVoiceError,
@@ -1377,8 +1364,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onClick={handleContinuousVoiceButton}
           disabled={voiceState === 'transcribing'}
           className={`bg-transparent border-none px-2 self-stretch h-full flex items-center justify-center transition-colors disabled:opacity-50 ${continuousVoiceEnabled ? 'text-primary' : 'text-muted-foreground hover:text-primary'}`}
-          title={continuousVoiceEnabled ? 'Stop live voice' : 'Live voice'}
-          aria-label={continuousVoiceEnabled ? 'Stop live voice' : 'Start live voice'}
+          title={continuousVoiceEnabled ? 'Stop GPT-Live voice' : 'GPT-Live voice'}
+          aria-label={continuousVoiceEnabled ? 'Stop GPT-Live voice' : 'Start GPT-Live voice'}
         >
           <Radio size={16} />
         </button>
@@ -1408,14 +1395,20 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             ? continuousVoiceEnabled ? 'Recording… pause to send' : 'Recording… tap mic to send'
             : voiceState === 'transcribing'
             ? 'Transcribing…'
+            : realtimeStatus === 'connecting'
+              ? 'Connecting to GPT-Live…'
+              : realtimeStatus === 'speaking'
+                ? 'Jane is speaking…'
+                : realtimeStatus === 'listening'
+                  ? 'Jane is listening…'
             : continuousVoiceEnabled
-              ? 'Live voice on'
+              ? 'GPT-Live reconnecting…'
               : 'Enter to send · tap mic to talk'}
         </span>
       </div>
-      {voiceError && (
+      {visibleVoiceError && (
         <div className="text-[10px] text-destructive px-4 pb-1.5 pl-10 bg-card" role="alert">
-          {voiceError}
+          {visibleVoiceError}
         </div>
       )}
       <Dialog open={showAttachByPathDialog} onOpenChange={setShowAttachByPathDialog}>

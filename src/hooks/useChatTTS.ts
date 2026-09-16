@@ -8,6 +8,7 @@ import { useRef, useCallback, useMemo } from 'react';
 import { playPing } from '@/features/voice/audio-feedback';
 import type { FinalMessageData } from '@/features/chat/operations';
 import type { ChatMsg } from '@/features/chat/types';
+import { getLatestVoiceControlSnapshot } from '@/features/voice/voiceControlBridge';
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
@@ -125,6 +126,7 @@ export function useChatTTS({ soundEnabled, speak }: UseChatTTSDeps) {
   const playedSoundsRef = useRef<Map<string, number>>(new Map());
 
   const speakText = useCallback((text: string, voiceReply = false) => {
+    if (getLatestVoiceControlSnapshot().continuousVoiceEnabled) return Promise.resolve();
     const done = Promise.resolve(speak.current(text));
     if (voiceReply) {
       void done.finally(() => {
