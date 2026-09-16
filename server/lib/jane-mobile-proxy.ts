@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import { isJaneMobileCronControlRequest } from './jane-mobile-cron-control.js';
 
 export const JANE_LIVE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
+const JANE_CRON_SESSION_PREFIX = 'agent:jane-whitmore---ceo:cron:gated:';
 const MAX_MESSAGE_CHARS = 64_000;
 const MAX_HISTORY_LIMIT = 20;
 const MAX_ATTACHMENTS = 5;
@@ -46,7 +47,10 @@ function approvalSessionIsJane(payload: Record<string, unknown>): boolean {
     payload.sessionKey, payload.sessionId, payload.session,
     request?.sessionKey, request?.sessionId, request?.session,
   ].filter((candidate) => candidate !== undefined);
-  return candidates.length > 0 && candidates.every((candidate) => candidate === JANE_LIVE_SESSION_KEY);
+  return candidates.length > 0 && candidates.every((candidate) => (
+    candidate === JANE_LIVE_SESSION_KEY
+    || (typeof candidate === 'string' && candidate.startsWith(JANE_CRON_SESSION_PREFIX))
+  ));
 }
 
 function sanitizeApprovalEnvelope(payload: unknown, kind: 'exec' | 'plugin'): Record<string, unknown> | null {
@@ -285,6 +289,18 @@ export interface JaneMobileRelayPolicy {
 export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
   const requestIds = new Set<string>();
   const requestMethods = new Map<string, string>();
+  const scopedApprovalIds = new Set<string>();
+
+  const rememberApprovalIds = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (isRecord(item) && typeof item.id === 'string') scopedApprovalIds.add(item.id);
+      }
+    } else if (isRecord(value)) {
+      for (const key of ['approvals', 'pending', 'requests']) rememberApprovalIds(value[key]);
+    }
+    return value;
+  };
 
   const gatewayFrame = (data: Buffer | string, isBinary: boolean): Buffer | string | null => {
     if (isBinary) return null;
@@ -298,9 +314,11 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
         requestMethods.delete(message.id);
         if (!allowed) return null;
         if ((method === 'exec.approval.list' || method === 'plugin.approval.list') && message.ok) {
+          const safePayload = sanitizeApprovalListPayload(message.payload, method.startsWith('exec.') ? 'exec' : 'plugin');
+          rememberApprovalIds(safePayload);
           return JSON.stringify({
             ...message,
-            payload: sanitizeApprovalListPayload(message.payload, method.startsWith('exec.') ? 'exec' : 'plugin'),
+            payload: safePayload,
           });
         }
         return data;
@@ -309,10 +327,12 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
       if (message.event === 'connect.challenge') return data;
       if (message.event === 'exec.approval.requested' || message.event === 'exec.approval.request') {
         const payload = sanitizeApprovalEnvelope(message.payload, 'exec');
+        if (payload && typeof payload.id === 'string') scopedApprovalIds.add(payload.id);
         return payload ? JSON.stringify({ type: 'event', event: message.event, payload }) : null;
       }
       if (message.event === 'plugin.approval.requested') {
         const payload = sanitizeApprovalEnvelope(message.payload, 'plugin');
+        if (payload && typeof payload.id === 'string') scopedApprovalIds.add(payload.id);
         return payload ? JSON.stringify({ type: 'event', event: message.event, payload }) : null;
       }
       if (message.event === 'exec.approval.resolved' || message.event === 'plugin.approval.resolved') {
@@ -350,6 +370,8 @@ export function createJaneMobileRelayPolicy(): JaneMobileRelayPolicy {
           return true;
         }
         if (isAllowedJaneMobileApprovalRequest(message)) {
+          const method = String(message.method);
+          if (method.endsWith('.resolve') && !scopedApprovalIds.has((message.params as Record<string, unknown>).id as string)) return false;
           requestIds.add(message.id);
           requestMethods.set(message.id, message.method as string);
           return true;

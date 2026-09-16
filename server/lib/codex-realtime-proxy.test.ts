@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildJaneRealtimeThreadRequest,
   codexRealtimeEnvironment,
+  extractJaneCanonicalFinal,
+  buildJaneRealtimeSpeechRequest,
   nativeApprovalDecision,
   nativeApprovalForClient,
   nativeApprovalExpiresAt,
@@ -12,6 +14,22 @@ import {
 } from './codex-realtime-proxy.js';
 
 describe('Codex realtime boundary', () => {
+  it('extracts one useful canonical gateway final and suppresses NO_REPLY', () => {
+    expect(extractJaneCanonicalFinal({
+      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', runId: 'run-1',
+      messages: [{ role: 'assistant', content: [{ text: '  Buna, Alex.  ' }] }],
+    })).toEqual({ key: 'jane:run-1', text: 'Buna, Alex.', runId: 'run-1' });
+    expect(extractJaneCanonicalFinal({
+      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', content: 'NO_REPLY',
+    })).toBeNull();
+    expect(extractJaneCanonicalFinal({ sessionKey: 'agent:other', state: 'final', content: 'ignore' })).toBeNull();
+  });
+
+  it('uses the server-only realtime speech protocol with bounded text', () => {
+    expect(buildJaneRealtimeSpeechRequest(42, 'thread-1', 'Salut')).toEqual({
+      id: 42, method: 'thread/realtime/appendSpeech', params: { threadId: 'thread-1', text: 'Salut' },
+    });
+  });
   it('resumes Jane\'s persistent conversation and starts a durable fallback', () => {
     expect(buildJaneRealtimeThreadRequest(2, 'persisted-thread')).toEqual({
       id: 2,

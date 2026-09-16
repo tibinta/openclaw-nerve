@@ -1,11 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { WebSocket, type RawData } from 'ws';
+import { subscribeGatewayEvents } from './gateway-rpc.js';
+import { extractJanePublicProgress } from './jane-mobile-proxy.js';
 
 const CODEX_APP_BINARY = '/Applications/ChatGPT.app/Contents/Resources/codex';
 const DEVICECHECK_MODULE = '/Applications/ChatGPT.app/Contents/Resources/native/devicecheck.node';
@@ -58,6 +61,42 @@ interface RealtimeTranscriptEntry {
 interface RealtimeState {
   threadId?: string;
   transcript?: RealtimeTranscriptEntry[];
+}
+
+export interface JaneCanonicalFinal {
+  key: string;
+  text: string;
+  runId?: string;
+}
+
+function textFromContent(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) return value.map(textFromContent).filter(Boolean).join('\n').trim();
+  if (!isRecord(value)) return '';
+  if (typeof value.text === 'string') return value.text.trim();
+  return textFromContent(value.content);
+}
+
+export function extractJaneCanonicalFinal(payload: Record<string, unknown>): JaneCanonicalFinal | null {
+  if (payload.sessionKey !== 'agent:jane-whitmore---ceo:voice:direct:nerve-live' || payload.state !== 'final') return null;
+  const text = (Array.isArray(payload.messages)
+    ? [...payload.messages].reverse().find((message) => isRecord(message) && message.role === 'assistant')
+    : payload.message) as unknown;
+  const finalText = textFromContent(text) || textFromContent(payload.content);
+  if (!finalText || /^NO_REPLY$/i.test(finalText.trim())) return null;
+  const message = isRecord(text) ? text : null;
+  const metadata = message && isRecord(message.__openclaw) ? message.__openclaw : null;
+  const id = [payload.message_id, payload.messageId, metadata?.id, message?.id, payload.id, payload.runId]
+    .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  return {
+    key: id ? `jane:${id}` : `jane:text:${createHash('sha256').update(finalText).digest('hex')}`,
+    text: finalText.slice(0, 12_000),
+    ...(typeof payload.runId === 'string' ? { runId: payload.runId } : {}),
+  };
+}
+
+export function buildJaneRealtimeSpeechRequest(id: number, threadId: string, text: string): JsonMessage {
+  return { id, method: 'thread/realtime/appendSpeech', params: { threadId, text: text.slice(0, 12_000) } };
 }
 
 let stateWrite = Promise.resolve();
@@ -275,6 +314,11 @@ class CodexRealtimeHost {
   private closed = false;
   private lastStderr = '';
   private readonly onExit: () => void;
+  private readonly unsubscribeGateway: () => void;
+  private readonly forwardedFinals = new Set<string>();
+  private readonly pendingFinals = new Map<string, JaneCanonicalFinal>();
+  private readonly deliveryKeys = new Set<string>();
+  private readonly speechRequests = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
 
   constructor(codexBin: string, onExit: () => void) {
     this.onExit = onExit;
@@ -284,6 +328,7 @@ class CodexRealtimeHost {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.lines = createInterface({ input: this.child.stdout });
+    this.unsubscribeGateway = subscribeGatewayEvents((event) => this.onGatewayEvent(event));
     this.bindChild();
     writeJson(this.child, {
       id: 1,
@@ -301,6 +346,8 @@ class CodexRealtimeHost {
     this.clientIds.clear();
     if (replaced && replaced.readyState === WebSocket.OPEN) replaced.close(1001, 'Reconnected');
     if (this.threadId) sendJson(ws, { method: 'nerve/realtime/ready', params: {} });
+    for (const final of this.pendingFinals.values()) sendJson(ws, { method: 'thread/realtime/assistant/final', params: { ...final } });
+    this.pendingFinals.clear();
     for (const [id, approval] of this.nativeApprovals) {
       if (approval.expiresAtMs <= Date.now()) {
         this.expireNativeApproval(id, approval);
@@ -327,11 +374,52 @@ class CodexRealtimeHost {
   private fail(reason: string): void {
     if (this.closed) return;
     this.closed = true;
+    this.unsubscribeGateway();
+    for (const request of this.speechRequests.values()) request.reject(new Error(reason));
+    this.speechRequests.clear();
     this.lines.close();
     if (!this.child.killed) this.child.kill('SIGTERM');
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close(1011, reason);
     this.ws = null;
     this.onExit();
+  }
+
+  private onGatewayEvent(event: Record<string, unknown>): void {
+    if (this.closed) return;
+    const progress = extractJanePublicProgress(event);
+    if (progress && this.ws) sendJson(this.ws, { method: 'nerve/agent/progress', params: { ...progress } });
+    if (event.event !== 'chat' || !isRecord(event.payload)) return;
+    const final = extractJaneCanonicalFinal(event.payload);
+    if (!final) return;
+    if (this.forwardedFinals.has(final.key) || this.deliveryKeys.has(final.key)) return;
+    this.deliveryKeys.add(final.key);
+    void this.deliverFinal(final).catch(() => {
+      this.deliveryKeys.delete(final.key);
+    });
+  }
+
+  private appendSpeech(text: string, attempt = 0): Promise<void> {
+    if (!this.threadId || this.child.stdin.destroyed) return Promise.reject(new Error('Codex voice host is unavailable'));
+    const id = this.nextId++;
+    const result = new Promise<void>((resolve, reject) => this.speechRequests.set(id, { resolve, reject }));
+    writeJson(this.child, buildJaneRealtimeSpeechRequest(id, this.threadId!, text));
+    return result.catch((error) => {
+      if (attempt >= 1) throw error;
+      return this.appendSpeech(text, attempt + 1);
+    });
+  }
+
+  private async deliverFinal(final: JaneCanonicalFinal): Promise<void> {
+    await this.appendSpeech(final.text);
+    this.forwardedFinals.add(final.key);
+    if (this.forwardedFinals.size > 128) this.forwardedFinals.delete(this.forwardedFinals.values().next().value!);
+    this.deliveryKeys.delete(final.key);
+    if (!this.ws) {
+      this.pendingFinals.set(final.key, final);
+      if (this.pendingFinals.size > 128) this.pendingFinals.delete(this.pendingFinals.keys().next().value!);
+      return;
+    }
+    sendJson(this.ws, { method: 'thread/realtime/assistant/final', params: { ...final } });
   }
 
   private ready(threadId: string): void {
@@ -408,6 +496,14 @@ class CodexRealtimeHost {
           return;
         }
         this.ready(threadId);
+        return;
+      }
+
+      if (typeof message.id === 'number' && this.speechRequests.has(message.id)) {
+        const request = this.speechRequests.get(message.id)!;
+        this.speechRequests.delete(message.id);
+        if (message.error) request.reject(new Error('Codex rejected realtime speech'));
+        else request.resolve();
         return;
       }
 

@@ -171,6 +171,8 @@ describe('Jane mobile relay policy', () => {
       },
     });
     expect(String(requested)).not.toContain('token');
+    expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'resolve-unknown', method: 'exec.approval.resolve', params: { id: 'unknown', decision: 'deny' } }), false)).toBe(false);
+    expect(policy.allowClientFrame(JSON.stringify({ type: 'req', id: 'resolve-live', method: 'exec.approval.resolve', params: { id: 'approval-1', decision: 'deny' } }), false)).toBe(true);
     const listed = policy.gatewayFrame(JSON.stringify({ type: 'res', id: 'list', ok: true, payload: {
       approvals: [
         { id: 'approval-1', createdAtMs: 1, expiresAtMs: 2, request: { title: 'safe', command: 'echo safe', sessionKey } },
@@ -188,6 +190,23 @@ describe('Jane mobile relay policy', () => {
     } }), false)).toBeNull();
     const resolved = policy.gatewayFrame(JSON.stringify({ type: 'event', event: 'exec.approval.resolved', payload: { id: 'approval-1', decision: 'deny', sessionKey } }), false);
     expect(JSON.parse(String(resolved))).toEqual({ type: 'event', event: 'exec.approval.resolved', payload: { id: 'approval-1', decision: 'deny' } });
+  });
+
+  it('forwards approvals for the maintained isolated Jane cron scope', () => {
+    const policy = createJaneMobileRelayPolicy();
+    const frame = policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'cron-approval', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey: 'agent:jane-whitmore---ceo:cron:gated:mentoring', command: 'echo safe' },
+      },
+    }), false);
+    expect(JSON.parse(String(frame))).toMatchObject({ event: 'exec.approval.requested', payload: { id: 'cron-approval' } });
+    expect(policy.gatewayFrame(JSON.stringify({
+      type: 'event', event: 'exec.approval.requested', payload: {
+        id: 'other-approval', createdAtMs: 1, expiresAtMs: 2,
+        request: { sessionKey: 'agent:jane-whitmore---ceo:main', command: 'echo no' },
+      },
+    }), false)).toBeNull();
   });
 
   it('exposes only concrete tool activity to the realtime orb', () => {
