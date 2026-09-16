@@ -292,10 +292,10 @@ export function nativeApprovalExpiresAt(message: JsonMessage, now = Date.now()):
 export class JaneRealtimeSpeechQueue {
   private readonly queued: JaneCanonicalFinal[] = [];
   private readonly seen = new Set<string>();
+  private readonly uncertain = new Set<string>();
   private readonly send: (text: string) => Promise<void>;
   private active = false;
   private sending = false;
-  private uncertain = false;
 
   constructor(send: (text: string) => Promise<void>) {
     this.send = send;
@@ -314,14 +314,15 @@ export class JaneRealtimeSpeechQueue {
   }
 
   private async flush(): Promise<void> {
-    if (!this.active || this.sending || this.uncertain || this.queued.length === 0) return;
+    const next = this.queued.find((final) => !this.uncertain.has(final.key));
+    if (!this.active || this.sending || !next) return;
     this.sending = true;
     try {
-      await this.send(this.queued[0].text);
-      this.queued.shift();
+      await this.send(next.text);
+      this.queued.splice(this.queued.indexOf(next), 1);
     } catch (error) {
       // A timeout has unknown delivery state, so never replay it blindly.
-      this.uncertain = error instanceof SpeechAckTimeoutError;
+      if (error instanceof SpeechAckTimeoutError) this.uncertain.add(next.key);
       this.active = false;
       console.warn('[codex-realtime] speech delivery pending:', error instanceof Error ? error.message : 'unknown error');
     } finally {
@@ -331,7 +332,7 @@ export class JaneRealtimeSpeechQueue {
   }
 }
 
-class SpeechAckTimeoutError extends Error {}
+export class SpeechAckTimeoutError extends Error {}
 
 export function resumeErrorMeansMissingThread(error: unknown): boolean {
   const detail = JSON.stringify(error).toLowerCase();
@@ -551,7 +552,10 @@ class CodexRealtimeHost {
         const request = this.speechRequests.get(message.id)!;
         this.speechRequests.delete(message.id);
         if (message.error) request.reject(new Error('Codex rejected realtime speech'));
-        else request.resolve();
+        else {
+          console.info('[codex-realtime] speech accepted', { id: message.id });
+          request.resolve();
+        }
         return;
       }
 

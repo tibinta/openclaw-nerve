@@ -12,6 +12,7 @@ import {
   realtimeTranscriptEntry,
   realtimeHistoryForClient,
   JaneRealtimeSpeechQueue,
+  SpeechAckTimeoutError,
 } from './codex-realtime-proxy.js';
 
 describe('Codex realtime boundary', () => {
@@ -60,6 +61,22 @@ describe('Codex realtime boundary', () => {
     queue.setActive(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(sent).toEqual(['Retry me', 'Retry me']);
+  });
+
+  it('quarantines an uncertain final without blocking later finals after reconnect', async () => {
+    const sent: string[] = [];
+    const queue = new JaneRealtimeSpeechQueue(async (text) => {
+      sent.push(text);
+      if (text === 'Uncertain') throw new SpeechAckTimeoutError('ack timed out');
+    });
+    queue.enqueue({ key: 'one', text: 'Uncertain' });
+    queue.enqueue({ key: 'two', text: 'Later' });
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Uncertain']);
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Uncertain', 'Later']);
   });
   it('resumes Jane\'s persistent conversation and starts a durable fallback', () => {
     expect(buildJaneRealtimeThreadRequest(2, 'persisted-thread')).toEqual({
