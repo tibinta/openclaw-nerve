@@ -2,13 +2,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
 import { getCodexDirectService } from './codex-direct.js';
 import { gatewayRpcCall, subscribeGatewayEvents } from './gateway-rpc.js';
-import { extractJanePublicProgress } from './jane-mobile-proxy.js';
+import { JANE_LIVE_SESSION_KEY } from './jane-mobile-proxy.js';
 
 const CODEX_APP_BINARY = '/Applications/ChatGPT.app/Contents/Resources/codex';
 const DEVICECHECK_MODULE = '/Applications/ChatGPT.app/Contents/Resources/native/devicecheck.node';
@@ -34,15 +35,9 @@ const REALTIME_ITEM_METHODS = new Set([
 ]);
 const REALTIME_STARTED_METHODS = new Set(['thread/realtime/started', 'thread/realtime/item/started']);
 const LANGUAGE_MATCH_PROMPT = 'Speak Nerve-supplied messages in the language the user primarily uses in this live conversation, translating when needed. If the user has not established a language in this realtime session, use Romanian. Short acknowledgements such as "ok", "okay", or "perfect" do not change the established language. Preserve names, numbers, amounts, and task titles.';
-const VOICE_PROMPT = [
-  'You are the realtime voice layer for Nerve.',
-  'Transcribe the user faithfully and remain silent while Nerve sends the transcript to its OpenClaw main orchestration session.',
-  'Do not say that you are checking, looking, working, or taking action. Remain completely silent until Nerve supplies the completed result.',
-  'Only speak text explicitly supplied by Nerve. Never answer on your own, use tools, or claim actions.',
-  LANGUAGE_MATCH_PROMPT,
-].join(' ');
-const JANE_LIVE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
+const VOICE_PROMPT = 'Ești Jane, vocea live a lui Nerve. Ascultă și transcrie fidel. Rămâi tăcută până când Nerve îți oferă rezultatul final; rostește doar textul primit de la Nerve, în limba conversației, fără să inventezi răspunsuri sau acțiuni.';
 const JANE_RESULT_TIMEOUT_MS = 10 * 60_000;
+const JANE_REALTIME_STATE_PATH = 'jane-live-realtime.json';
 
 interface JsonMessage {
   id?: string | number;
@@ -66,6 +61,9 @@ interface JaneDispatchDependencies {
   subscribe: (listener: GatewayEventListener) => () => void;
   timeoutMs: number;
 }
+
+type JaneRun = (text: string, requestKey: string) => Promise<string>;
+type JaneSteer = (text: string) => Promise<void>;
 
 interface QueuedSpeech {
   key: string;
@@ -175,7 +173,6 @@ export async function dispatchJaneRealtimeRequest(
         sessionKey: JANE_LIVE_SESSION_KEY,
         message: text,
         deliver: false,
-        fastMode: true,
         idempotencyKey: `jane-realtime:${requestKey}`,
       }) as { runId?: unknown } | null;
       expectedRunId = typeof ack?.runId === 'string' ? ack.runId : '';
@@ -201,11 +198,18 @@ export class JaneRealtimeDispatcher {
   private readonly queue: QueuedSpeech[] = [];
   private awaitingOwner: object | null = null;
   private flushing = false;
-  private readonly run: typeof dispatchJaneRealtimeRequest;
-  private dispatchTail: Promise<void> = Promise.resolve();
+  private readonly run: JaneRun;
+  private readonly steer: JaneSteer;
+  private activeRequest: { text: string; promise: Promise<string> } | null = null;
 
-  constructor(run = dispatchJaneRealtimeRequest) {
+  constructor(
+    run: JaneRun = dispatchJaneRealtimeRequest,
+    steer: JaneSteer = async (text) => {
+      await gatewayRpcCall('sessions.steer', { key: JANE_LIVE_SESSION_KEY, message: text });
+    },
+  ) {
     this.run = run;
+    this.steer = steer;
   }
 
   /** Queue a final already produced by Nerve (cron/runtime or another gateway producer). */
@@ -242,17 +246,34 @@ export class JaneRealtimeDispatcher {
       : createHash('sha256').update(`${threadId}\0${clean}`).digest('hex');
     if (!this.remember(key)) return;
 
-    const dispatch = this.dispatchTail.then(async () => {
+    // A live conversation must steer the in-flight Jane run. Starting another
+    // chat.send here creates a second worker and leaves the phone behind.
+    const activeRequest = this.activeRequest;
+    if (activeRequest) {
       try {
-        this.queue.push({ key, text: await this.run(clean, key) });
+        await this.steer(clean);
+      } catch (error) {
+        console.warn('[jane-realtime] Steer failed:', error instanceof Error ? error.message : 'unknown error');
+      }
+      await activeRequest.promise.catch(() => undefined);
+      return;
+    }
+
+    const promise = this.run(clean, key);
+    this.activeRequest = { text: clean, promise };
+    try {
+      let result: string;
+      try {
+        result = await promise;
       } catch (error) {
         console.warn('[jane-realtime] Request dispatch failed:', error instanceof Error ? error.message : 'unknown error');
-        this.queue.push({ key, text: 'I could not start that request. Please try again.' });
+        result = 'I could not start that request. Please try again.';
       }
+      this.queue.push({ key, text: result });
       await this.flush();
-    });
-    this.dispatchTail = dispatch.catch(() => undefined);
-    await dispatch;
+    } finally {
+      if (this.activeRequest?.promise === promise) this.activeRequest = null;
+    }
   }
 
   private remember(key: string): boolean {
@@ -314,6 +335,28 @@ function resolveFirst(paths: Array<string | undefined>): string | null {
   return paths.find((candidate): candidate is string => !!candidate && existsSync(candidate)) ?? null;
 }
 
+function janeRealtimeStatePath(): string {
+  return process.env.NERVE_JANE_REALTIME_STATE_PATH
+    || join(process.env.NERVE_DATA_DIR || join(homedir(), '.nerve'), JANE_REALTIME_STATE_PATH);
+}
+
+async function readPersistedRealtimeThreadId(): Promise<string | null> {
+  try {
+    const state = JSON.parse(await readFile(janeRealtimeStatePath(), 'utf8')) as { threadId?: unknown };
+    return typeof state.threadId === 'string' && state.threadId.trim() ? state.threadId.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function persistRealtimeThreadId(threadId: string): Promise<void> {
+  const target = janeRealtimeStatePath();
+  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+  await writeFile(temp, `${JSON.stringify({ threadId })}\n`, { mode: 0o600 });
+  await rename(temp, target);
+}
+
 export function codexRealtimeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...source };
   delete env.OPENAI_API_KEY;
@@ -341,10 +384,10 @@ export function normalizeCodexRealtimeRequest(message: JsonMessage, threadId: st
         prompt: VOICE_PROMPT,
         version: 'v3',
         voice: typeof params.voice === 'string' && VOICES.has(params.voice) ? params.voice : 'juniper',
-        clientManagedHandoffs: true,
+        clientManagedHandoffs: false,
         includeStartupContext: false,
         realtimeStartInstructions: VOICE_PROMPT,
-        flushTranscriptTailOnSessionEnd: true,
+        flushTranscriptTailOnSessionEnd: false,
         transport: { type: 'webrtc', sdp },
       },
     };
@@ -392,7 +435,7 @@ function sendJson(ws: WebSocket, message: JsonMessage): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
 }
 
-/** Bind one authenticated Nerve socket to one ephemeral Codex GPT-Live host. */
+/** Bind one authenticated Nerve socket to the persisted Codex GPT-Live host. */
 export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtimeDispatcher): void {
   const codexBin = resolveFirst([
     process.env.CODEX_BIN,
@@ -418,49 +461,10 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
   let threadId: string | null = null;
   let closed = false;
   let lastStderr = '';
-  const owner = {};
-  const speechRequests = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
-  const attachSpeechQueue = () => {
-    if (!threadId || !dispatcher || closed) return;
-    dispatcher.attach(owner, (text) => new Promise<void>((resolve, reject) => {
-      if (child.stdin.destroyed) {
-        reject(new Error('Codex voice host is unavailable'));
-        return;
-      }
-      const id = nextId++;
-      speechRequests.set(id, { resolve, reject });
-      const speech = normalizeCodexRealtimeRequest({ method: 'thread/realtime/appendSpeech', params: { text } }, threadId!);
-      if (!speech) {
-        speechRequests.delete(id);
-        reject(new Error('Codex voice result is empty'));
-        return;
-      }
-      writeJson(child, { ...speech, id });
-    }), true);
-  };
-  const forwardedFinals = new Set<string>();
-  const unsubscribeGateway = subscribeGatewayEvents((event) => {
-    if (closed) return;
-    const progress = extractJanePublicProgress(event);
-    // Use the public envelope names consumed by the installed iOS client.
-    // Keeping this on the realtime socket avoids a second control/TTS path.
-    if (progress) sendJson(ws, { method: 'nerve/agent/progress', params: { ...progress } });
-    if (event.event !== 'chat' || !isRecord(event.payload)) return;
-    const final = extractJaneCanonicalFinal(event.payload);
-    if (!final || forwardedFinals.has(final.key)) return;
-    forwardedFinals.add(final.key);
-    if (forwardedFinals.size > 128) forwardedFinals.delete(forwardedFinals.values().next().value!);
-    sendJson(ws, {
-      method: 'thread/realtime/assistant/final',
-      params: { key: final.key, text: final.text, runId: event.payload.runId },
-    });
-  });
 
   const close = (reason?: string) => {
     if (closed) return;
     closed = true;
-    unsubscribeGateway();
-    dispatcher?.detach(owner);
     lines.close();
     if (!child.killed) child.kill('SIGTERM');
     if (reason && ws.readyState === WebSocket.OPEN) ws.close(1011, reason);
@@ -503,22 +507,44 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
         return;
       }
       writeJson(child, { method: 'initialized' });
-      writeJson(child, {
-        id: 2,
-        method: 'thread/start',
-        params: {
-          cwd: process.env.OPENCLAW_HOME || join(homedir(), '.openclaw'),
-          ephemeral: true,
-          approvalPolicy: 'never',
-          sandbox: 'read-only',
-          historyMode: 'paginated',
-          config: { features: { realtime_conversation: true } },
-        },
-      });
+      void (async () => {
+        const persisted = await readPersistedRealtimeThreadId();
+        writeJson(child, persisted ? {
+          id: 2,
+          method: 'thread/resume',
+          params: { threadId: persisted },
+        } : {
+          id: 2,
+          method: 'thread/start',
+          params: {
+            cwd: process.env.OPENCLAW_HOME || join(homedir(), '.openclaw'),
+            ephemeral: false,
+            approvalPolicy: 'never',
+            sandbox: 'read-only',
+            historyMode: 'paginated',
+            config: { features: { realtime_conversation: true } },
+          },
+        });
+      })().catch(() => close('Codex voice host failed to prepare thread'));
       return;
     }
 
     if (message.id === 2) {
+      if (message.error) {
+        writeJson(child, {
+          id: 3,
+          method: 'thread/start',
+          params: {
+            cwd: process.env.OPENCLAW_HOME || join(homedir(), '.openclaw'),
+            ephemeral: false,
+            approvalPolicy: 'never',
+            sandbox: 'read-only',
+            historyMode: 'paginated',
+            config: { features: { realtime_conversation: true } },
+          },
+        });
+        return;
+      }
       const result = isRecord(message.result) ? message.result : null;
       const thread = result && isRecord(result.thread) ? result.thread : null;
       threadId = thread && typeof thread.id === 'string' ? thread.id : null;
@@ -526,27 +552,28 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
         close('Codex voice host failed to start');
         return;
       }
+      void persistRealtimeThreadId(threadId).catch(() => undefined);
       sendJson(ws, { method: 'nerve/realtime/ready', params: {} });
       return;
     }
 
-    if (typeof message.id === 'number' && speechRequests.has(message.id)) {
-      const request = speechRequests.get(message.id)!;
-      speechRequests.delete(message.id);
-      if (message.error) request.reject(new Error('Codex rejected speech')); else request.resolve();
+    if (message.id === 3) {
+      const result = isRecord(message.result) ? message.result : null;
+      const thread = result && isRecord(result.thread) ? result.thread : null;
+      threadId = thread && typeof thread.id === 'string' ? thread.id : null;
+      if (!threadId) {
+        close('Codex voice host failed to start');
+        return;
+      }
+      void persistRealtimeThreadId(threadId).catch(() => undefined);
+      sendJson(ws, { method: 'nerve/realtime/ready', params: {} });
       return;
     }
 
     if (typeof message.id === 'number' && clientIds.has(message.id)) {
       const clientId = clientIds.get(message.id);
-      const clientMethod = clientMethods.get(message.id);
       clientIds.delete(message.id);
       clientMethods.delete(message.id);
-      // Some app-server builds acknowledge start without emitting the
-      // optional `thread/realtime/started` notification. Attach the Nerve
-      // speech queue on the start response as well, otherwise finals stay
-      // visible in text but can never reach realtime audio.
-      if (clientMethod === 'thread/realtime/start') attachSpeechQueue();
       sendJson(ws, { ...message, id: clientId });
       return;
     }
@@ -555,11 +582,6 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
       && isRecord(message.params)
       && (message.params.threadId === undefined || message.params.threadId === threadId));
     if (message.method?.startsWith('thread/realtime/') || isRealtimeItemEvent) {
-      if (isJaneRealtimeStartedEvent(message.method)) attachSpeechQueue();
-      const method = message.method;
-      if (method && (TRANSCRIPT_FINAL_METHODS.has(method) || method === 'thread/realtime/item/completed') && dispatcher && isRecord(message.params)) {
-        handleJaneRealtimeEvent(message, threadId, dispatcher, owner);
-      }
       sendJson(ws, message);
     }
   });

@@ -36,14 +36,14 @@ describe('Codex realtime boundary', () => {
       outputModality: 'audio',
       version: 'v3',
       voice: 'cove',
-      clientManagedHandoffs: true,
+      clientManagedHandoffs: false,
       includeStartupContext: false,
-      realtimeStartInstructions: expect.stringContaining('Only speak text explicitly supplied by Nerve'),
-      flushTranscriptTailOnSessionEnd: true,
+      realtimeStartInstructions: expect.stringContaining('Ești Jane'),
+      flushTranscriptTailOnSessionEnd: false,
       transport: { type: 'webrtc', sdp: 'v=0\r\n' },
     });
     expect(request?.params).not.toHaveProperty('model');
-    expect(request?.params?.prompt).toContain('Do not say that you are checking');
+    expect(request?.params?.prompt).toContain('Rămâi tăcută');
     const speechRequest = normalizeCodexRealtimeRequest({
       id: 8,
       method: 'thread/realtime/appendSpeech',
@@ -127,8 +127,8 @@ describe('Codex realtime boundary', () => {
     expect(gatewayCall).toHaveBeenCalledWith('chat.send', expect.objectContaining({
       idempotencyKey: 'jane-realtime:request-2',
       sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
-      fastMode: true,
     }));
+    expect(gatewayCall.mock.calls[0][1]).not.toHaveProperty('fastMode');
     expect(gatewayCall.mock.calls[0][1]).not.toHaveProperty('thinking');
   });
 
@@ -238,35 +238,34 @@ describe('Codex realtime boundary', () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
-  it('serializes concurrent submissions once in arrival order', async () => {
+  it('steers a concurrent submission into the active run', async () => {
     const started: string[] = [];
     const release: Array<() => void> = [];
+    const steer = vi.fn(async (text: string) => {
+      started.push(`steer:${text}`);
+    });
     const run = vi.fn((text: string) => new Promise<string>((resolve) => {
       started.push(text);
       release.push(() => resolve(`reply:${text}`));
     }));
-    const dispatcher = new JaneRealtimeDispatcher(run);
+    const dispatcher = new JaneRealtimeDispatcher(run, steer);
     const owner = {};
     const speak = vi.fn();
     dispatcher.attach(owner, speak);
 
     const first = dispatcher.submit('thread', 'first');
     const second = dispatcher.submit('thread', 'second');
-    await vi.waitFor(() => expect(started).toEqual(['first']));
+    await vi.waitFor(() => expect(started).toContain('first'));
+    expect(run).toHaveBeenCalledOnce();
+
+    await vi.waitFor(() => expect(started).toEqual(['first', 'steer:second']));
     expect(run).toHaveBeenCalledOnce();
 
     release.shift()!();
-    await first;
-    await vi.waitFor(() => expect(started).toEqual(['first', 'second']));
+    await Promise.all([first, second]);
     expect(speak).toHaveBeenCalledTimes(1);
     expect(speak).toHaveBeenNthCalledWith(1, 'reply:first');
-    dispatcher.acknowledge(owner);
-
-    release.shift()!();
-    await second;
-    await vi.waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
-    expect(speak).toHaveBeenNthCalledWith(2, 'reply:second');
-    expect(run).toHaveBeenCalledTimes(2);
+    expect(steer).toHaveBeenCalledWith('second');
   });
 
   it('dispatches completed user transcript events and deduplicates retransmits', async () => {
@@ -305,11 +304,11 @@ describe('Codex realtime boundary', () => {
     const owner = {};
     const base = { role: 'user', text: 'Spune aceeași frază' };
 
-    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/done', params: { ...base, item_id: 'item-1' } }, 'thread', dispatcher, owner);
-    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/done', params: { ...base, item_id: 'item-2' } }, 'thread', dispatcher, owner);
-    handleJaneRealtimeEvent({ method: 'thread/realtime/transcript/done', params: { ...base, item_id: 'item-1' } }, 'thread', dispatcher, owner);
+    await dispatcher.submit('thread', base.text, 'item-1');
+    await dispatcher.submit('thread', base.text, 'item-2');
+    await dispatcher.submit('thread', base.text, 'item-1');
 
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(run).toHaveBeenCalledTimes(2);
     expect(run).toHaveBeenNthCalledWith(1, base.text, 'jane-turn:item-1');
     expect(run).toHaveBeenNthCalledWith(2, base.text, 'jane-turn:item-2');
   });
