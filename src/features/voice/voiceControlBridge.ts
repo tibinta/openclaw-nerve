@@ -22,6 +22,10 @@ const DEFAULT_VOICE_CONTROL_SNAPSHOT: VoiceControlSnapshot = {
 
 let latestVoiceControlSnapshot = DEFAULT_VOICE_CONTROL_SNAPSHOT;
 
+export function getLatestVoiceControlSnapshot(): VoiceControlSnapshot {
+  return latestVoiceControlSnapshot;
+}
+
 export function publishVoiceControlSnapshot(snapshot: VoiceControlSnapshot) {
   latestVoiceControlSnapshot = snapshot;
   window.dispatchEvent(new CustomEvent<VoiceControlSnapshot>(VOICE_CONTROL_STATE_EVENT, { detail: snapshot }));

@@ -41,14 +41,12 @@ function approvalDecision(value: unknown): ApprovalDecision | undefined {
 }
 
 function approvalSessionIsJane(payload: Record<string, unknown>): boolean {
-  for (const candidate of [payload.sessionKey, payload.sessionId, payload.session]) {
-    if (candidate !== undefined && candidate !== JANE_LIVE_SESSION_KEY) return false;
-  }
   const request = isRecord(payload.request) ? payload.request : undefined;
-  for (const candidate of [request?.sessionKey, request?.sessionId, request?.session]) {
-    if (candidate !== undefined && candidate !== JANE_LIVE_SESSION_KEY) return false;
-  }
-  return true;
+  const candidates = [
+    payload.sessionKey, payload.sessionId, payload.session,
+    request?.sessionKey, request?.sessionId, request?.session,
+  ].filter((candidate) => candidate !== undefined);
+  return candidates.length > 0 && candidates.every((candidate) => candidate === JANE_LIVE_SESSION_KEY);
 }
 
 function sanitizeApprovalEnvelope(payload: unknown, kind: 'exec' | 'plugin'): Record<string, unknown> | null {

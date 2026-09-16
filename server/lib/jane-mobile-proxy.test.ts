@@ -183,6 +183,9 @@ describe('Jane mobile relay policy', () => {
     expect(policy.gatewayFrame(JSON.stringify({ type: 'event', event: 'exec.approval.requested', payload: {
       id: 'other', createdAtMs: 1, expiresAtMs: 2, sessionKey: 'agent:other:main', request: { command: 'no' },
     } }), false)).toBeNull();
+    expect(policy.gatewayFrame(JSON.stringify({ type: 'event', event: 'exec.approval.requested', payload: {
+      id: 'unbound', createdAtMs: 1, expiresAtMs: 2, request: { command: 'no session' },
+    } }), false)).toBeNull();
     const resolved = policy.gatewayFrame(JSON.stringify({ type: 'event', event: 'exec.approval.resolved', payload: { id: 'approval-1', decision: 'deny', sessionKey } }), false);
     expect(JSON.parse(String(resolved))).toEqual({ type: 'event', event: 'exec.approval.resolved', payload: { id: 'approval-1', decision: 'deny' } });
   });

@@ -14,25 +14,16 @@ const voiceInputMockState = vi.hoisted(() => ({
   clearError: vi.fn(),
 }));
 
+const realtimeMockState = vi.hoisted(() => ({
+  start: vi.fn(async () => true),
+  stop: vi.fn(),
+  sendText: vi.fn(),
+}));
+
 const settingsMockState = vi.hoisted(() => ({
   continuousVoiceEnabled: false,
   isTtsSpeaking: false,
   toggleContinuousVoice: vi.fn(),
-  voiceReadbackEnabled: true,
-  toggleVoiceReadback: vi.fn(),
-  disableVoiceReadback: vi.fn(),
-}));
-
-const realtimeVoiceMockState = vi.hoisted(() => ({
-  status: 'idle' as 'idle' | 'connecting' | 'listening' | 'speaking',
-  caption: null as { role: 'user' | 'assistant'; text: string } | null,
-  isMicrophoneMuted: false,
-  toggleMicrophoneMuted: vi.fn(),
-  start: vi.fn(async () => true),
-  stop: vi.fn(),
-  sendText: vi.fn(),
-  clearError: vi.fn(),
-  setCurrentSession: vi.fn(),
 }));
 
 vi.mock('./image-compress', () => ({
@@ -68,15 +59,9 @@ vi.mock('@/features/voice/useVoiceInput', () => ({
 
 vi.mock('@/features/voice/useCodexRealtimeVoice', () => ({
   useCodexRealtimeVoice: () => ({
-    status: realtimeVoiceMockState.status,
-    caption: realtimeVoiceMockState.caption,
-    isMicrophoneMuted: realtimeVoiceMockState.isMicrophoneMuted,
-    toggleMicrophoneMuted: realtimeVoiceMockState.toggleMicrophoneMuted,
-    error: null,
-    start: realtimeVoiceMockState.start,
-    stop: realtimeVoiceMockState.stop,
-    sendText: realtimeVoiceMockState.sendText,
-    clearError: realtimeVoiceMockState.clearError,
+    status: 'idle', caption: null, error: null, isMicrophoneMuted: false,
+    toggleMicrophoneMuted: vi.fn(), start: realtimeMockState.start,
+    stop: realtimeMockState.stop, sendText: realtimeMockState.sendText, clearError: vi.fn(),
   }),
 }));
 
@@ -101,7 +86,6 @@ vi.mock('@/contexts/SessionContext', () => ({
   useSessionContext: () => ({
     sessions: [],
     agentName: 'Agent',
-    setCurrentSession: realtimeVoiceMockState.setCurrentSession,
   }),
 }));
 
@@ -112,12 +96,8 @@ vi.mock('@/contexts/SettingsContext', () => ({
     sttProvider: 'browser',
     continuousVoiceEnabled: settingsMockState.continuousVoiceEnabled,
     toggleContinuousVoice: settingsMockState.toggleContinuousVoice,
-    voiceReadbackEnabled: settingsMockState.voiceReadbackEnabled,
-    toggleVoiceReadback: settingsMockState.toggleVoiceReadback,
-    disableVoiceReadback: settingsMockState.disableVoiceReadback,
     liveVoicePauseMs: 1800,
     wakeVoicePauseMs: 1800,
-    stopSpeaking: vi.fn(),
     isTtsSpeaking: settingsMockState.isTtsSpeaking,
   }),
 }));
@@ -144,10 +124,6 @@ describe('InputBar', () => {
   };
 
   beforeEach(() => {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      value: vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    });
     resetInputBarComposerSnapshotForTests();
     voiceInputMockState.voiceState = 'idle';
     voiceInputMockState.startRecording.mockClear();
@@ -156,21 +132,12 @@ describe('InputBar', () => {
     voiceInputMockState.discardRecording.mockClear();
     voiceInputMockState.toggleWakeWord.mockClear();
     voiceInputMockState.clearError.mockClear();
+    realtimeMockState.start.mockClear();
+    realtimeMockState.stop.mockClear();
+    realtimeMockState.sendText.mockClear();
     settingsMockState.continuousVoiceEnabled = false;
     settingsMockState.isTtsSpeaking = false;
     settingsMockState.toggleContinuousVoice.mockClear();
-    settingsMockState.voiceReadbackEnabled = true;
-    settingsMockState.toggleVoiceReadback.mockClear();
-    settingsMockState.disableVoiceReadback.mockClear();
-    realtimeVoiceMockState.status = 'idle';
-    realtimeVoiceMockState.caption = null;
-    realtimeVoiceMockState.isMicrophoneMuted = false;
-    realtimeVoiceMockState.toggleMicrophoneMuted.mockClear();
-    realtimeVoiceMockState.start.mockClear();
-    realtimeVoiceMockState.stop.mockClear();
-    realtimeVoiceMockState.sendText.mockClear();
-    realtimeVoiceMockState.clearError.mockClear();
-    realtimeVoiceMockState.setCurrentSession.mockClear();
 
     uploadConfigResponse = {
       twoModeEnabled: true,
@@ -353,7 +320,8 @@ describe('InputBar', () => {
     expect(screen.queryByRole('button', { name: /Browse by path/i })).not.toBeInTheDocument();
   });
 
-  it('does not restart the legacy recorder for continuous voice', async () => {
+  it('uses GPT-Live instead of redispatching quiet-pause transcripts', async () => {
+    vi.useFakeTimers();
     settingsMockState.continuousVoiceEnabled = true;
     voiceInputMockState.voiceState = 'transcribing';
 
@@ -362,212 +330,35 @@ describe('InputBar', () => {
     voiceInputMockState.voiceState = 'idle';
     rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
 
+    await vi.advanceTimersByTimeAsync(1400);
+
     expect(voiceInputMockState.startRecording).not.toHaveBeenCalled();
+    expect(realtimeMockState.start).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
-  it('starts GPT-Live in Jane\'s separate live coordinator session without using the legacy recorder', async () => {
-    const frameQueue: FrameRequestCallback[] = [];
-    global.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
-      frameQueue.push(callback);
-      return frameQueue.length;
-    }) as typeof requestAnimationFrame;
-    global.cancelAnimationFrame = vi.fn();
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Start GPT-Live voice' }));
+  it('does not restart live voice during the send/generation handoff after transcription', async () => {
+    vi.useFakeTimers();
+    settingsMockState.continuousVoiceEnabled = true;
+    voiceInputMockState.voiceState = 'transcribing';
 
-    expect(realtimeVoiceMockState.setCurrentSession).toHaveBeenCalledWith('agent:jane-whitmore---ceo:voice:direct:nerve-live');
-    expect(settingsMockState.disableVoiceReadback).toHaveBeenCalled();
-    expect(realtimeVoiceMockState.start).not.toHaveBeenCalled();
-    frameQueue.shift()?.(16);
-    expect(realtimeVoiceMockState.start).toHaveBeenCalledTimes(1);
+    const { rerender } = render(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+    voiceInputMockState.voiceState = 'idle';
+    rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
+
+    await vi.advanceTimersByTimeAsync(500);
+    rerender(<InputBar onSend={vi.fn()} isGenerating={true} />);
+    await vi.advanceTimersByTimeAsync(1400);
+
     expect(voiceInputMockState.startRecording).not.toHaveBeenCalled();
-  });
 
-  it('keeps typed text in the active GPT-Live conversation', async () => {
-    realtimeVoiceMockState.status = 'listening';
-    const onSend = vi.fn();
-    render(<InputBar onSend={onSend} isGenerating={false} />);
-
-    fireEvent.input(screen.getByLabelText('Message input'), { target: { value: 'Continuă aici' } });
-    fireEvent.click(screen.getByLabelText('Send message'));
-
-    await waitFor(() => expect(realtimeVoiceMockState.sendText).toHaveBeenCalledWith('Continuă aici'));
-    expect(onSend).not.toHaveBeenCalled();
-  });
-
-  it('shows the complete live transcript as a large multi-line subtitle', () => {
-    const subtitle = 'Acesta este textul complet care trebuie să rămână vizibil pe mai multe rânduri, fără să fie tăiat.';
-    realtimeVoiceMockState.status = 'speaking';
-    realtimeVoiceMockState.caption = { role: 'assistant', text: subtitle };
-
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-    const region = screen.getByRole('region', { name: 'Live subtitles' });
-    expect(region).not.toHaveTextContent('Jane · live');
-    expect(screen.queryByRole('button', { name: 'Mute microphone' })).not.toBeInTheDocument();
-    const caption = screen.getByText(subtitle);
-    expect(caption.className).toContain('whitespace-pre-wrap');
-    expect(caption.className).not.toContain('truncate');
-    expect(caption.parentElement?.className).not.toContain('backdrop-blur');
-  });
-
-  it.each([
-    ['user', 'TU', 'Ce avem de făcut acum?'],
-    ['assistant', 'JANE', 'Începem cu taskul ICEX.'],
-  ] as const)('turns narrow live voice into a readable full-window %s caption', (role, label, text) => {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      value: vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    });
-    settingsMockState.continuousVoiceEnabled = true;
-    realtimeVoiceMockState.caption = { role, text };
-
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-    const region = screen.getByRole('region', { name: 'Live subtitles' });
-    expect(region.className).toContain('fixed');
-    expect(region.className).toContain('inset-0');
-    expect(region).toHaveTextContent(label);
-    expect(screen.getByText(text).className).toContain('text-[clamp(1.3rem,2.8vw,2.2rem)]');
-    expect(screen.queryByRole('button', { name: 'Close live stage and stop voice' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Mute microphone from full-window captions' }));
-    expect(realtimeVoiceMockState.toggleMicrophoneMuted).toHaveBeenCalledTimes(1);
-  });
-
-  it('uses a subtle red full-window background while the microphone is muted', () => {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      value: vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    });
-    settingsMockState.continuousVoiceEnabled = true;
-    realtimeVoiceMockState.isMicrophoneMuted = true;
-
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-    expect(screen.getByRole('region', { name: 'Live subtitles' }).className).toContain('bg-[#220909]');
-    fireEvent.click(screen.getByRole('button', { name: 'Unmute microphone from full-window captions' }));
-    expect(realtimeVoiceMockState.toggleMicrophoneMuted).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the latest complete user and Jane captions as separate compact history', async () => {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      value: vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    });
-    settingsMockState.continuousVoiceEnabled = true;
-    realtimeVoiceMockState.caption = { role: 'user', text: 'Ultimul lucru spus de mine.' };
-    const { rerender } = render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-    await waitFor(() => expect(screen.getByText('Ultimul lucru spus de mine.')).toBeInTheDocument());
-
-    realtimeVoiceMockState.caption = { role: 'assistant', text: 'Ultimul răspuns complet al lui Jane.' };
     rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
+    await vi.advanceTimersByTimeAsync(700);
 
-    await waitFor(() => {
-      expect(screen.getByText('Ultimul lucru spus de mine.')).toBeInTheDocument();
-      expect(screen.getByText('Ultimul răspuns complet al lui Jane.')).toBeInTheDocument();
-    });
-    expect(screen.getByText('TU')).toBeInTheDocument();
-    expect(screen.getByText('JANE')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mute microphone from full-window captions' }).className).toContain('overflow-hidden');
-  });
-
-  it('keeps compact caption history when Live is toggled off and back on', async () => {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      value: vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    });
-    settingsMockState.continuousVoiceEnabled = true;
-    realtimeVoiceMockState.caption = { role: 'assistant', text: 'Ultimul text rămâne.' };
-    const { rerender } = render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-    await waitFor(() => expect(screen.getByText('Ultimul text rămâne.')).toBeInTheDocument());
-
-    settingsMockState.continuousVoiceEnabled = false;
-    rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
-    settingsMockState.continuousVoiceEnabled = true;
-    realtimeVoiceMockState.caption = null;
-    rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-    expect(screen.getByText('Ultimul text rămâne.')).toBeInTheDocument();
-  });
-
-  it('shows the full-window mute surface immediately while GPT-Live connects', () => {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      value: vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    });
-    settingsMockState.continuousVoiceEnabled = true;
-    realtimeVoiceMockState.status = 'connecting';
-    realtimeVoiceMockState.caption = null;
-
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-    const region = screen.getByRole('region', { name: 'Live subtitles' });
-    expect(region.className).toContain('fixed');
-    expect(region.className).toContain('inset-0');
-    expect(region).not.toHaveTextContent('Connecting to GPT-Live');
-    fireEvent.click(screen.getByRole('button', { name: 'Mute microphone from full-window captions' }));
-    expect(realtimeVoiceMockState.toggleMicrophoneMuted).toHaveBeenCalledTimes(1);
-  });
-
-  it('uses the complete live subtitle surface as a quick microphone mute toggle', () => {
-    settingsMockState.continuousVoiceEnabled = true;
-    realtimeVoiceMockState.status = 'listening';
-    realtimeVoiceMockState.caption = { role: 'assistant', text: 'Jane stays live while the microphone is muted.' };
-
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-    const region = screen.getByRole('region', { name: 'Live subtitles' });
-    expect(region).toHaveTextContent('Jane stays live while the microphone is muted.');
-    expect(region).not.toHaveTextContent('MUTE MIC');
-    fireEvent.click(screen.getByRole('button', { name: 'Mute microphone from live subtitles' }));
-    expect(realtimeVoiceMockState.toggleMicrophoneMuted).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Stop GPT-Live voice' })).toBeInTheDocument();
-  });
-
-  it('shrinks a long live subtitle to stay inside the available panel', () => {
-    const subtitle = Array.from({ length: 80 }, (_, index) => `Update ${index + 1} remains visible.`).join(' ');
-    realtimeVoiceMockState.status = 'speaking';
-    realtimeVoiceMockState.caption = { role: 'assistant', text: subtitle };
-
-    render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-    const caption = screen.getByText(subtitle);
-    expect(caption.className).toContain('text-[clamp(0.45rem,0.72vw,0.65rem)]');
-    expect(caption.className).toContain('max-h-[min(48vh,30rem)]');
-  });
-
-  it('keeps Nerve Live on and retries GPT-Live after a transient disconnect', async () => {
-    vi.useFakeTimers();
-    try {
-      settingsMockState.continuousVoiceEnabled = true;
-      realtimeVoiceMockState.status = 'idle';
-      render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-      expect(screen.getByRole('button', { name: 'Stop GPT-Live voice' })).toBeTruthy();
-      expect(screen.getByText('GPT-Live reconnecting…')).toBeTruthy();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(realtimeVoiceMockState.start).toHaveBeenCalledTimes(1);
-      expect(settingsMockState.toggleContinuousVoice).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('keeps retrying when consecutive GPT-Live starts fail without a status rerender', async () => {
-    vi.useFakeTimers();
-    try {
-      settingsMockState.continuousVoiceEnabled = true;
-      realtimeVoiceMockState.status = 'idle';
-      realtimeVoiceMockState.start.mockResolvedValue(false);
-      render(<InputBar onSend={vi.fn()} isGenerating={false} />);
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(realtimeVoiceMockState.start).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(realtimeVoiceMockState.start).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(voiceInputMockState.startRecording).not.toHaveBeenCalled();
+    expect(realtimeMockState.start).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it('starts listening after a spoken voice reply without requiring the wake word', async () => {
@@ -610,44 +401,6 @@ describe('InputBar', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('retries post-speech listening while generation state is still settling', async () => {
-    vi.useFakeTimers();
-    try {
-      const { rerender } = render(<InputBar onSend={vi.fn()} isGenerating={true} />);
-
-      window.dispatchEvent(new CustomEvent('nerve:voice-reply-spoken'));
-      await vi.advanceTimersByTimeAsync(650);
-      await vi.advanceTimersByTimeAsync(250);
-      expect(voiceInputMockState.startOneShotReplyRecording).not.toHaveBeenCalled();
-
-      rerender(<InputBar onSend={vi.fn()} isGenerating={false} />);
-      await vi.advanceTimersByTimeAsync(250);
-
-      expect(voiceInputMockState.startOneShotReplyRecording).toHaveBeenCalledWith({
-        pauseMs: 1800,
-        noSpeechTimeoutMs: 5000,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('keeps the composer send action available for steering while generating', async () => {
-    const onSend = vi.fn().mockResolvedValue(undefined);
-    render(<InputBar onSend={onSend} isGenerating={true} />);
-
-    const textarea = screen.getByLabelText('Message input') as HTMLTextAreaElement;
-    fireEvent.input(textarea, { target: { value: 'use the 9 July date' } });
-
-    const sendButton = screen.getByLabelText('Steer active response');
-    expect(sendButton).not.toBeDisabled();
-    fireEvent.click(sendButton);
-
-    await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith('use the 9 July date', undefined, undefined);
-    });
   });
 
   it('stages workspace file add-to-chat requests as server_path file references', async () => {

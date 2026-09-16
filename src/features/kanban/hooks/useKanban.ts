@@ -61,6 +61,11 @@ export interface UpdateTaskPayload {
   labels?: string[];
   assignee?: string | null;
   evidence_links?: string[];
+  feedback?: {
+    at: number | string;
+    by: string;
+    note: string;
+  }[];
   proof_gate?: {
     reindex_verified: boolean;
     read_back_verified: boolean;

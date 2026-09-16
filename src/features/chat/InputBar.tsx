@@ -1,5 +1,4 @@
 import { useRef, useEffect, useState, useCallback, useImperativeHandle, forwardRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import { Mic, Paperclip, X, Loader2, ArrowUp, FileText, FolderOpen, Radio } from 'lucide-react';
 import type { TreeEntry } from '@/features/file-browser';
 import { useVoiceInput } from '@/features/voice/useVoiceInput';
@@ -10,7 +9,6 @@ import { useInputHistory } from '@/hooks/useInputHistory';
 import { useSessionContext } from '@/contexts/SessionContext';
 import { useSettings } from '@/contexts/SettingsContext';
 import { publishVoiceControlSnapshot, VOICE_CONTROL_COMMAND_EVENT } from '@/features/voice/voiceControlBridge';
-import { JANE_LIVE_VOICE_SESSION_KEY } from '@/features/sessions/sessionKeys';
 import { MAX_ATTACHMENTS } from '@/lib/constants';
 import { compressImage } from './image-compress';
 import { formatWorkspacePathAddToChat, mergeAddToChatText } from './addToChat';
@@ -40,12 +38,7 @@ import {
 } from '@/components/ui/dialog';
 
 interface InputBarProps {
-  onSend: (
-    text: string,
-    attachments?: ImageAttachment[],
-    uploadPayload?: OutgoingUploadPayload,
-    source?: 'text' | 'live-voice',
-  ) => void | Promise<void>;
+  onSend: (text: string, attachments?: ImageAttachment[], uploadPayload?: OutgoingUploadPayload) => void | Promise<void>;
   isGenerating: boolean;
   onWakeWordState?: (enabled: boolean, toggle: () => void) => void;
   /** Agent name for dynamic wake phrase (e.g., "Hey Helena") */
@@ -125,7 +118,6 @@ interface CanonicalUploadReference {
 interface UploadReferenceResolveResponse {
   ok: boolean;
   items?: CanonicalUploadReference[];
-  financeUpdated?: boolean;
   error?: string;
 }
 
@@ -135,16 +127,6 @@ function formatFileSize(bytes: number): string {
   if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
   const mb = kb / 1024;
   return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
-}
-
-function liveSubtitleSizeClass(text: string): string {
-  const length = text.trim().length;
-  if (length > 1800) return 'text-[clamp(0.45rem,0.72vw,0.65rem)] leading-[1.08]';
-  if (length > 1200) return 'text-[clamp(0.58rem,0.9vw,0.78rem)] leading-[1.1]';
-  if (length > 900) return 'text-[clamp(0.75rem,1.15vw,1rem)] leading-[1.16]';
-  if (length > 500) return 'text-[clamp(0.85rem,1.45vw,1.18rem)] leading-[1.18]';
-  if (length > 260) return 'text-[clamp(1rem,1.9vw,1.45rem)] leading-[1.2]';
-  return 'text-[clamp(1.3rem,2.8vw,2.2rem)] leading-[1.22]';
 }
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -252,8 +234,6 @@ async function importBrowserUploadsToCanonicalReferences(files: File[]): Promise
     throw new Error(payload?.error || 'Failed to import browser uploads.');
   }
 
-  if (payload.financeUpdated) window.dispatchEvent(new Event('nerve:finance-updated'));
-
   return payload.items;
 }
 
@@ -269,8 +249,6 @@ async function resolveWorkspacePathToCanonicalReference(targetPath: string): Pro
   if (!response.ok || payload?.ok !== true || !item) {
     throw new Error(payload?.error || 'Failed to resolve selected workspace path.');
   }
-
-  if (payload.financeUpdated) window.dispatchEvent(new Event('nerve:finance-updated'));
 
   return item;
 }
@@ -296,15 +274,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const [pathPickerCustomRoot, setPathPickerCustomRoot] = useState(() => persistedComposerSnapshot.pathPickerCustomRoot);
   const [sendPulse, setSendPulse] = useState(false);
   const [sendError, setSendError] = useState(false);
-  const [isCompactLiveStage, setIsCompactLiveStage] = useState(() => window.matchMedia?.('(max-width: 900px)').matches ?? false);
-
-  useEffect(() => {
-    const query = window.matchMedia?.('(max-width: 900px)');
-    if (!query) return;
-    const update = (event: MediaQueryListEvent) => setIsCompactLiveStage(event.matches);
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
 
   const uploadsEnabled = isUploadsEnabled(uploadConfig);
   const attachByPathEnabled = uploadConfig.fileReferenceEnabled;
@@ -313,8 +282,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const inputHistory = useInputHistory();
 
   // Tab completion for session names
-  const { sessions, agentName: ctxAgentName, setCurrentSession } = useSessionContext();
-  const { liveTranscriptionPreview, sttInputMode, sttProvider, continuousVoiceEnabled, toggleContinuousVoice, voiceReadbackEnabled, disableVoiceReadback, wakeVoicePauseMs, stopSpeaking, isTtsSpeaking } = useSettings();
+  const { sessions, agentName: ctxAgentName } = useSessionContext();
+  const { liveTranscriptionPreview, sttInputMode, sttProvider, continuousVoiceEnabled, toggleContinuousVoice, liveVoicePauseMs, wakeVoicePauseMs, isTtsSpeaking } = useSettings();
   const getSessionLabels = useMemo(() => {
     // Build a closure that returns current session labels
     const labels = sessions.map((s) => {
@@ -520,18 +489,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const effectiveSttInputMode = sttProvider === 'openai' ? 'local' : sttInputMode;
 
-  const handleVoiceTranscript = useCallback((text: string) => {
-    const input = inputRef.current;
-    if (input) {
-      input.value = '';
-      input.style.height = 'auto';
-      input.style.fontStyle = '';
-      input.style.opacity = '';
-    }
-    setDraftText('');
-    onSend(text, undefined, undefined, 'live-voice');
-  }, [onSend]);
-
   const {
     voiceState,
     interimTranscript,
@@ -540,41 +497,28 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     startRecording,
     startOneShotReplyRecording,
     stopAndTranscribe,
-    error: fallbackVoiceError,
-    clearError: clearFallbackVoiceError,
-  } = useVoiceInput(handleVoiceTranscript, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, undefined, false, wakeVoicePauseMs, stopSpeaking);
+    error: voiceError,
+    clearError: clearVoiceError,
+  } = useVoiceInput((text) => {
+    const input = inputRef.current;
+    if (input) {
+      input.value = '';
+      input.style.height = 'auto';
+      input.style.fontStyle = '';
+      input.style.opacity = '';
+    }
+    setDraftText('');
+    onSend('[voice] ' + text);
+  }, agentName, voiceLang, voicePhrasesVersion, effectiveSttInputMode, continuousVoiceEnabled ? liveVoicePauseMs : undefined, continuousVoiceEnabled, wakeVoicePauseMs);
   const {
     status: realtimeStatus,
-    caption: realtimeCaption,
     error: realtimeError,
-    isMicrophoneMuted,
-    toggleMicrophoneMuted,
     start: startRealtimeVoice,
     stop: stopRealtimeVoice,
     sendText: sendRealtimeText,
     clearError: clearRealtimeError,
   } = useCodexRealtimeVoice(onLiveTranscript);
-  const realtimeReconnectAttemptRef = useRef(0);
-  const [realtimeReconnectTick, setRealtimeReconnectTick] = useState(0);
-  const [realtimeCaptionHistory, setRealtimeCaptionHistory] = useState<Partial<Record<'user' | 'assistant', string>>>({});
-  const realtimeStartFrameRef = useRef<number | null>(null);
-  const voiceError = realtimeError || fallbackVoiceError;
-  const clearVoiceError = useCallback(() => {
-    clearRealtimeError();
-    clearFallbackVoiceError();
-  }, [clearFallbackVoiceError, clearRealtimeError]);
-  const cancelPendingRealtimeStart = useCallback(() => {
-    if (realtimeStartFrameRef.current === null) return;
-    cancelAnimationFrame(realtimeStartFrameRef.current);
-    realtimeStartFrameRef.current = null;
-  }, []);
-
-  useEffect(() => cancelPendingRealtimeStart, [cancelPendingRealtimeStart]);
-  useEffect(() => {
-    if (!continuousVoiceEnabled) return;
-    if (!realtimeCaption?.text) return;
-    setRealtimeCaptionHistory((current) => ({ ...current, [realtimeCaption.role]: realtimeCaption.text }));
-  }, [continuousVoiceEnabled, realtimeCaption]);
+  const visibleVoiceError = realtimeError || voiceError;
   const latestLiveVoiceStateRef = useRef({ isGenerating, isTtsSpeaking, voiceState, continuousVoiceEnabled });
   latestLiveVoiceStateRef.current = { isGenerating, isTtsSpeaking, voiceState, continuousVoiceEnabled };
 
@@ -584,7 +528,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       let attempts = 0;
       const tryStart = () => {
         const latest = latestLiveVoiceStateRef.current;
-        if (latest.isGenerating || (latest.voiceState !== 'idle' && latest.voiceState !== 'listening')) {
+        if (latest.isGenerating) return;
+        if (latest.voiceState !== 'idle' && latest.voiceState !== 'listening') {
           attempts += 1;
           if (attempts <= 12) window.setTimeout(tryStart, 250);
           return;
@@ -617,54 +562,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const handleContinuousVoiceButton = useCallback(() => {
     clearVoiceError();
+    clearRealtimeError();
     if (continuousVoiceEnabled) {
-      cancelPendingRealtimeStart();
       stopRealtimeVoice();
       toggleContinuousVoice();
       return;
     }
-    setCurrentSession?.(JANE_LIVE_VOICE_SESSION_KEY);
-    disableVoiceReadback();
     toggleContinuousVoice();
-    cancelPendingRealtimeStart();
-    realtimeStartFrameRef.current = requestAnimationFrame(() => {
-      realtimeStartFrameRef.current = null;
-      void startRealtimeVoice();
-    });
-  }, [cancelPendingRealtimeStart, clearVoiceError, continuousVoiceEnabled, disableVoiceReadback, setCurrentSession, startRealtimeVoice, stopRealtimeVoice, toggleContinuousVoice]);
+    void startRealtimeVoice();
+  }, [clearRealtimeError, clearVoiceError, continuousVoiceEnabled, startRealtimeVoice, stopRealtimeVoice, toggleContinuousVoice]);
 
   useEffect(() => {
-    if (continuousVoiceEnabled && voiceReadbackEnabled) disableVoiceReadback();
-  }, [continuousVoiceEnabled, disableVoiceReadback, voiceReadbackEnabled]);
-
-  useEffect(() => {
-    if (!continuousVoiceEnabled) {
-      realtimeReconnectAttemptRef.current = 0;
-      return;
-    }
-    if (realtimeStatus !== 'idle') {
-      if (realtimeStatus === 'listening' || realtimeStatus === 'speaking') {
-        realtimeReconnectAttemptRef.current = 0;
-      }
-      return;
-    }
-
-    const attempt = realtimeReconnectAttemptRef.current;
-    const delay = attempt === 0 ? 0 : Math.min(1_000 * (2 ** (attempt - 1)), 10_000);
-    realtimeReconnectAttemptRef.current += 1;
-    const timer = window.setTimeout(() => {
-      void startRealtimeVoice().then((started) => {
-        if (!started && latestLiveVoiceStateRef.current.continuousVoiceEnabled) {
-          setRealtimeReconnectTick((tick) => tick + 1);
-        }
-      });
-    }, delay);
+    if (!continuousVoiceEnabled || realtimeStatus !== 'idle') return;
+    const timer = window.setTimeout(() => { void startRealtimeVoice(); }, 800);
     return () => window.clearTimeout(timer);
-  }, [continuousVoiceEnabled, realtimeReconnectTick, realtimeStatus, startRealtimeVoice]);
+  }, [continuousVoiceEnabled, realtimeStatus, startRealtimeVoice]);
 
   useEffect(() => {
-    publishVoiceControlSnapshot({ voiceState, continuousVoiceEnabled, wakeWordEnabled, voiceError, isMicrophoneMuted });
-  }, [continuousVoiceEnabled, isMicrophoneMuted, voiceError, voiceState, wakeWordEnabled]);
+    publishVoiceControlSnapshot({ voiceState, continuousVoiceEnabled, wakeWordEnabled, voiceError: visibleVoiceError });
+  }, [continuousVoiceEnabled, visibleVoiceError, voiceState, wakeWordEnabled]);
 
   useEffect(() => {
     const handleVoiceCommand = (event: Event) => {
@@ -672,12 +588,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       if (command === 'toggle-voice') handleVoiceButton();
       if (command === 'toggle-live') handleContinuousVoiceButton();
       if (command === 'toggle-wake') toggleWakeWord();
-      if (command === 'toggle-mic-mute') toggleMicrophoneMuted();
     };
 
     window.addEventListener(VOICE_CONTROL_COMMAND_EVENT, handleVoiceCommand);
     return () => window.removeEventListener(VOICE_CONTROL_COMMAND_EVENT, handleVoiceCommand);
-  }, [handleContinuousVoiceButton, handleVoiceButton, toggleMicrophoneMuted, toggleWakeWord]);
+  }, [handleContinuousVoiceButton, handleVoiceButton, toggleWakeWord]);
 
   // Live transcription preview: write interim transcript to textarea during recording
   useEffect(() => {
@@ -1212,8 +1127,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       }
       setDraftText('');
 
-      const realtimeIsActive = realtimeStatus === 'listening' || realtimeStatus === 'speaking';
-      if (realtimeIsActive && text && inlineAttachments.length === 0 && !uploadPayload) {
+      if (continuousVoiceEnabled && text && inlineAttachments.length === 0 && !uploadPayload) {
         sendRealtimeText(text);
       } else {
         await onSend(text || '', inlineAttachments.length > 0 ? inlineAttachments : undefined, uploadPayload);
@@ -1237,7 +1151,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     inputHistory,
     buildFileReferenceDescriptor,
     onSend,
-    realtimeStatus,
+    continuousVoiceEnabled,
     sendRealtimeText,
     prepareInlineItem,
     clearStagedAttachments,
@@ -1401,52 +1315,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         className="hidden"
         onChange={e => { if (e.target.files) { processFiles(e.target.files); e.target.value = ''; } }}
       />
-      {continuousVoiceEnabled && isCompactLiveStage && createPortal(
-        <section aria-label="Live subtitles" aria-live="polite" className={`fixed inset-0 z-[1000] flex min-h-[100dvh] transition-colors ${isMicrophoneMuted ? 'bg-[#220909]' : 'bg-[#050807]'}`}>
-          <button
-            type="button"
-            onClick={toggleMicrophoneMuted}
-            aria-label={isMicrophoneMuted ? 'Unmute microphone from full-window captions' : 'Mute microphone from full-window captions'}
-            aria-pressed={isMicrophoneMuted}
-            className="flex min-h-[100dvh] w-full flex-col items-center justify-center overflow-hidden px-[clamp(1.5rem,7vw,5rem)] py-[max(2rem,env(safe-area-inset-top))] text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60"
-          >
-            <span className="grid max-h-[92dvh] w-full grid-rows-[repeat(2,minmax(0,auto))] content-center gap-[clamp(1rem,3vh,2.5rem)] overflow-hidden">
-              {(['user', 'assistant'] as const).map((role) => realtimeCaptionHistory[role] ? (
-                <span key={role} className="block min-h-0">
-                  <span className="mb-3 block text-[clamp(0.7rem,2vw,0.95rem)] font-semibold uppercase tracking-[0.28em] text-primary">
-                    {role === 'user' ? 'TU' : 'JANE'}
-                  </span>
-                  <span className={`block whitespace-pre-wrap break-words text-center font-semibold leading-[1.16] tracking-[-0.015em] [text-shadow:0_2px_16px_rgba(0,0,0,0.95)] ${liveSubtitleSizeClass(`${realtimeCaptionHistory.user ?? ''}${realtimeCaptionHistory.assistant ?? ''}`)}`}>
-                    {realtimeCaptionHistory[role]}
-                  </span>
-                </span>
-              ) : null)}
-            </span>
-          </button>
-        </section>,
-        document.body,
-      )}
-      {realtimeCaption?.text && !isCompactLiveStage && (
-        <section
-          aria-label="Live subtitles"
-          aria-live="polite"
-          className="relative overflow-hidden border-t border-primary/25 bg-[radial-gradient(circle_at_50%_130%,hsl(var(--primary)/0.18),transparent_62%)] px-3 py-3 sm:px-6 sm:py-4"
-        >
-          <div className="pointer-events-none absolute inset-x-[18%] bottom-0 h-px bg-gradient-to-r from-transparent via-primary/80 to-transparent shadow-[0_0_18px_hsl(var(--primary)/0.7)]" />
-          <button
-            type="button"
-            onClick={toggleMicrophoneMuted}
-            aria-label={isMicrophoneMuted ? 'Unmute microphone from live subtitles' : 'Mute microphone from live subtitles'}
-            aria-pressed={isMicrophoneMuted}
-            title={isMicrophoneMuted ? 'Unmute microphone' : 'Mute microphone'}
-            className="relative mx-auto block w-full max-w-5xl cursor-pointer rounded-2xl border border-white/10 bg-black/85 px-5 py-4 text-inherit shadow-[0_14px_45px_rgba(0,0,0,0.5),0_0_28px_hsl(var(--primary)/0.08)] transition-colors hover:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/55 sm:px-8 sm:py-5"
-          >
-            <span className={`block max-h-[min(48vh,30rem)] overflow-y-auto whitespace-pre-wrap break-words text-center font-semibold tracking-[-0.015em] text-white [text-shadow:0_2px_16px_rgba(0,0,0,0.95)] ${liveSubtitleSizeClass(realtimeCaption.text)}`}>
-              {realtimeCaption.text}
-            </span>
-          </button>
-        </section>
-      )}
       {/* Input row */}
       <div
         className={`flex items-center gap-0 border-t shrink-0 bg-card focus-within:border-t-primary/40 focus-within:shadow-[0_-1px_8px_rgba(232,168,56,0.1)] ${voiceState === 'recording' ? 'border-t-red-500 shadow-[0_-1px_12px_rgba(239,68,68,0.3)]' : 'border-border'}`}
@@ -1484,7 +1352,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         <button
           type="button"
           onClick={handleVoiceButton}
-          disabled={voiceState === 'transcribing' || realtimeStatus !== 'idle'}
+          disabled={voiceState === 'transcribing'}
           className={`bg-transparent border-none px-2 self-stretch h-full flex items-center justify-center transition-colors disabled:opacity-50 ${voiceState === 'recording' ? 'text-red-500' : 'text-muted-foreground hover:text-primary'}`}
           title={voiceState === 'recording' ? 'Send voice' : 'Voice'}
           aria-label={voiceState === 'recording' ? 'Send voice' : 'Start voice'}
@@ -1513,37 +1381,34 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         </button>
         <button
           onClick={() => { void handleSend(); }}
-          disabled={isPreparingInline}
-          aria-label={isGenerating ? 'Steer active response' : (isPreparingInline ? 'Preparing attachments...' : 'Send message')}
-          aria-busy={isPreparingInline}
-          className={`send-btn font-mono bg-primary text-primary-foreground border-none px-4.5 text-sm cursor-pointer font-bold self-stretch flex items-center justify-center transition-transform ${isPreparingInline ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110 active:scale-95'} ${sendPulse ? 'animate-send-pulse' : ''} ${sendError ? 'animate-shake' : ''}`}
+          disabled={isGenerating || isPreparingInline}
+          aria-label={isGenerating ? 'Generating response...' : (isPreparingInline ? 'Preparing attachments...' : 'Send message')}
+          aria-busy={isGenerating || isPreparingInline}
+          className={`send-btn font-mono bg-primary text-primary-foreground border-none px-4.5 text-sm cursor-pointer font-bold self-stretch flex items-center justify-center transition-transform ${isGenerating || isPreparingInline ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110 active:scale-95'} ${sendPulse ? 'animate-send-pulse' : ''} ${sendError ? 'animate-shake' : ''}`}
         >
-          {isPreparingInline ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <ArrowUp size={16} aria-hidden="true" />}
+          {isGenerating || isPreparingInline ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <ArrowUp size={16} aria-hidden="true" />}
         </button>
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground px-4 pb-1.5 pl-10 bg-card">
-        <span className="rounded-full border border-border/80 px-2 py-0.5 font-semibold tracking-wide">NERVE</span>
         <span>
-          {continuousVoiceEnabled && isMicrophoneMuted
-            ? 'Microphone muted · Jane can still speak'
-            : realtimeStatus === 'connecting'
-            ? 'Connecting to GPT-Live…'
-            : realtimeStatus === 'speaking'
-              ? 'Jane is speaking…'
-              : realtimeStatus === 'listening'
-                ? 'Jane listening…'
-              : continuousVoiceEnabled
-                ? 'GPT-Live reconnecting…'
-          : voiceState === 'recording'
+          {voiceState === 'recording'
             ? continuousVoiceEnabled ? 'Recording… pause to send' : 'Recording… tap mic to send'
             : voiceState === 'transcribing'
             ? 'Transcribing…'
-            : 'Enter to send to Jane · tap mic to talk'}
+            : realtimeStatus === 'connecting'
+              ? 'Connecting to GPT-Live…'
+              : realtimeStatus === 'speaking'
+                ? 'Jane is speaking…'
+                : realtimeStatus === 'listening'
+                  ? 'Jane is listening…'
+            : continuousVoiceEnabled
+              ? 'GPT-Live reconnecting…'
+              : 'Enter to send · tap mic to talk'}
         </span>
       </div>
-      {voiceError && (
+      {visibleVoiceError && (
         <div className="text-[10px] text-destructive px-4 pb-1.5 pl-10 bg-card" role="alert">
-          {voiceError}
+          {visibleVoiceError}
         </div>
       )}
       <Dialog open={showAttachByPathDialog} onOpenChange={setShowAttachByPathDialog}>

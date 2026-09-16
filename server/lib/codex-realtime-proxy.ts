@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { WebSocket } from 'ws';
+import { WebSocket, type RawData } from 'ws';
 
 const CODEX_APP_BINARY = '/Applications/ChatGPT.app/Contents/Resources/codex';
 const DEVICECHECK_MODULE = '/Applications/ChatGPT.app/Contents/Resources/native/devicecheck.node';
@@ -31,6 +31,7 @@ const NATIVE_APPROVAL_METHODS = new Set([
 const NATIVE_APPROVAL_DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const VOICE_PROMPT = 'Ești Jane, asistenta live a lui Alex. Vorbește natural și concis în limba conversației, implicit română. Răspunde direct din context când poți. Când cererea are nevoie de date, instrumente sau o acțiune, deleagă o singură dată către backendul Codex al acestei conversații și continuă numai cu rezultate confirmate. Nu spune automat că verifici și nu pretinde că o acțiune a reușit înainte de confirmare.';
 const JANE_REALTIME_STATE_PATH = 'jane-live-realtime.json';
+const MAX_TRANSCRIPT_ENTRIES = 200;
 
 interface JsonMessage {
   id?: string | number;
@@ -44,6 +45,21 @@ interface DeviceCheckResult {
   supported: boolean;
   tokenBase64?: string;
 }
+
+interface RealtimeTranscriptEntry {
+  id: string;
+  seq: number;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+}
+
+interface RealtimeState {
+  threadId?: string;
+  transcript?: RealtimeTranscriptEntry[];
+}
+
+let stateWrite = Promise.resolve();
 
 type GenerateToken = () => DeviceCheckResult | Promise<DeviceCheckResult>;
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,19 +77,50 @@ function janeRealtimeStatePath(): string {
 
 async function readPersistedRealtimeThreadId(): Promise<string | null> {
   try {
-    const state = JSON.parse(await readFile(janeRealtimeStatePath(), 'utf8')) as { threadId?: unknown };
+    const state = JSON.parse(await readFile(janeRealtimeStatePath(), 'utf8')) as RealtimeState;
     return typeof state.threadId === 'string' && state.threadId.trim() ? state.threadId.trim() : null;
   } catch {
     return null;
   }
 }
 
-async function persistRealtimeThreadId(threadId: string): Promise<void> {
-  const target = janeRealtimeStatePath();
-  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-  await writeFile(temp, `${JSON.stringify({ threadId })}\n`, { mode: 0o600 });
-  await rename(temp, target);
+function updateRealtimeState(update: (state: RealtimeState) => RealtimeState): Promise<void> {
+  stateWrite = stateWrite.then(async () => {
+    let current: RealtimeState = {};
+    try {
+      current = JSON.parse(await readFile(janeRealtimeStatePath(), 'utf8')) as RealtimeState;
+    } catch {
+      // First run starts from an empty private state file.
+    }
+    const next = update(current);
+    const target = janeRealtimeStatePath();
+    const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(temp, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+    await rename(temp, target);
+  }).catch(() => undefined);
+  return stateWrite;
+}
+
+function persistRealtimeThreadId(threadId: string): Promise<void> {
+  return updateRealtimeState((state) => ({ ...state, threadId }));
+}
+
+export function realtimeTranscriptEntry(message: JsonMessage, seq: number): RealtimeTranscriptEntry | null {
+  if (message.method !== 'thread/realtime/transcript/done' || !isRecord(message.params)) return null;
+  const role = message.params.role === 'assistant' ? 'assistant' : message.params.role === 'user' ? 'user' : null;
+  const text = typeof message.params.text === 'string' ? message.params.text.trim() : '';
+  if (!role || !text) return null;
+  const sourceId = typeof message.params.itemId === 'string' ? message.params.itemId
+    : typeof message.params.eventId === 'string' ? message.params.eventId : `event-${seq}`;
+  return { id: sourceId, seq, role, text: text.slice(0, 12_000), createdAt: new Date().toISOString() };
+}
+
+function persistRealtimeTranscript(entry: RealtimeTranscriptEntry): Promise<void> {
+  return updateRealtimeState((state) => ({
+    ...state,
+    transcript: [...(state.transcript ?? []), entry].slice(-MAX_TRANSCRIPT_ENTRIES),
+  }));
 }
 
 export function codexRealtimeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -158,7 +205,7 @@ function sendJson(ws: WebSocket, message: JsonMessage): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
 }
 
-export function nativeApprovalForClient(message: JsonMessage): JsonMessage | null {
+export function nativeApprovalForClient(message: JsonMessage, clientId = message.id): JsonMessage | null {
   if (message.id === undefined || !message.method || !NATIVE_APPROVAL_METHODS.has(message.method)) return null;
   const params = isRecord(message.params) ? message.params : {};
   const safe: Record<string, unknown> = {};
@@ -172,13 +219,228 @@ export function nativeApprovalForClient(message: JsonMessage): JsonMessage | nul
       (value): value is string => typeof value === 'string' && NATIVE_APPROVAL_DECISIONS.has(value),
     );
   }
-  return { id: message.id, method: message.method, params: safe };
+  return { id: clientId, method: message.method, params: safe };
 }
 
 export function nativeApprovalDecision(message: JsonMessage): string | null {
   if (!isRecord(message.result) || typeof message.result.decision !== 'string') return null;
   return NATIVE_APPROVAL_DECISIONS.has(message.result.decision) ? message.result.decision : null;
 }
+
+export function resumeErrorMeansMissingThread(error: unknown): boolean {
+  const detail = JSON.stringify(error).toLowerCase();
+  return detail.includes('thread not found')
+    || detail.includes('unknown thread')
+    || detail.includes('thread does not exist')
+    || detail.includes('invalid thread id');
+}
+
+interface PendingNativeApproval {
+  childId: string | number;
+  message: JsonMessage;
+}
+
+class CodexRealtimeHost {
+  private ws: WebSocket | null = null;
+  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly lines;
+  private readonly clientIds = new Map<number, string | number | undefined>();
+  private readonly nativeApprovals = new Map<string | number, PendingNativeApproval>();
+  private nextId = 1000;
+  private nextApprovalId = 1;
+  private nextTranscriptSeq = 1;
+  private threadId: string | null = null;
+  private closed = false;
+  private lastStderr = '';
+  private readonly onExit: () => void;
+
+  constructor(codexBin: string, onExit: () => void) {
+    this.onExit = onExit;
+    this.child = spawn(codexBin, ['app-server'], {
+      cwd: process.env.OPENCLAW_HOME || join(homedir(), '.openclaw'),
+      env: codexRealtimeEnvironment(process.env),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    this.lines = createInterface({ input: this.child.stdout });
+    this.bindChild();
+    writeJson(this.child, {
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: { name: 'openclaw_nerve', title: 'OpenClaw Nerve', version: '1.0.0' },
+        capabilities: { experimentalApi: true, requestAttestation: true },
+      },
+    });
+  }
+
+  attach(ws: WebSocket): void {
+    const replaced = this.ws;
+    this.ws = ws;
+    this.clientIds.clear();
+    if (replaced && replaced.readyState === WebSocket.OPEN) replaced.close(1001, 'Reconnected');
+    if (this.threadId) sendJson(ws, { method: 'nerve/realtime/ready', params: {} });
+    for (const approval of this.nativeApprovals.values()) sendJson(ws, approval.message);
+
+    ws.on('message', (data, isBinary) => this.onSocketMessage(ws, data, isBinary));
+    ws.on('close', () => this.detach(ws));
+    ws.on('error', () => this.detach(ws));
+  }
+
+  private detach(ws: WebSocket): void {
+    if (this.ws !== ws) return;
+    this.ws = null;
+    this.clientIds.clear();
+  }
+
+  private fail(reason: string): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.lines.close();
+    if (!this.child.killed) this.child.kill('SIGTERM');
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.close(1011, reason);
+    this.ws = null;
+    this.onExit();
+  }
+
+  private ready(threadId: string): void {
+    this.threadId = threadId;
+    void persistRealtimeThreadId(threadId).catch(() => undefined);
+    if (this.ws) sendJson(this.ws, { method: 'nerve/realtime/ready', params: {} });
+  }
+
+  private bindChild(): void {
+    this.lines.on('line', (line) => {
+      let message: JsonMessage;
+      try {
+        message = JSON.parse(line) as JsonMessage;
+      } catch {
+        return;
+      }
+
+      const transcript = realtimeTranscriptEntry(message, this.nextTranscriptSeq++);
+      if (transcript) void persistRealtimeTranscript(transcript);
+
+      if (message.method === 'attestation/generate' && message.id !== undefined) {
+        void Promise.resolve()
+          .then(() => loadGenerateToken()())
+          .then((result) => {
+            if (!result.supported || !result.tokenBase64) throw new Error('unsupported');
+            writeJson(this.child, { id: message.id, result: { token: result.tokenBase64 } });
+          })
+          .catch(() => writeJson(this.child, {
+            id: message.id,
+            error: { code: -32000, message: 'Device attestation unavailable' },
+          }));
+        return;
+      }
+
+      if (message.id === 1) {
+        if (message.error) {
+          this.fail('Codex desktop initialization failed');
+          return;
+        }
+        writeJson(this.child, { method: 'initialized' });
+        void readPersistedRealtimeThreadId()
+          .then((persisted) => writeJson(this.child, buildJaneRealtimeThreadRequest(2, persisted)))
+          .catch(() => this.fail('Codex voice host failed to prepare thread'));
+        return;
+      }
+
+      if (message.id === 2 && message.error) {
+        if (resumeErrorMeansMissingThread(message.error)) {
+          writeJson(this.child, buildJaneRealtimeThreadRequest(3, null));
+        } else {
+          this.fail('Codex voice conversation could not be resumed');
+        }
+        return;
+      }
+
+      if (message.id === 2 || message.id === 3) {
+        const result = isRecord(message.result) ? message.result : null;
+        const thread = result && isRecord(result.thread) ? result.thread : null;
+        const threadId = thread && typeof thread.id === 'string' ? thread.id : null;
+        if (!threadId) {
+          this.fail('Codex voice host failed to start');
+          return;
+        }
+        this.ready(threadId);
+        return;
+      }
+
+      if (typeof message.id === 'number' && this.clientIds.has(message.id)) {
+        const clientId = this.clientIds.get(message.id);
+        this.clientIds.delete(message.id);
+        if (this.ws) sendJson(this.ws, { ...message, id: clientId });
+        return;
+      }
+
+      const clientApprovalId = `codex-approval:${this.nextApprovalId++}`;
+      const nativeApproval = nativeApprovalForClient(message, clientApprovalId);
+      if (nativeApproval) {
+        this.nativeApprovals.set(clientApprovalId, { childId: message.id!, message: nativeApproval });
+        if (this.ws) sendJson(this.ws, nativeApproval);
+        return;
+      }
+
+      const isRealtimeItemEvent = Boolean(message.method && REALTIME_ITEM_METHODS.has(message.method)
+        && isRecord(message.params)
+        && (message.params.threadId === undefined || message.params.threadId === this.threadId));
+      if (message.method?.startsWith('thread/realtime/') || isRealtimeItemEvent) {
+        if (this.ws) sendJson(this.ws, message);
+      }
+    });
+
+    this.child.on('error', () => this.fail('Codex desktop runtime failed'));
+    this.child.stderr.setEncoding('utf8');
+    this.child.stderr.on('data', (chunk: string) => {
+      const lines = chunk.trim().split('\n').filter(Boolean);
+      if (lines.length) this.lastStderr = lines.at(-1)!.slice(0, 500);
+    });
+    this.child.on('exit', (code, signal) => {
+      console.warn('[codex-realtime] host exited', { code, signal, detail: this.lastStderr || undefined });
+      this.fail('Codex desktop runtime stopped');
+    });
+  }
+
+  private onSocketMessage(ws: WebSocket, data: RawData, isBinary: boolean): void {
+    if (this.ws !== ws) return;
+    const byteLength = Array.isArray(data)
+      ? data.reduce((total, part) => total + part.byteLength, 0)
+      : data.byteLength;
+    if (isBinary || byteLength > MAX_MESSAGE_BYTES || !this.threadId) {
+      ws.close(1008, 'Invalid Codex realtime message');
+      return;
+    }
+    let incoming: JsonMessage;
+    try {
+      incoming = JSON.parse(data.toString()) as JsonMessage;
+    } catch {
+      ws.close(1008, 'Invalid Codex realtime message');
+      return;
+    }
+    if (incoming.id !== undefined && incoming.method === undefined && this.nativeApprovals.has(incoming.id)) {
+      const decision = nativeApprovalDecision(incoming);
+      if (!decision) {
+        sendJson(ws, { id: incoming.id, error: { code: -32602, message: 'Invalid approval decision' } });
+        return;
+      }
+      const approval = this.nativeApprovals.get(incoming.id)!;
+      this.nativeApprovals.delete(incoming.id);
+      writeJson(this.child, { id: approval.childId, result: { decision } });
+      return;
+    }
+    const normalized = normalizeCodexRealtimeRequest(incoming, this.threadId);
+    if (!normalized) {
+      sendJson(ws, { id: incoming.id, error: { code: -32601, message: 'Realtime method not allowed' } });
+      return;
+    }
+    const internalId = this.nextId++;
+    this.clientIds.set(internalId, incoming.id);
+    writeJson(this.child, { ...normalized, id: internalId });
+  }
+}
+
+let sharedRealtimeHost: CodexRealtimeHost | null = null;
 
 /** Bind one authenticated Nerve socket to the persisted Codex GPT-Live host. */
 export function createCodexRealtimeRelay(ws: WebSocket): void {
@@ -194,168 +456,10 @@ export function createCodexRealtimeRelay(ws: WebSocket): void {
     return;
   }
 
-  const child = spawn(codexBin, ['app-server'], {
-    cwd: process.env.OPENCLAW_HOME || join(homedir(), '.openclaw'),
-    env: codexRealtimeEnvironment(process.env),
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  const lines = createInterface({ input: child.stdout });
-  const clientIds = new Map<number, string | number | undefined>();
-  const nativeApprovalIds = new Set<string | number>();
-  let nextId = 1000;
-  let threadId: string | null = null;
-  let closed = false;
-  let lastStderr = '';
-
-  const close = (reason?: string) => {
-    if (closed) return;
-    closed = true;
-    lines.close();
-    if (!child.killed) child.kill('SIGTERM');
-    if (reason && ws.readyState === WebSocket.OPEN) ws.close(1011, reason);
-  };
-
-  writeJson(child, {
-    id: 1,
-    method: 'initialize',
-    params: {
-      clientInfo: { name: 'openclaw_nerve', title: 'OpenClaw Nerve', version: '1.0.0' },
-      capabilities: { experimentalApi: true, requestAttestation: true },
-    },
-  });
-
-  lines.on('line', (line) => {
-    let message: JsonMessage;
-    try {
-      message = JSON.parse(line) as JsonMessage;
-    } catch {
-      return;
-    }
-
-    if (message.method === 'attestation/generate' && message.id !== undefined) {
-      void Promise.resolve()
-        .then(() => loadGenerateToken()())
-        .then((result) => {
-          if (!result.supported || !result.tokenBase64) throw new Error('unsupported');
-          writeJson(child, { id: message.id, result: { token: result.tokenBase64 } });
-        })
-        .catch(() => writeJson(child, {
-          id: message.id,
-          error: { code: -32000, message: 'Device attestation unavailable' },
-        }));
-      return;
-    }
-
-    if (message.id === 1) {
-      if (message.error) {
-        close('Codex desktop initialization failed');
-        return;
-      }
-      writeJson(child, { method: 'initialized' });
-      void (async () => {
-        const persisted = await readPersistedRealtimeThreadId();
-        writeJson(child, buildJaneRealtimeThreadRequest(2, persisted));
-      })().catch(() => close('Codex voice host failed to prepare thread'));
-      return;
-    }
-
-    if (message.id === 2) {
-      if (message.error) {
-        writeJson(child, buildJaneRealtimeThreadRequest(3, null));
-        return;
-      }
-      const result = isRecord(message.result) ? message.result : null;
-      const thread = result && isRecord(result.thread) ? result.thread : null;
-      threadId = thread && typeof thread.id === 'string' ? thread.id : null;
-      if (!threadId) {
-        close('Codex voice host failed to start');
-        return;
-      }
-      void persistRealtimeThreadId(threadId).catch(() => undefined);
-      sendJson(ws, { method: 'nerve/realtime/ready', params: {} });
-      return;
-    }
-
-    if (message.id === 3) {
-      const result = isRecord(message.result) ? message.result : null;
-      const thread = result && isRecord(result.thread) ? result.thread : null;
-      threadId = thread && typeof thread.id === 'string' ? thread.id : null;
-      if (!threadId) {
-        close('Codex voice host failed to start');
-        return;
-      }
-      void persistRealtimeThreadId(threadId).catch(() => undefined);
-      sendJson(ws, { method: 'nerve/realtime/ready', params: {} });
-      return;
-    }
-
-    if (typeof message.id === 'number' && clientIds.has(message.id)) {
-      const clientId = clientIds.get(message.id);
-      clientIds.delete(message.id);
-      sendJson(ws, { ...message, id: clientId });
-      return;
-    }
-
-    const nativeApproval = nativeApprovalForClient(message);
-    if (nativeApproval) {
-      nativeApprovalIds.add(message.id!);
-      sendJson(ws, nativeApproval);
-      return;
-    }
-
-    const isRealtimeItemEvent = Boolean(message.method && REALTIME_ITEM_METHODS.has(message.method)
-      && isRecord(message.params)
-      && (message.params.threadId === undefined || message.params.threadId === threadId));
-    if (message.method?.startsWith('thread/realtime/') || isRealtimeItemEvent) {
-      sendJson(ws, message);
-    }
-  });
-
-  ws.on('message', (data, isBinary) => {
-    const byteLength = Array.isArray(data)
-      ? data.reduce((total, part) => total + part.byteLength, 0)
-      : data.byteLength;
-    if (isBinary || byteLength > MAX_MESSAGE_BYTES || !threadId) {
-      ws.close(1008, 'Invalid Codex realtime message');
-      return;
-    }
-    let incoming: JsonMessage;
-    try {
-      incoming = JSON.parse(data.toString()) as JsonMessage;
-    } catch {
-      ws.close(1008, 'Invalid Codex realtime message');
-      return;
-    }
-    if (incoming.id !== undefined && incoming.method === undefined && nativeApprovalIds.has(incoming.id)) {
-      const decision = nativeApprovalDecision(incoming);
-      if (!decision) {
-        sendJson(ws, { id: incoming.id, error: { code: -32602, message: 'Invalid approval decision' } });
-        return;
-      }
-      nativeApprovalIds.delete(incoming.id);
-      writeJson(child, { id: incoming.id, result: { decision } });
-      return;
-    }
-    const normalized = normalizeCodexRealtimeRequest(incoming, threadId);
-    if (!normalized) {
-      sendJson(ws, { id: incoming.id, error: { code: -32601, message: 'Realtime method not allowed' } });
-      return;
-    }
-    const internalId = nextId++;
-    clientIds.set(internalId, incoming.id);
-    writeJson(child, { ...normalized, id: internalId });
-  });
-
-  ws.on('close', () => close());
-  ws.on('error', () => close());
-  child.on('error', () => close('Codex desktop runtime failed'));
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk: string) => {
-    const lines = chunk.trim().split('\n').filter(Boolean);
-    if (lines.length) lastStderr = lines.at(-1)!.slice(0, 500);
-  });
-  child.on('exit', (code, signal) => {
-    console.warn('[codex-realtime] host exited', { code, signal, detail: lastStderr || undefined });
-    close('Codex desktop runtime stopped');
-  });
+  if (!sharedRealtimeHost) {
+    sharedRealtimeHost = new CodexRealtimeHost(codexBin, () => {
+      sharedRealtimeHost = null;
+    });
+  }
+  sharedRealtimeHost.attach(ws);
 }

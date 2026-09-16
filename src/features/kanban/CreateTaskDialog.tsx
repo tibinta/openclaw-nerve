@@ -34,6 +34,7 @@ interface CreateTaskDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreate: (payload: CreateTaskPayload) => Promise<void>;
+  parentTask?: unknown;
 }
 
 export function CreateTaskDialog({ open, onOpenChange, onCreate }: CreateTaskDialogProps) {

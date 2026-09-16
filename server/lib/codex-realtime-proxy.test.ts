@@ -5,6 +5,8 @@ import {
   nativeApprovalDecision,
   nativeApprovalForClient,
   normalizeCodexRealtimeRequest,
+  resumeErrorMeansMissingThread,
+  realtimeTranscriptEntry,
 } from './codex-realtime-proxy.js';
 
 describe('Codex realtime boundary', () => {
@@ -25,6 +27,11 @@ describe('Codex realtime boundary', () => {
         config: { features: { realtime_conversation: true } },
       },
     });
+  });
+
+  it('starts a new conversation only when the persisted thread is confirmed missing', () => {
+    expect(resumeErrorMeansMissingThread({ message: 'Thread not found' })).toBe(true);
+    expect(resumeErrorMeansMissingThread({ message: 'Gateway temporarily unavailable' })).toBe(false);
   });
 
   it('forces native GPT-Live settings and strips Platform API routing', () => {
@@ -83,6 +90,13 @@ describe('Codex realtime boundary', () => {
     expect(normalizeCodexRealtimeRequest({ ...message, id: 11 }, 'nerve-thread')?.params?.text).toBe('da');
   });
 
+  it('journals repeated phrases by event identity and stream order', () => {
+    const first = realtimeTranscriptEntry({ method: 'thread/realtime/transcript/done', params: { role: 'user', text: 'da', itemId: 'one' } }, 7);
+    const second = realtimeTranscriptEntry({ method: 'thread/realtime/transcript/done', params: { role: 'user', text: 'da', itemId: 'two' } }, 8);
+    expect(first).toMatchObject({ id: 'one', seq: 7, text: 'da' });
+    expect(second).toMatchObject({ id: 'two', seq: 8, text: 'da' });
+  });
+
   it('defaults an invalid voice and rejects invalid SDP', () => {
     expect(normalizeCodexRealtimeRequest({
       method: 'thread/realtime/start',
@@ -102,8 +116,8 @@ describe('Codex realtime boundary', () => {
         threadId: 'thread', itemId: 'item', command: 'git status', cwd: '/workspace', secret: 'hidden',
         availableDecisions: ['accept', 'acceptForSession', 'decline', 'anything'],
       },
-    })).toEqual({
-      id: 42,
+    }, 'codex-approval:1')).toEqual({
+      id: 'codex-approval:1',
       method: 'item/commandExecution/requestApproval',
       params: {
         threadId: 'thread', itemId: 'item', command: 'git status', cwd: '/workspace',

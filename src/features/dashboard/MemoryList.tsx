@@ -17,6 +17,7 @@ interface MemoryListProps {
   memories: Memory[];
   onRefresh: (signal?: AbortSignal) => void | Promise<void>;
   isLoading?: boolean;
+  remoteWorkspace?: boolean;
   hideHeader?: boolean;
   /** Compact mode for mobile/topbar dropdown; uses kebab actions for rows. */
   compact?: boolean;
