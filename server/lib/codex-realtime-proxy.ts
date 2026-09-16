@@ -36,6 +36,7 @@ const VOICE_PROMPT = 'Ești Jane. Vorbește natural și concis, implicit în rom
 const JANE_REALTIME_STATE_PATH = 'jane-live-realtime.json';
 const MAX_TRANSCRIPT_ENTRIES = 200;
 const NATIVE_APPROVAL_TTL_MS = 10 * 60_000;
+const SPEECH_ACK_TIMEOUT_MS = 20_000;
 
 interface JsonMessage {
   id?: string | number;
@@ -287,6 +288,51 @@ export function nativeApprovalExpiresAt(message: JsonMessage, now = Date.now()):
   return now + NATIVE_APPROVAL_TTL_MS;
 }
 
+/** Serializes server-originated speech until a connected GPT-Live session acknowledges each item. */
+export class JaneRealtimeSpeechQueue {
+  private readonly queued: JaneCanonicalFinal[] = [];
+  private readonly seen = new Set<string>();
+  private readonly send: (text: string) => Promise<void>;
+  private active = false;
+  private sending = false;
+  private uncertain = false;
+
+  constructor(send: (text: string) => Promise<void>) {
+    this.send = send;
+  }
+
+  enqueue(final: JaneCanonicalFinal): void {
+    if (this.seen.has(final.key)) return;
+    this.seen.add(final.key);
+    this.queued.push(final);
+    void this.flush();
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    if (active) void this.flush();
+  }
+
+  private async flush(): Promise<void> {
+    if (!this.active || this.sending || this.uncertain || this.queued.length === 0) return;
+    this.sending = true;
+    try {
+      await this.send(this.queued[0].text);
+      this.queued.shift();
+    } catch (error) {
+      // A timeout has unknown delivery state, so never replay it blindly.
+      this.uncertain = error instanceof SpeechAckTimeoutError;
+      this.active = false;
+      console.warn('[codex-realtime] speech delivery pending:', error instanceof Error ? error.message : 'unknown error');
+    } finally {
+      this.sending = false;
+      void this.flush();
+    }
+  }
+}
+
+class SpeechAckTimeoutError extends Error {}
+
 export function resumeErrorMeansMissingThread(error: unknown): boolean {
   const detail = JSON.stringify(error).toLowerCase();
   return detail.includes('thread not found')
@@ -319,6 +365,7 @@ class CodexRealtimeHost {
   private readonly pendingFinals = new Map<string, JaneCanonicalFinal>();
   private readonly deliveryKeys = new Set<string>();
   private readonly speechRequests = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
+  private readonly speechQueue = new JaneRealtimeSpeechQueue((text) => this.appendSpeech(text));
 
   constructor(codexBin: string, onExit: () => void) {
     this.onExit = onExit;
@@ -369,6 +416,7 @@ class CodexRealtimeHost {
     if (this.ws !== ws) return;
     this.ws = null;
     this.clientIds.clear();
+    this.speechQueue.setActive(false);
   }
 
   private fail(reason: string): void {
@@ -393,33 +441,33 @@ class CodexRealtimeHost {
     if (!final) return;
     if (this.forwardedFinals.has(final.key) || this.deliveryKeys.has(final.key)) return;
     this.deliveryKeys.add(final.key);
-    void this.deliverFinal(final).catch(() => {
-      this.deliveryKeys.delete(final.key);
-    });
-  }
-
-  private appendSpeech(text: string, attempt = 0): Promise<void> {
-    if (!this.threadId || this.child.stdin.destroyed) return Promise.reject(new Error('Codex voice host is unavailable'));
-    const id = this.nextId++;
-    const result = new Promise<void>((resolve, reject) => this.speechRequests.set(id, { resolve, reject }));
-    writeJson(this.child, buildJaneRealtimeSpeechRequest(id, this.threadId!, text));
-    return result.catch((error) => {
-      if (attempt >= 1) throw error;
-      return this.appendSpeech(text, attempt + 1);
-    });
-  }
-
-  private async deliverFinal(final: JaneCanonicalFinal): Promise<void> {
-    await this.appendSpeech(final.text);
+    this.speechQueue.enqueue(final);
     this.forwardedFinals.add(final.key);
     if (this.forwardedFinals.size > 128) this.forwardedFinals.delete(this.forwardedFinals.values().next().value!);
     this.deliveryKeys.delete(final.key);
-    if (!this.ws) {
+    if (this.ws) sendJson(this.ws, { method: 'thread/realtime/assistant/final', params: { ...final } });
+    else {
       this.pendingFinals.set(final.key, final);
       if (this.pendingFinals.size > 128) this.pendingFinals.delete(this.pendingFinals.keys().next().value!);
-      return;
     }
-    sendJson(this.ws, { method: 'thread/realtime/assistant/final', params: { ...final } });
+  }
+
+  private appendSpeech(text: string): Promise<void> {
+    if (!this.threadId || this.child.stdin.destroyed) return Promise.reject(new Error('Codex voice host is unavailable'));
+    const id = this.nextId++;
+    let timer: NodeJS.Timeout | undefined;
+    const result = new Promise<void>((resolve, reject) => {
+      timer = setTimeout(() => {
+        this.speechRequests.delete(id);
+        reject(new SpeechAckTimeoutError('Codex realtime speech acknowledgement timed out; waiting without replay'));
+      }, SPEECH_ACK_TIMEOUT_MS);
+      this.speechRequests.set(id, {
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
+    });
+    writeJson(this.child, buildJaneRealtimeSpeechRequest(id, this.threadId!, text));
+    return result;
   }
 
   private ready(threadId: string): void {
@@ -507,6 +555,15 @@ class CodexRealtimeHost {
         return;
       }
 
+      if (message.method === 'thread/realtime/started' && isRecord(message.params)
+        && message.params.threadId === this.threadId) {
+        this.speechQueue.setActive(true);
+      }
+      if ((message.method === 'thread/realtime/closed' || message.method === 'thread/realtime/error')
+        && (!isRecord(message.params) || message.params.threadId === undefined || message.params.threadId === this.threadId)) {
+        this.speechQueue.setActive(false);
+      }
+
       if (typeof message.id === 'number' && this.clientIds.has(message.id)) {
         const clientId = this.clientIds.get(message.id);
         this.clientIds.delete(message.id);
@@ -588,6 +645,9 @@ class CodexRealtimeHost {
     if (!normalized) {
       sendJson(ws, { id: incoming.id, error: { code: -32601, message: 'Realtime method not allowed' } });
       return;
+    }
+    if (normalized.method === 'thread/realtime/start' || normalized.method === 'thread/realtime/stop') {
+      this.speechQueue.setActive(false);
     }
     const internalId = this.nextId++;
     this.clientIds.set(internalId, incoming.id);

@@ -11,6 +11,7 @@ import {
   resumeErrorMeansMissingThread,
   realtimeTranscriptEntry,
   realtimeHistoryForClient,
+  JaneRealtimeSpeechQueue,
 } from './codex-realtime-proxy.js';
 
 describe('Codex realtime boundary', () => {
@@ -29,6 +30,36 @@ describe('Codex realtime boundary', () => {
     expect(buildJaneRealtimeSpeechRequest(42, 'thread-1', 'Salut')).toEqual({
       id: 42, method: 'thread/realtime/appendSpeech', params: { threadId: 'thread-1', text: 'Salut' },
     });
+  });
+
+  it('holds finals until Live starts, preserves order, and deduplicates canonical events', async () => {
+    const sent: string[] = [];
+    const queue = new JaneRealtimeSpeechQueue(async (text) => { sent.push(text); });
+    queue.enqueue({ key: 'one', text: 'First' });
+    queue.enqueue({ key: 'one', text: 'Duplicate' });
+    queue.enqueue({ key: 'two', text: 'Second' });
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['First', 'Second']);
+  });
+
+  it('keeps a rejected final for the next Live reconnect', async () => {
+    const sent: string[] = [];
+    let reject = true;
+    const queue = new JaneRealtimeSpeechQueue(async (text) => {
+      sent.push(text);
+      if (reject) throw new Error('session closed');
+    });
+    queue.enqueue({ key: 'one', text: 'Retry me' });
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Retry me']);
+    reject = false;
+    queue.setActive(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toEqual(['Retry me', 'Retry me']);
   });
   it('resumes Jane\'s persistent conversation and starts a durable fallback', () => {
     expect(buildJaneRealtimeThreadRequest(2, 'persisted-thread')).toEqual({
