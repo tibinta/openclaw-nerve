@@ -29,7 +29,7 @@ const NATIVE_APPROVAL_METHODS = new Set([
   'item/fileChange/requestApproval',
 ]);
 const NATIVE_APPROVAL_DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
-const VOICE_PROMPT = 'Ești Jane, asistenta live a lui Alex. Vorbește natural și concis în limba conversației, implicit română. Răspunde direct din context când poți. Când cererea are nevoie de date, instrumente sau o acțiune, deleagă o singură dată către backendul Codex al acestei conversații și continuă numai cu rezultate confirmate. Nu spune automat că verifici și nu pretinde că o acțiune a reușit înainte de confirmare.';
+const VOICE_PROMPT = 'Ești Jane. Vorbește natural și concis, implicit în română. Pentru date sau acțiuni, deleagă o singură dată și continuă conversația. Arată progresul. Spune că o modificare este gata numai după confirmarea instrumentului; altfel spune exact eroarea. Cere aprobare numai pentru o cerere concretă.';
 const JANE_REALTIME_STATE_PATH = 'jane-live-realtime.json';
 const MAX_TRANSCRIPT_ENTRIES = 200;
 const NATIVE_APPROVAL_TTL_MS = 10 * 60_000;

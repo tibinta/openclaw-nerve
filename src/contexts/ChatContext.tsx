@@ -189,7 +189,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       : existingId ?? `live-${update.role}-${generateMsgId()}`;
     liveTranscriptIdsRef.current[update.role] = update.final ? undefined : id;
     const apply = (messages: ChatMsg[]) => {
-      const index = messages.findIndex((message) => message.msgId === id);
+      const index = messages.findIndex((message) => message.msgId === id || message.msgId === existingId);
       const message: ChatMsg = {
         msgId: id,
         role: update.role,

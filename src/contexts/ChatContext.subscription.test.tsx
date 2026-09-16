@@ -139,4 +139,28 @@ describe('ChatContext subscription stability', () => {
       fastMode: true,
     }));
   });
+
+  it('replaces a partial live transcript with its identified final row', async () => {
+    const { ChatProvider, useChat } = await setup();
+    let transcript: ReturnType<typeof useChat>['handleLiveTranscript'] | null = null;
+    let visible: ReturnType<typeof useChat>['messages'] = [];
+
+    function Consumer() {
+      const chat = useChat();
+      transcript = chat.handleLiveTranscript;
+      visible = chat.messages;
+      return null;
+    }
+
+    render(<ChatProvider><Consumer /></ChatProvider>);
+    act(() => transcript!({ role: 'assistant', text: 'Este aproape', final: false }));
+    act(() => transcript!({ role: 'assistant', text: 'Este gata.', final: true, id: 'turn-1', seq: 4 }));
+
+    expect(visible).toHaveLength(1);
+    expect(visible[0]).toMatchObject({
+      msgId: 'live-history-assistant-turn-1',
+      rawText: 'Este gata.',
+      streaming: false,
+    });
+  });
 });
