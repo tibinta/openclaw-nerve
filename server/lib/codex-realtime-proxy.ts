@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -7,9 +6,6 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
-import { getCodexDirectService } from './codex-direct.js';
-import { gatewayRpcCall, subscribeGatewayEvents } from './gateway-rpc.js';
-import { JANE_LIVE_SESSION_KEY } from './jane-mobile-proxy.js';
 
 const CODEX_APP_BINARY = '/Applications/ChatGPT.app/Contents/Resources/codex';
 const DEVICECHECK_MODULE = '/Applications/ChatGPT.app/Contents/Resources/native/devicecheck.node';
@@ -24,16 +20,11 @@ const CLIENT_METHODS = new Set([
   'thread/realtime/stop',
   'thread/realtime/listVoices',
 ]);
-const TRANSCRIPT_FINAL_METHODS = new Set([
-  'thread/realtime/transcript/done',
-  'thread/realtime/transcript/completed',
-]);
 const REALTIME_ITEM_METHODS = new Set([
   'thread/realtime/item/started',
   'thread/realtime/item/transcript/delta',
   'thread/realtime/item/completed',
 ]);
-const REALTIME_STARTED_METHODS = new Set(['thread/realtime/started', 'thread/realtime/item/started']);
 const LANGUAGE_MATCH_PROMPT = 'Speak Nerve-supplied messages in the language the user primarily uses in this live conversation, translating when needed. If the user has not established a language in this realtime session, use Romanian. Short acknowledgements such as "ok", "okay", or "perfect" do not change the established language. Preserve names, numbers, amounts, and task titles.';
 const VOICE_PROMPT = 'Ești Jane, vocea live a lui Nerve. Ascultă și transcrie fidel. Rămâi tăcută până când Nerve îți oferă rezultatul final; rostește doar textul primit de la Nerve, în limba conversației, fără să inventezi răspunsuri sau acțiuni.';
 const JANE_RESULT_TIMEOUT_MS = 10 * 60_000;
@@ -53,35 +44,6 @@ interface DeviceCheckResult {
 }
 
 type GenerateToken = () => DeviceCheckResult | Promise<DeviceCheckResult>;
-type GatewayEventListener = (event: Record<string, unknown>) => void;
-
-interface JaneDispatchDependencies {
-  codexMessage: (text: string) => Promise<{ reply: string }>;
-  gatewayCall: typeof gatewayRpcCall;
-  subscribe: (listener: GatewayEventListener) => () => void;
-  timeoutMs: number;
-}
-
-type JaneRun = (text: string, requestKey: string) => Promise<string>;
-type JaneSteer = (text: string) => Promise<void>;
-
-interface QueuedSpeech {
-  key: string;
-  text: string;
-}
-
-export interface JaneCanonicalFinal {
-  key: string;
-  text: string;
-}
-
-const defaultJaneDispatchDependencies: JaneDispatchDependencies = {
-  codexMessage: async (text) => getCodexDirectService().message(text),
-  gatewayCall: gatewayRpcCall,
-  subscribe: subscribeGatewayEvents,
-  timeoutMs: JANE_RESULT_TIMEOUT_MS,
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -519,8 +481,8 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
           params: {
             cwd: process.env.OPENCLAW_HOME || join(homedir(), '.openclaw'),
             ephemeral: false,
-            approvalPolicy: 'never',
-            sandbox: 'read-only',
+            approvalPolicy: 'on-request',
+            sandbox: 'workspace-write',
             historyMode: 'paginated',
             config: { features: { realtime_conversation: true } },
           },
@@ -537,8 +499,8 @@ export function createCodexRealtimeRelay(ws: WebSocket, dispatcher?: JaneRealtim
           params: {
             cwd: process.env.OPENCLAW_HOME || join(homedir(), '.openclaw'),
             ephemeral: false,
-            approvalPolicy: 'never',
-            sandbox: 'read-only',
+            approvalPolicy: 'on-request',
+            sandbox: 'workspace-write',
             historyMode: 'paginated',
             config: { features: { realtime_conversation: true } },
           },
