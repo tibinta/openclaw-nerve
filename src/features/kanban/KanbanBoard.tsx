@@ -101,11 +101,6 @@ function TaskStack({
                 key={task.id}
                 className={featured ? 'rounded-[22px] border border-primary/40 bg-primary/[0.06] p-1 shadow-[0_14px_28px_rgba(0,0,0,0.18)]' : ''}
               >
-                {featured && (
-                  <div className="px-2 pb-1 text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-primary">
-                    Current active task
-                  </div>
-                )}
                 <KanbanCard task={task} onClick={onCardClick} />
               </div>
             );
@@ -310,24 +305,6 @@ export const KanbanBoard = memo(function KanbanBoard({
               <div className="mt-1 text-sm text-muted-foreground">Live work surface. Review stays here until it is done.</div>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
-              {currentActiveTask ? (
-                <div className="rounded-[22px] border border-primary/30 bg-primary/[0.05] p-3 shadow-[0_14px_28px_rgba(0,0,0,0.15)]">
-                  <div className="cockpit-kicker text-[0.6rem]">
-                    <span className="text-primary">◆</span>
-                    Current active task
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onCardClick(currentActiveTask)}
-                    className="mt-2 block w-full text-left text-sm font-semibold text-foreground underline-offset-4 hover:underline"
-                  >
-                    {currentActiveTask.title}
-                  </button>
-                  <div className="mt-1 text-[0.733rem] text-muted-foreground">
-                    {currentActiveTask.description || 'This task is the one the board should keep in view.'}
-                  </div>
-                </div>
-              ) : null}
               <TaskStack
                 status="in-progress"
                 tasks={localTasks.filter(task => task.status === 'in-progress').sort(compareTaskPriority)}
