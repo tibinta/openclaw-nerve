@@ -135,7 +135,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [soundEnabled, setSoundEnabled] = useState(localStorage.getItem('oc-sound') === 'true');
   const [voiceReadbackEnabled, setVoiceReadbackEnabled] = useState(() => {
     const saved = localStorage.getItem(VOICE_READBACK_STORAGE_KEY);
-    return saved !== 'false';
+    return saved === 'true';
   });
   const [voicePlaybackUnlocked, setVoicePlaybackUnlocked] = useState(false);
   const [ttsProvider, setTtsProvider] = useState<TTSProvider>(resolveInitialTtsProvider);
