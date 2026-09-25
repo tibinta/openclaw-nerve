@@ -103,8 +103,6 @@ const GATEWAY_RUN_TIMEOUT_MS = 60_000;
 const MANUAL_CRON_RUNS_DIR = join(config.home, '.openclaw', 'cron', 'nerve-manual-runs');
 const LOCAL_CRON_JOBS_FILE = join(config.home, '.openclaw', 'cron', 'jobs.json');
 const LOCAL_CRON_STATE_FILE = join(config.home, '.openclaw', 'cron', 'jobs-state.json');
-const LOCAL_CRON_JOBS_MIGRATED_FILE = join(config.home, '.openclaw', 'cron', 'jobs.json.migrated');
-const LOCAL_CRON_STATE_MIGRATED_FILE = join(config.home, '.openclaw', 'cron', 'jobs-state.json.migrated');
 const CRON_READONLY_KEYS = new Set([
   'id',
   'jobId',
@@ -255,8 +253,8 @@ async function mergeManualRunStateIntoJobs(jobs: Record<string, unknown>[]): Pro
 
 async function mergeLocalCronFallbackIntoJobs(jobs: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
   const [localJobsFile, localStateFile] = await Promise.all([
-    readFirstJsonFile<{ jobs?: Record<string, unknown>[] }>([LOCAL_CRON_JOBS_FILE, LOCAL_CRON_JOBS_MIGRATED_FILE]),
-    readFirstJsonFile<{ jobs?: Record<string, { state?: Record<string, unknown> }> }>([LOCAL_CRON_STATE_FILE, LOCAL_CRON_STATE_MIGRATED_FILE]),
+    readFirstJsonFile<{ jobs?: Record<string, unknown>[] }>([LOCAL_CRON_JOBS_FILE]),
+    readFirstJsonFile<{ jobs?: Record<string, { state?: Record<string, unknown> }> }>([LOCAL_CRON_STATE_FILE]),
   ]);
 
   const localJobs = Array.isArray(localJobsFile?.jobs) ? localJobsFile.jobs : [];

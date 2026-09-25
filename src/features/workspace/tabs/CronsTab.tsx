@@ -171,7 +171,11 @@ function CronRow({ job, onToggle, onRun, onDelete, onEdit, onFetchRuns }: {
     || errorLower.includes('delivery')
   );
   const taskSucceeded = isSuccess || isDeliveryFailure;
-  const executionLabel = job.payloadKind === 'agentTurn' ? 'Private session' : 'Main thread event';
+  const executionLabel = job.sessionTarget === 'session:agent:main:voice:direct:nerve-live'
+    ? 'Jane Live'
+    : job.payloadKind === 'command' ? 'Saved command task'
+      : job.sessionTarget?.startsWith('session:') ? 'Saved conversation'
+        : job.payloadKind === 'agentTurn' ? 'Private session' : 'Main thread event';
   const targetTone = job.payloadKind === 'agentTurn' ? 'primary' : 'warning';
 
   return (

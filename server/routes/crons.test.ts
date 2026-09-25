@@ -622,7 +622,7 @@ describe('cron routes', () => {
     expect(data.result.jobs?.find((job) => job.id === 'off-job')?.state?.lastRunAtMs).toBe(456);
   });
 
-  it('backfills disabled jobs from migrated local cron files', async () => {
+  it('does not resurrect archived jobs from migrated local cron files', async () => {
     const { app, invokeGatewayTool, tempHome } = await buildApp();
     invokeGatewayTool.mockImplementation(async (tool: string, args: Record<string, unknown>) => {
       if (tool === 'cron' && args.action === 'list') {
@@ -688,11 +688,10 @@ describe('cron routes', () => {
 
     expect(res.status).toBe(200);
     expect(data.ok).toBe(true);
-    expect(data.result.jobs).toHaveLength(2);
-    expect(data.result.jobs?.find((job) => job.id === 'off-job')?.enabled).toBe(false);
-    expect(data.result.jobs?.find((job) => job.id === 'off-job')?.state?.lastRunAtMs).toBe(456);
+    expect(data.result.jobs).toHaveLength(1);
+    expect(data.result.jobs?.find((job) => job.id === 'off-job')).toBeUndefined();
     const parsedContent = JSON.parse(data.result.content?.[0]?.text as string) as { jobs?: Array<{ id?: string }> };
-    expect(parsedContent.jobs?.map((job) => job.id)).toEqual(['live-job', 'off-job']);
+    expect(parsedContent.jobs?.map((job) => job.id)).toEqual(['live-job']);
   });
 
   it('still returns success when manual run history cannot be persisted', async () => {
