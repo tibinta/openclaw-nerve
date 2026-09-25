@@ -67,6 +67,17 @@ describe('normalizeCronJob', () => {
     expect(job.sessionTarget).toBeUndefined();
     expect(job.sessionKey).toBeUndefined();
   });
+
+  it('preserves a persistent Jane Live target', () => {
+    const job = normalizeCronJob({
+      id: 'live-cron', enabled: true,
+      schedule: { kind: 'every', everyMs: 1800000, anchorMs: 1790291449594 },
+      sessionTarget: 'session:agent:main:voice:direct:nerve-live',
+      payload: { kind: 'agentTurn', message: 'Tell me something nice.' },
+    });
+    expect(job.sessionTarget).toBe('session:agent:main:voice:direct:nerve-live');
+    expect(job.payloadKind).toBe('agentTurn');
+  });
 });
 
 describe('sortCronJobsByLastRun', () => {

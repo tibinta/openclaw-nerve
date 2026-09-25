@@ -34,6 +34,7 @@ const payloadSchema = z.union([
     thinking: z.string().optional(),
     timeoutSeconds: z.number().optional(),
     lightContext: z.boolean().optional(),
+    toolsAllow: z.array(z.string()).optional(),
   }),
   z.object({
     kind: z.literal('command'),
@@ -57,6 +58,7 @@ const deliverySchema = z.object({
 }).passthrough().optional();
 
 const sessionAgentIdSchema = z.string().max(200).optional();
+const sessionTargetSchema = z.union([z.enum(['main', 'isolated']), z.string().max(208).regex(/^session:.+/)]);
 
 const cronJobSchema = z.object({
   job: z.object({
@@ -64,7 +66,7 @@ const cronJobSchema = z.object({
     schedule: scheduleSchema.optional(),
     payload: payloadSchema.optional(),
     delivery: deliverySchema,
-    sessionTarget: z.enum(['main', 'isolated']).optional(),
+    sessionTarget: sessionTargetSchema.optional(),
     sessionKey: z.string().max(200).optional(),
     agentId: sessionAgentIdSchema,
     enabled: z.boolean().optional(),
@@ -83,7 +85,7 @@ const cronPatchSchema = z.object({
     schedule: scheduleSchema.optional(),
     payload: payloadSchema.optional(),
     delivery: deliverySchema,
-    sessionTarget: z.enum(['main', 'isolated']).optional(),
+    sessionTarget: sessionTargetSchema.optional(),
     sessionKey: z.string().max(200).optional(),
     agentId: sessionAgentIdSchema,
     enabled: z.boolean().optional(),

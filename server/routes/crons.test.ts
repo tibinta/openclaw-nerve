@@ -196,6 +196,25 @@ describe('cron routes', () => {
     }, 60000);
   });
 
+  it('keeps the persistent Jane Live target and agent turn on update', async () => {
+    const { app, gatewayRpcCall } = await buildApp();
+    const patch = {
+      agentId: 'main',
+      sessionTarget: 'session:agent:main:voice:direct:nerve-live',
+      payload: { kind: 'agentTurn', message: 'Tell me something nice.', toolsAllow: ['*'] },
+      schedule: { kind: 'every', everyMs: 1800000, anchorMs: 1790291449594 },
+      delivery: { mode: 'none' },
+    };
+    const res = await app.request('/api/crons/job-123', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patch }),
+    });
+    expect(res.status).toBe(200);
+    expect(gatewayRpcCall).toHaveBeenCalledWith('cron.update', {
+      id: 'job-123', patch,
+    }, 60000);
+  });
+
   it('keeps non-default agent cron edits isolated when updating', async () => {
     const { app, gatewayRpcCall } = await buildApp();
 

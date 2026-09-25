@@ -18,7 +18,8 @@ interface CronDialogProps {
 
 type ScheduleKind = 'cron' | 'every' | 'at';
 type DeliveryMode = 'none' | 'announce';
-type SessionTarget = 'main' | 'isolated';
+type SessionTarget = 'main' | 'isolated' | `session:${string}`;
+const JANE_LIVE_TARGET = 'session:agent:main:voice:direct:nerve-live';
 type WakeMode = 'now' | 'nextHeartbeat';
 type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
 
@@ -196,7 +197,7 @@ function createInitialForm(prefill: CronJob | null): CronFormState {
     deliveryTo: prefill?.delivery?.to || '',
     deleteAfterRun: prefill?.deleteAfterRun ?? false,
     clearAgentOverride: prefill?.clearAgentOverride ?? false,
-    sessionKey: prefill?.sessionKey || defaultSessionKey(agentId),
+    sessionKey: prefill?.sessionKey || (prefill?.sessionTarget?.startsWith('session:') ? '' : defaultSessionKey(agentId)),
     accountId: prefill?.accountId || '',
     lightContext: prefill?.lightContext ?? false,
     model: prefill?.model || '',
@@ -355,12 +356,15 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
     } else {
       const everyMs = partsToEveryMs(form.everyValue, form.everyUnit);
       schedule = { kind: 'every', everyMs };
+      const previous = (form.raw.schedule || {}) as Record<string, unknown>;
+      if (previous.everyMs === everyMs && typeof previous.anchorMs === 'number') schedule.anchorMs = previous.anchorMs;
     }
 
     const timeoutSeconds = Number(form.timeoutSeconds);
     const model = form.model.trim();
     const thinking = form.thinking;
     const sessionTarget = form.sessionTarget;
+    const previousPayload = (form.raw.payload || {}) as Record<string, unknown>;
     const payload: Record<string, unknown> = sessionTarget === 'main'
       ? { kind: 'systemEvent', text: message }
       : {
@@ -369,6 +373,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
           ...(model ? { model } : {}),
           ...(thinking !== 'off' ? { thinking } : {}),
           ...(Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? { timeoutSeconds } : {}),
+          ...(Array.isArray(previousPayload.toolsAllow) ? { toolsAllow: previousPayload.toolsAllow } : {}),
         };
 
     const delivery: Record<string, unknown> = {
@@ -426,7 +431,9 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
   const isEdit = mode === 'edit';
   const sessionSummary = form.sessionTarget === 'isolated'
     ? `Private session under ${agentName}.`
-    : `Posts into the main thread for ${agentName}.`;
+    : form.sessionTarget === 'main'
+      ? `Posts into the main thread for ${agentName}.`
+      : 'Replies appear in the selected conversation and speak when Jane Live is open.';
 
   return (
     <dialog
@@ -626,6 +633,10 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                   >
                     <option value="main">Main event</option>
                     <option value="isolated">Private agent turn</option>
+                    <option value={JANE_LIVE_TARGET}>Jane Live</option>
+                    {form.sessionTarget.startsWith('session:') && form.sessionTarget !== JANE_LIVE_TARGET && (
+                      <option value={form.sessionTarget}>Saved conversation</option>
+                    )}
                   </CronSelect>
                 </div>
                 <div className="flex flex-col gap-1">

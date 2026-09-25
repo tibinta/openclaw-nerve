@@ -32,7 +32,7 @@ export interface CronJob {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
-  sessionTarget?: 'main' | 'isolated';
+  sessionTarget?: 'main' | 'isolated' | `session:${string}`;
   sessionKey?: string;
   // Delivery
   delivery?: CronDelivery;
@@ -80,8 +80,9 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
   const payload = (j.payload || {}) as Record<string, unknown>;
   const state = (j.state || {}) as Record<string, unknown>;
   const delivery = (j.delivery || undefined) as CronDelivery | undefined;
-  const sessionTarget = (j.sessionTarget as string) === 'main' || (j.sessionTarget as string) === 'isolated'
-    ? (j.sessionTarget as 'main' | 'isolated')
+  const target = j.sessionTarget;
+  const sessionTarget = target === 'main' || target === 'isolated' || (typeof target === 'string' && target.startsWith('session:') && target.length > 8)
+    ? (target as CronJob['sessionTarget'])
     : undefined;
   const agentId = typeof j.agentId === 'string' && j.agentId.trim().length > 0
     ? j.agentId.trim()
