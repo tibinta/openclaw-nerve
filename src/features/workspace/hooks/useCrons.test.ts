@@ -28,6 +28,13 @@ async function flushPromises() {
 }
 
 describe('normalizeCronJob', () => {
+  it('preserves phone selection independently from enabled state after refresh', () => {
+    const job = normalizeCronJob({ id: 'phone-job', enabled: false, availableOnPhone: true, phoneSelectable: false });
+    expect(job.enabled).toBe(false);
+    expect(job.availableOnPhone).toBe(true);
+    expect(job.phoneSelectable).toBe(false);
+  });
+
   it('preserves explicit root routing fields from the gateway', () => {
     const job = normalizeCronJob({
       id: 'cron-1',

@@ -99,6 +99,8 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
     description: typeof j.description === 'string' ? j.description : undefined,
     agentId,
     enabled: (j.enabled as boolean) ?? true,
+    availableOnPhone: j.availableOnPhone === true,
+    phoneSelectable: j.phoneSelectable !== false,
     // Schedule
     scheduleKind: scheduleKind as CronJob['scheduleKind'],
     schedule: sched.expr as string | undefined,
