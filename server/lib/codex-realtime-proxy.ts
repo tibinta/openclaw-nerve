@@ -87,10 +87,10 @@ export function extractJaneCanonicalFinal(payload: Record<string, unknown>): Jan
   if (!finalText || /^NO_REPLY$/i.test(finalText.trim())) return null;
   const message = isRecord(text) ? text : null;
   const metadata = message && isRecord(message.__openclaw) ? message.__openclaw : null;
-  const id = [payload.message_id, payload.messageId, metadata?.id, message?.id, payload.id, payload.runId]
+  const id = [message?.responseId, payload.message_id, payload.messageId, metadata?.id, message?.id, payload.id]
     .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
   return {
-    key: id ? `jane:${id}` : `jane:text:${createHash('sha256').update(finalText).digest('hex')}`,
+    key: id ? `jane:${id}` : `jane:text:${createHash('sha256').update(`${payload.runId ?? ''}:${message?.timestamp ?? ''}:${finalText}`).digest('hex')}`,
     text: finalText.slice(0, 12_000),
     ...(typeof payload.runId === 'string' ? { runId: payload.runId } : {}),
   };

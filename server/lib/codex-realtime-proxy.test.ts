@@ -20,7 +20,17 @@ describe('Codex realtime boundary', () => {
     expect(extractJaneCanonicalFinal({
       sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', runId: 'run-1',
       messages: [{ role: 'assistant', content: [{ text: '  Buna, Alex.  ' }] }],
-    })).toEqual({ key: 'jane:run-1', text: 'Buna, Alex.', runId: 'run-1' });
+    })).toEqual({ key: expect.stringMatching(/^jane:text:/), text: 'Buna, Alex.', runId: 'run-1' });
+    const first = extractJaneCanonicalFinal({
+      sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', runId: 'persistent-session',
+      message: { role: 'assistant', responseId: 'response-1', content: 'First cron reply' },
+    });
+    const second = extractJaneCanonicalFinal({
+      sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', runId: 'persistent-session',
+      message: { role: 'assistant', responseId: 'response-2', content: 'Second cron reply' },
+    });
+    expect(first?.key).toBe('jane:response-1');
+    expect(second?.key).toBe('jane:response-2');
     expect(extractJaneCanonicalFinal({
       sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', content: 'NO_REPLY',
     })).toBeNull();

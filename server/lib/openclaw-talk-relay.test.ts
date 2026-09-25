@@ -69,6 +69,16 @@ describe('OpenClaw Talk relay', () => {
       sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'user-1',
       message: { role: 'user', content: 'Never project this as Jane' },
     } });
+    for (const [responseId, content] of [['response-1', 'First persistent cron reply'], ['response-2', 'Second persistent cron reply']]) {
+      emitEvent({ event: 'chat', payload: {
+        sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', runId: 'persistent-session',
+        message: { role: 'assistant', responseId, content },
+      } });
+    }
+    emitEvent({ event: 'session.message', payload: {
+      sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'different-envelope-id',
+      message: { role: 'assistant', responseId: 'response-2', content: 'Second persistent cron reply' },
+    } });
     emitEvent({ event: 'talk.event', payload: { voiceSessionId: 'own', talkEvent: {
       id: 'talk-event-1', type: 'tool.progress', callId: 'call-1', turnId: 'turn-1',
       payload: { name: 'web_search', phase: 'searching', result: 'private tool output' },
@@ -85,6 +95,12 @@ describe('OpenClaw Talk relay', () => {
       { method: 'thread/realtime/transcript/done', params: {
         role: 'assistant', text: 'Assistant result from a one-shot job', eventId: 'jane:cron-2',
       } },
+      { method: 'thread/realtime/transcript/done', params: {
+        role: 'assistant', text: 'First persistent cron reply', eventId: 'jane:response-1',
+      } },
+      { method: 'thread/realtime/transcript/done', params: {
+        role: 'assistant', text: 'Second persistent cron reply', eventId: 'jane:response-2',
+      } },
     ]);
     await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', {
       text: 'Cron result in the Jane conversation',
@@ -92,6 +108,8 @@ describe('OpenClaw Talk relay', () => {
     await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', {
       text: 'Assistant result from a one-shot job',
     }, 30_000));
+    await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', { text: 'Second persistent cron reply' }, 30_000));
+    expect(rpc.mock.calls.filter(([method]) => method === 'talk.speak')).toHaveLength(4);
     await vi.waitFor(() => expect(client.sent).toContainEqual({
       method: 'thread/realtime/speech',
       params: { eventId: 'jane:cron-1', audioBase64: 'YQ==', mimeType: 'audio/mpeg' },
