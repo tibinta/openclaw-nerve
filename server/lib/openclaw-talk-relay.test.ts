@@ -102,18 +102,8 @@ describe('OpenClaw Talk relay', () => {
         role: 'assistant', text: 'Second persistent cron reply', eventId: 'jane:response-2',
       } },
     ]);
-    await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', {
-      text: 'Cron result in the Jane conversation',
-    }, 30_000));
-    await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', {
-      text: 'Assistant result from a one-shot job',
-    }, 30_000));
-    await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', { text: 'Second persistent cron reply' }, 30_000));
-    expect(rpc.mock.calls.filter(([method]) => method === 'talk.speak')).toHaveLength(4);
-    await vi.waitFor(() => expect(client.sent).toContainEqual({
-      method: 'thread/realtime/speech',
-      params: { eventId: 'jane:cron-1', audioBase64: 'YQ==', mimeType: 'audio/mpeg' },
-    }));
+    expect(rpc.mock.calls.filter(([method]) => method === 'talk.speak')).toHaveLength(0);
+    expect(client.sent.some((item) => item.method === 'thread/realtime/speech')).toBe(false);
     expect(client.sent.find((item) => item.method === 'thread/realtime/activity')).toEqual({
       method: 'thread/realtime/activity',
       params: { state: 'working', name: 'web_search', callId: 'call-1', turnId: 'turn-1' },
@@ -185,6 +175,6 @@ describe('OpenClaw Talk relay', () => {
       sessionKey: 'agent:main:voice:direct:nerve-live',
       state: 'final', message_id: 'typed-1', message: { role: 'assistant', content: 'Typed reply' },
     } });
-    await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', { text: 'Typed reply' }, 30_000));
+    expect(rpc).not.toHaveBeenCalledWith('talk.speak', expect.anything(), expect.anything());
   });
 });

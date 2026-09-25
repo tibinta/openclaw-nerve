@@ -40,7 +40,6 @@ export function createOpenClawTalkRelay(
   let voiceSessionId: string | null = null;
   let closed = false;
   let starting = false;
-  let liveReady = false;
   const deliveredFinals = new Set<string>();
 
   const closeTalk = () => {
@@ -58,29 +57,8 @@ export function createOpenClawTalkRelay(
     send(ws, 'thread/realtime/transcript/done', {
       role: 'assistant', text: final.text, eventId: final.key,
     });
-    if (!voiceSessionId || !liveReady) return;
+    // Gateway injects canonical replies into the active voice context and owns speech.
 
-    const currentVoiceSessionId = voiceSessionId;
-    void rpc('talk.speak', { text: final.text }, 30_000).then((value) => {
-      const speech = record(value);
-      if (closed || voiceSessionId !== currentVoiceSessionId || !speech
-        || typeof speech.audioBase64 !== 'string' || !speech.audioBase64
-        || speech.audioBase64.length > 4_000_000) {
-        if (!closed && voiceSessionId === currentVoiceSessionId) {
-          send(ws, 'thread/realtime/error', { message: 'Jane Live voice reply is unavailable' });
-        }
-        return;
-      }
-      send(ws, 'thread/realtime/speech', {
-        eventId: final.key,
-        audioBase64: speech.audioBase64,
-        mimeType: typeof speech.mimeType === 'string' ? speech.mimeType : 'audio/mpeg',
-      });
-    }).catch(() => {
-      if (!closed && voiceSessionId === currentVoiceSessionId) {
-        send(ws, 'thread/realtime/error', { message: 'Jane Live voice reply is unavailable' });
-      }
-    });
   };
 
   const unsubscribe = subscribe((event) => {
@@ -191,7 +169,6 @@ export function createOpenClawTalkRelay(
         if (closed) return;
         send(ws, 'thread/realtime/sdp', { sdp: answerSdp });
         send(ws, 'thread/realtime/started', { voiceSessionId });
-        liveReady = true;
       } catch (error) {
         // Gateway errors can contain sensitive request details; keep the browser error bounded.
         send(ws, 'thread/realtime/error', { message: error instanceof Error && error.message.startsWith('OpenClaw Talk offer failed')
