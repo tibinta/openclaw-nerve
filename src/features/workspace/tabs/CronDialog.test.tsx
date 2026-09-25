@@ -14,7 +14,7 @@ describe('CronDialog persistent session routing', () => {
     HTMLDialogElement.prototype.close = vi.fn();
   });
 
-  it('keeps Jane Live routing, agent turn, and schedule anchor when saving', async () => {
+  it.each(['create', 'edit'] as const)('keeps Jane Live routing, agent turn, and schedule anchor in %s mode', async (mode) => {
     const onSubmit = vi.fn(async () => true);
     const initialData: CronJob = {
       id: 'cron-1', name: 'Something nice', enabled: true,
@@ -27,12 +27,12 @@ describe('CronDialog persistent session routing', () => {
         payload: { kind: 'agentTurn', message: 'Tell me something nice.', toolsAllow: ['*'] },
       },
     };
-    render(<CronDialog open mode="edit" initialData={initialData} onClose={vi.fn()} onSubmit={onSubmit} />);
+    render(<CronDialog open mode={mode} initialData={initialData} onClose={vi.fn()} onSubmit={onSubmit} />);
     expect((screen.getByLabelText('Session') as HTMLSelectElement).value)
       .toBe('session:agent:main:voice:direct:nerve-live');
     expect(screen.getByText('Jane Live')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Save Changes'));
+    fireEvent.click(screen.getByText(mode === 'edit' ? 'Save Changes' : 'Create Cron'));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
     expect(onSubmit.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
       sessionTarget: 'session:agent:main:voice:direct:nerve-live',

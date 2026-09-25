@@ -264,7 +264,7 @@ function CronSelect(props: SelectHTMLAttributes<HTMLSelectElement>) {
 
 /** Modal dialog for creating or editing a cron job. */
 export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronDialogProps) {
-  const prefill = mode === 'edit' && initialData ? initialData : null;
+  const prefill = initialData ?? null;
   const { agentName } = useSessionContext();
 
   const [form, setForm] = useState<CronFormState>(() => createInitialForm(prefill));
