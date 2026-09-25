@@ -79,13 +79,14 @@ function relativeUntil(ts: string): string {
   return remHours === 0 ? `in ${days}d` : `in ${days}d ${remHours}h`;
 }
 
-function CronRow({ job, onToggle, onRun, onDelete, onEdit, onFetchRuns }: {
+function CronRow({ job, onToggle, onRun, onDelete, onEdit, onFetchRuns, onPhoneSelection }: {
   job: CronRowJob;
   onToggle: (id: string, enabled: boolean) => void;
   onRun: (id: string) => Promise<boolean | undefined>;
   onDelete: (id: string) => void;
   onEdit: (job: CronJob) => void;
   onFetchRuns: (id: string) => Promise<CronRun[]>;
+  onPhoneSelection: (id: string, available: boolean) => Promise<boolean>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [runs, setRuns] = useState<CronRun[]>([]);
@@ -265,9 +266,21 @@ function CronRow({ job, onToggle, onRun, onDelete, onEdit, onFetchRuns }: {
             </div>
 
             <div className="flex items-center justify-between gap-2">
-              <span className="cockpit-badge min-h-6 px-2 text-[0.667rem]" data-tone={targetTone}>
-                {executionLabel}
-              </span>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="cockpit-badge min-h-6 px-2 text-[0.667rem]" data-tone={targetTone}>
+                  {executionLabel}
+                </span>
+                <label className="flex shrink-0 items-center gap-1 text-[0.667rem] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={job.availableOnPhone === true}
+                    disabled={job.phoneSelectable === false}
+                    onChange={(event) => void onPhoneSelection(job.id, event.currentTarget.checked)}
+                    aria-label={`Available on phone: ${name}`}
+                  />
+                  <span>Available on phone</span>
+                </label>
+              </div>
               <span className="min-w-0 truncate text-right text-[0.667rem] text-muted-foreground">
                 {job.lastRun ? `Last ${relativeTime(job.lastRun)}` : 'No runs yet'}
               </span>
@@ -337,7 +350,7 @@ function CronRow({ job, onToggle, onRun, onDelete, onEdit, onFetchRuns }: {
 
 /** Workspace tab listing cron jobs with create/edit/delete/toggle controls. */
 export function CronsTab() {
-  const { jobs, isLoading, error, cronWarning, fetchJobs, toggleJob, runJob, fetchRuns, addJob, updateJob, deleteJob } = useCrons();
+  const { jobs, isLoading, error, cronWarning, fetchJobs, toggleJob, runJob, fetchRuns, addJob, updateJob, deleteJob, setAvailableOnPhone } = useCrons();
   const { refreshSessions } = useSessionContext();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create');
@@ -570,6 +583,7 @@ export function CronsTab() {
                         onDelete={deleteJob}
                         onEdit={handleEdit}
                         onFetchRuns={fetchRuns}
+                        onPhoneSelection={setAvailableOnPhone}
                       />
                     ))}
                   </div>
@@ -591,6 +605,7 @@ export function CronsTab() {
                         onDelete={deleteJob}
                         onEdit={handleEdit}
                         onFetchRuns={fetchRuns}
+                        onPhoneSelection={setAvailableOnPhone}
                       />
                     ))}
                   </div>

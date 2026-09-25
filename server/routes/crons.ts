@@ -130,6 +130,7 @@ const CRON_READONLY_KEYS = new Set([
   'lastDeliveryError',
   'lastFailureNotificationDeliveryStatus',
   'clearAgentOverride',
+  'systemOwned',
   'availableOnPhone',
   'phoneSelectable',
 ]);
