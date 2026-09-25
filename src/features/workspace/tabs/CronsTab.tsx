@@ -355,6 +355,8 @@ export function CronsTab() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create');
   const [editingJob, setEditingJob] = useState<CronJob | null>(null);
+  const [phoneOnly, setPhoneOnly] = useState(false);
+  const visibleJobs = phoneOnly ? jobs.filter((job) => job.availableOnPhone) : jobs;
 
   const toolbarSummary = useMemo(() => {
     const enabledJobs = jobs.filter((job) => job.enabled);
@@ -424,6 +426,10 @@ export function CronsTab() {
     <div className="h-full flex flex-col min-h-0">
       <div className="flex-1 overflow-y-auto">
         <div className="space-y-2 px-2.5 py-2.5">
+          <button type="button" className="shell-chip min-h-8 rounded-lg px-2.5 text-[0.7rem]"
+            aria-pressed={phoneOnly} onClick={() => setPhoneOnly((value) => !value)}>
+            Phone ({jobs.filter((job) => job.availableOnPhone).length})
+          </button>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex items-center gap-1.5 overflow-hidden">
               {hasToolbarMeta ? (
@@ -568,13 +574,13 @@ export function CronsTab() {
 
           {jobs.length > 0 && (
             <div className="space-y-4">
-              {jobs.some((job) => job.enabled) && (
+              {visibleJobs.some((job) => job.enabled) && (
                 <div className="space-y-2">
                   <div className="cockpit-kicker text-[0.6rem] tracking-[0.18em] text-muted-foreground">
-                    Live
+                    Enabled
                   </div>
                   <div className="space-y-2">
-                    {jobs.filter((job) => job.enabled).map((job) => (
+                    {visibleJobs.filter((job) => job.enabled).map((job) => (
                       <CronRow
                         key={job.id}
                         job={job}
@@ -590,13 +596,13 @@ export function CronsTab() {
                 </div>
               )}
 
-              {jobs.some((job) => !job.enabled) && (
+              {visibleJobs.some((job) => !job.enabled) && (
                 <div className="space-y-2">
                   <div className="cockpit-kicker text-[0.6rem] tracking-[0.18em] text-muted-foreground">
                     Off
                   </div>
                   <div className="space-y-2">
-                    {jobs.filter((job) => !job.enabled).map((job) => (
+                    {visibleJobs.filter((job) => !job.enabled).map((job) => (
                       <CronRow
                         key={job.id}
                         job={job}
