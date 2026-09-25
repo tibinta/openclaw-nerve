@@ -175,6 +175,8 @@ describe('cron routes', () => {
       body: JSON.stringify({
         patch: {
           id: 'readonly-id',
+          effectiveAgentId: 'ops', displayName: 'Reminder', status: 'idle',
+          declarationKey: 'managed', lastRunError: null, lastFailureNotificationDelivered: false,
           jobId: 'readonly-job-id',
           clearAgentOverride: true,
           sessionTarget: 'main',

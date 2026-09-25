@@ -375,6 +375,17 @@ export function CronsTab() {
     setDialogOpen(true);
   }, []);
 
+  const handleAddLive = useCallback(() => {
+    setDialogMode('create');
+    setEditingJob({
+      id: '', name: 'Jane Live reminder', enabled: true, agentId: 'main',
+      scheduleKind: 'every', everyMs: 1800000, payloadKind: 'agentTurn', message: '',
+      sessionTarget: 'session:agent:main:voice:direct:nerve-live',
+      delivery: { mode: 'none' }, raw: {},
+    });
+    setDialogOpen(true);
+  }, []);
+
   const handleEdit = useCallback((job: CronJob) => {
     setDialogMode('edit');
     setEditingJob(job);
@@ -438,6 +449,16 @@ export function CronsTab() {
               ) : null}
             </div>
             <div className="shell-panel inline-flex items-center gap-1 rounded-xl px-1 py-1">
+              <button
+                type="button"
+                onClick={handleAddLive}
+                aria-label="New Jane Live cron"
+                title="Speak a scheduled message in Jane Live"
+                className="shell-chip min-h-8 rounded-lg px-2.5 text-[0.7rem] font-medium"
+              >
+                <Plus size={13} />
+                <span>New Jane Live cron</span>
+              </button>
               <button
                 type="button"
                 onClick={handleAdd}

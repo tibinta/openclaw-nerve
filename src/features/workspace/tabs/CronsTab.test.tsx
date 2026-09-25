@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CronsTab } from './CronsTab';
 
@@ -22,7 +22,7 @@ vi.mock('../hooks/useCrons', () => ({
 }));
 
 vi.mock('./CronDialog', () => ({
-  CronDialog: () => null,
+  CronDialog: ({ open, initialData, mode }: { open: boolean; initialData: unknown; mode: string }) => open ? <div data-testid="cron-template">{JSON.stringify({ mode, initialData })}</div> : null,
 }));
 
 vi.mock('@/contexts/SessionContext', () => ({
@@ -30,6 +30,18 @@ vi.mock('@/contexts/SessionContext', () => ({
 }));
 
 describe('CronsTab', () => {
+  it('prefills a new cron for the shared Jane Live session', () => {
+    render(<CronsTab />);
+    fireEvent.click(screen.getByRole('button', { name: 'New Jane Live cron' }));
+    const template = JSON.parse(screen.getByTestId('cron-template').textContent || '{}');
+    expect(template.mode).toBe('create');
+    expect(template.initialData).toMatchObject({
+      agentId: 'main', payloadKind: 'agentTurn', message: '',
+      sessionTarget: 'session:agent:main:voice:direct:nerve-live',
+      delivery: { mode: 'none' }, everyMs: 1800000,
+    });
+  });
+
   it('shows a structured remediation state when cron is unavailable on the gateway', () => {
     mockUseCrons.mockReturnValue({
       jobs: [],
