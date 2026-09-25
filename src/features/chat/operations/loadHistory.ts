@@ -394,10 +394,9 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
 
   // Normal message (no tool calls, or non-assistant)
   let rawText = extractText(m);
-  const isCronInvocation = m.role === 'user' && (
-    m.provenance?.sourceTool === 'cron'
-    || /^\s*\[cron:[^\]\n]+\]/.test(rawText)
-  );
+  // Gateway projects cron inputs as assistant messages while retaining provenance.
+  const isCronInvocation = m.provenance?.sourceTool === 'cron'
+    || (m.role === 'user' && /^\s*\[cron:[^\]\n]+\]/.test(rawText));
 
   // Strip gateway decorations from user messages
   let isVoice = false;

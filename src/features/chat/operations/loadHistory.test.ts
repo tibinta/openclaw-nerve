@@ -83,6 +83,7 @@ describe('splitToolCallMessage', () => {
     expect(splitToolCallMessage({ role: 'user', content: '[cron:job-id Morning] Give an update' })[0].isCronInvocation).toBe(true);
     expect(splitToolCallMessage({ role: 'assistant', content: 'Here is the scheduled update.' })[0].isCronInvocation).toBeUndefined();
     expect(splitToolCallMessage({ role: 'user', content: 'Please edit the cron schedule' })[0].isCronInvocation).toBeUndefined();
+    expect(splitToolCallMessage({ role: 'assistant', content: 'Projected scheduled request', provenance: { kind: 'internal_system', sourceTool: 'cron' } })[0].isCronInvocation).toBe(true);
   });
   it('returns a single ChatMsg for simple text messages', () => {
     const msg: ChatMessage = { role: 'assistant', content: 'Simple response' };
