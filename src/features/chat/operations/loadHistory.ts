@@ -394,6 +394,10 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
 
   // Normal message (no tool calls, or non-assistant)
   let rawText = extractText(m);
+  const isCronInvocation = m.role === 'user' && (
+    m.provenance?.sourceTool === 'cron'
+    || /^\s*\[cron:[^\]\n]+\]/.test(rawText)
+  );
 
   // Strip gateway decorations from user messages
   let isVoice = false;
@@ -483,6 +487,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
 
   return [{
     role: m.role as ChatMsgRole,
+    ...(isCronInvocation ? { isCronInvocation: true } : {}),
     html: renderToolResults(renderMarkdown(visibleText)),
     rawText: visibleText,
     ...chatFailureMeta(m),

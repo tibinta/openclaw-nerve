@@ -105,6 +105,7 @@ export function generateMsgId(): string {
 }
 
 export interface ChatMsg {
+  isCronInvocation?: boolean;
   /** Stable unique ID for React keying — assigned once at creation, never changes. */
   msgId?: string;
   role: ChatMsgRole;

@@ -78,6 +78,12 @@ describe('filterMessage', () => {
 });
 
 describe('splitToolCallMessage', () => {
+  it('marks scheduled inputs for display filtering while keeping replies and normal requests', () => {
+    expect(splitToolCallMessage({ role: 'user', content: 'Scheduled request', provenance: { sourceTool: 'cron' } })[0].isCronInvocation).toBe(true);
+    expect(splitToolCallMessage({ role: 'user', content: '[cron:job-id Morning] Give an update' })[0].isCronInvocation).toBe(true);
+    expect(splitToolCallMessage({ role: 'assistant', content: 'Here is the scheduled update.' })[0].isCronInvocation).toBeUndefined();
+    expect(splitToolCallMessage({ role: 'user', content: 'Please edit the cron schedule' })[0].isCronInvocation).toBeUndefined();
+  });
   it('returns a single ChatMsg for simple text messages', () => {
     const msg: ChatMessage = { role: 'assistant', content: 'Simple response' };
     const result = splitToolCallMessage(msg);

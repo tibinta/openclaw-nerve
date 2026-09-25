@@ -119,6 +119,7 @@ export type ContentBlockType = 'text' | 'tool_use' | 'toolCall' | 'tool_result' 
 /** A single chat message (user, assistant, tool, or system). */
 export interface ChatMessage {
   role: ChatMessageRole;
+  provenance?: { kind?: string; sourceTool?: string };
   content: string | ContentBlock[];
   text?: string;
   errorMessage?: string;

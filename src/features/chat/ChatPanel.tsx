@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, type ReactNode } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback, forwardRef, useImperativeHandle, type ReactNode } from 'react';
 import type { ProcessingStage, ActivityLogEntry, ChatStreamState } from '@/contexts/ChatContext';
 import { ToolCallBlock } from './ToolCallBlock';
 import { MessageBubble } from './MessageBubble';
@@ -56,7 +56,7 @@ export interface ChatPanelHandle {
 
 /** Main chat panel with message list, infinite scroll, search, and input bar. */
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel({
-  messages,
+  messages: allMessages,
   onSend, onAbort, isGenerating, stream,
   processingStage,
   lastEventTimestamp = 0, currentToolDescription = null, activityLog = [],
@@ -68,6 +68,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
   approvalBanner,
   readOnly = false,
 }, ref) {
+  const [showCronInputs, setShowCronInputs] = useState(() => {
+    try { return localStorage.getItem('nerve.showCronInputs.v1') === 'true'; } catch { return false; }
+  });
+  const messages = useMemo(() => showCronInputs ? allMessages : allMessages.filter(message => !message.isCronInvocation), [allMessages, showCronInputs]);
+  const cronInputCount = allMessages.filter(message => message.isCronInvocation).length;
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const inputBarRef = useRef<InputBarHandle>(null);
@@ -268,6 +273,16 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
       )}
 
       {approvalBanner}
+
+      {cronInputCount > 0 && (
+        <button type="button" aria-pressed={showCronInputs} className="self-end px-3 py-1 text-xs text-muted-foreground hover:text-foreground" onClick={() => {
+          const next = !showCronInputs;
+          setShowCronInputs(next);
+          try { localStorage.setItem('nerve.showCronInputs.v1', String(next)); } catch { /* Keep the choice for this tab. */ }
+        }}>
+          {showCronInputs ? 'Hide scheduled prompts' : `Show scheduled prompts (${cronInputCount})`}
+        </button>
+      )}
 
       {/* Messages */}
       <div
