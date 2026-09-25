@@ -136,6 +136,22 @@ describe('ChatContext subscription stability', () => {
     }));
   });
 
+  it('keeps legacy Jane history read-only', async () => {
+    const { ChatProvider, useChat, rpcMock } = await setup({
+      currentSession: 'agent:jane-whitmore---ceo:main',
+    });
+    let send: ((text: string) => Promise<void>) | null = null;
+    function Consumer() {
+      const chat = useChat();
+      useEffect(() => { send = chat.handleSend; }, [chat]);
+      return null;
+    }
+    render(<ChatProvider><Consumer /></ChatProvider>);
+    await act(async () => { await send!('do not create a legacy turn'); });
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.send', expect.anything());
+    expect(rpcMock).not.toHaveBeenCalledWith('sessions.steer', expect.anything());
+  });
+
   it('speaks wake brief fast replies through the shared TTS path', async () => {
     const speak = vi.fn();
     const fetchMock = vi.fn().mockResolvedValue({

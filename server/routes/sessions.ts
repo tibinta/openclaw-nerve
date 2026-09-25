@@ -23,8 +23,8 @@ import { gatewayRpcCall } from '../lib/gateway-rpc.js';
 
 const app = new Hono();
 const CRON_SESSION_RE = /^agent:[^:]+:cron:[^:]+(?::run:.+)?$/;
-const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
-const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
+const PRIMARY_AGENT_SESSION_KEY = 'agent:main:main';
+const LEGACY_JANE_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
 const BULK_DELETE_BATCH_SIZE = 8;
 
 interface StoredSessionSummary {
@@ -68,7 +68,9 @@ function inferParentSessionKey(sessionKey: string): string | null {
 }
 
 function isProtectedRootSessionKey(sessionKey: string): boolean {
-  return sessionKey === PRIMARY_AGENT_SESSION_KEY || sessionKey === LEGACY_MAIN_SESSION_KEY;
+  return sessionKey === PRIMARY_AGENT_SESSION_KEY
+    || sessionKey === LEGACY_JANE_SESSION_KEY
+    || sessionKey.startsWith('agent:jane-whitmore---ceo:');
 }
 
 function normalizeSessionKeys(rawKeys: unknown): string[] {
@@ -434,7 +436,7 @@ const spawnSubagentSchema = z.object({
     .string()
     .min(1)
     .max(500)
-    .regex(/^agent:[^:]+:main$/, 'parentSessionKey must be a top-level root session key (agent:<id>:main)'),
+    .regex(/^agent:(?!jane-whitmore---ceo:)[^:]+:main$/, 'parentSessionKey must be a writable top-level root session key'),
   task: z.string().min(1).max(50_000),
   label: z.string().max(500).optional(),
   model: z.string().max(200).optional(),

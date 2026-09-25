@@ -29,6 +29,7 @@ const realtimeVoiceMockState = vi.hoisted(() => ({
   activity: null as { state: 'working' | 'complete' | 'error' } | null,
   isMicrophoneMuted: false,
   toggleMicrophoneMuted: vi.fn(),
+  unlockRealtimeSpeechPlayback: vi.fn(),
   start: vi.fn(async () => true),
   stop: vi.fn(),
   sendText: vi.fn(),
@@ -74,6 +75,7 @@ vi.mock('@/features/voice/useCodexRealtimeVoice', () => ({
     activity: realtimeVoiceMockState.activity,
     isMicrophoneMuted: realtimeVoiceMockState.isMicrophoneMuted,
     toggleMicrophoneMuted: realtimeVoiceMockState.toggleMicrophoneMuted,
+    unlockSpeechPlayback: realtimeVoiceMockState.unlockRealtimeSpeechPlayback,
     error: null,
     start: realtimeVoiceMockState.start,
     stop: realtimeVoiceMockState.stop,
@@ -378,7 +380,7 @@ describe('InputBar', () => {
     render(<InputBar onSend={vi.fn()} isGenerating={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Start GPT-Live voice' }));
 
-    expect(realtimeVoiceMockState.setCurrentSession).toHaveBeenCalledWith('agent:jane-whitmore---ceo:voice:direct:nerve-live');
+    expect(realtimeVoiceMockState.setCurrentSession).toHaveBeenCalledWith('agent:main:voice:direct:nerve-live');
     expect(settingsMockState.disableVoiceReadback).toHaveBeenCalled();
     expect(realtimeVoiceMockState.start).not.toHaveBeenCalled();
     frameQueue.shift()?.(16);

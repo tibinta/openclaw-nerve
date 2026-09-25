@@ -479,7 +479,7 @@ describe('gateway routes', () => {
       expect(json.thinking).toBe('high');
     });
 
-    it('prefers the Jane root over legacy main when both are present', async () => {
+    it('prefers main over the legacy Jane root when both are present', async () => {
       setDefaults();
       invokeGatewayImpl = (tool: string) => {
         if (tool === 'sessions_list') {
@@ -504,8 +504,8 @@ describe('gateway routes', () => {
       const res = await app.request('/api/gateway/session-info');
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
-      expect(json.model).toBe('anthropic/claude-opus-4');
-      expect(json.thinking).toBe('high');
+      expect(json.model).toBe('anthropic/claude-haiku-4');
+      expect(json.thinking).toBe('low');
     });
 
     it('returns empty object when gateway is unreachable', async () => {

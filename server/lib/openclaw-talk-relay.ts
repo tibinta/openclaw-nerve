@@ -4,7 +4,7 @@ import { config } from './config.js';
 import { gatewayRpcCall, subscribeGatewayEvents } from './gateway-rpc.js';
 import { extractJaneCanonicalFinal } from './codex-realtime-proxy.js';
 
-const SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
+const SESSION_KEY = 'agent:main:voice:direct:nerve-live';
 const MAX_MESSAGE_BYTES = 1024 * 1024;
 
 type RpcCall = typeof gatewayRpcCall;

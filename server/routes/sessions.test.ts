@@ -315,6 +315,16 @@ describe('sessions routes', () => {
     expect(String(json.error)).toContain('parentSessionKey');
   });
 
+  it('keeps legacy Jane history from starting new subagent work', async () => {
+    const app = await buildApp();
+    const res = await app.request('/api/sessions/spawn-subagent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parentSessionKey: 'agent:jane-whitmore---ceo:main', task: 'new work' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('rejects empty task string', async () => {
     const app = await buildApp();
     const res = await app.request('/api/sessions/spawn-subagent', {
@@ -430,6 +440,8 @@ describe('sessions routes', () => {
       body: JSON.stringify({
         keys: [
           'agent:main:main',
+          'agent:jane-whitmore---ceo:main',
+          'agent:jane-whitmore---ceo:imessage:direct:+447494722196',
           'agent:designer:main',
           'agent:designer:subagent:abc123',
           'agent:designer:main',
@@ -457,6 +469,10 @@ describe('sessions routes', () => {
     });
     expect(gatewayRpcCallMock).not.toHaveBeenCalledWith('sessions.delete', {
       key: 'agent:main:main',
+      deleteTranscript: true,
+    });
+    expect(gatewayRpcCallMock).not.toHaveBeenCalledWith('sessions.delete', {
+      key: 'agent:jane-whitmore---ceo:imessage:direct:+447494722196',
       deleteTranscript: true,
     });
   });

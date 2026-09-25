@@ -201,7 +201,7 @@ describe('buildSessionTree', () => {
     ]);
   });
 
-  it('prefers the Jane root ahead of legacy main when both roots exist', () => {
+  it('prefers main ahead of the legacy Jane root when both roots exist', () => {
     const sessions = [
       session('agent:main:main'),
       session('agent:jane-whitmore---ceo:main'),
@@ -210,8 +210,8 @@ describe('buildSessionTree', () => {
     const tree = buildSessionTree(sessions);
 
     expect(tree).toHaveLength(3);
-    expect(tree[0].key).toBe('agent:jane-whitmore---ceo:main');
-    expect(tree[1].key).toBe('agent:main:main');
+    expect(tree[0].key).toBe('agent:main:main');
+    expect(tree[1].key).toBe('agent:jane-whitmore---ceo:main');
     expect(tree[2].key).toBe('agent:reviewer:main');
   });
 
@@ -252,7 +252,7 @@ describe('buildAgentSidebarTree', () => {
     expect(tree).toHaveLength(1);
     expect(tree[0].kind).toBe('family');
     expect(tree[0].displayLabel).toBe('Jane Whitmore - CEO');
-    expect(tree[0].selectKey).toBe('agent:jane-whitmore---ceo:imessage:direct:+447494722196');
+    expect(tree[0].selectKey).toBe('agent:jane-whitmore---ceo:main');
     expect(flattenTree(tree, {}).map((node) => node.key)).toEqual([
       'family:jane-whitmore---ceo',
       'agent:jane-whitmore---ceo:imessage:direct:+447494722196',

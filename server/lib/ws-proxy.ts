@@ -87,6 +87,12 @@ function extractSessionKey(value: unknown): string | null {
     || (isRecord(value.params) ? extractSessionKey(value.params) : null);
 }
 
+export function isLegacyJaneWriteRequest(value: unknown): boolean {
+  if (!isRecord(value) || value.type !== 'req' || value.method === 'chat.history') return false;
+  const sessionKey = extractSessionKey(value);
+  return Boolean(sessionKey?.startsWith('agent:jane-whitmore---ceo:'));
+}
+
 function extractErrorText(value: unknown): string {
   if (!isRecord(value)) return typeof value === 'string' ? value : '';
   const parts: string[] = [];
@@ -602,6 +608,23 @@ export function createGatewayRelay(
   // Client → Gateway (attached once, references mutable gwWs)
   clientWs.on('message', (data: Buffer | string, isBinary: boolean) => {
     const clientData = relayPolicy ? normalizeJaneMobileClientFrame(data, isBinary) : data;
+    if (!isBinary) {
+      try {
+        const request = JSON.parse(clientData.toString()) as unknown;
+        if (isLegacyJaneWriteRequest(request)) {
+          const id = isRecord(request) ? request.id : undefined;
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'res',
+              id,
+              ok: false,
+              error: { code: -32000, message: 'Legacy Jane history is read-only.' },
+            }));
+          }
+          return;
+        }
+      } catch { /* pass malformed frames through to existing handling */ }
+    }
     if (janeMobileCronController?.handle(clientData, isBinary, (frame) => {
       if (clientWs.readyState === WebSocket.OPEN) clientWs.send(frame);
     })) return;

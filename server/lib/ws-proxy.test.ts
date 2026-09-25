@@ -51,7 +51,16 @@ vi.mock('./openclaw-bin.js', () => ({
   resolveOpenclawBin: vi.fn(() => '/usr/bin/echo'),
 }));
 
-import { setupWebSocketProxy, closeAllWebSockets, _internals } from './ws-proxy.js';
+import { setupWebSocketProxy, closeAllWebSockets, _internals, isLegacyJaneWriteRequest } from './ws-proxy.js';
+
+describe('legacy Jane history write guard', () => {
+  it('allows history reads and rejects writes to old Jane sessions', () => {
+    expect(isLegacyJaneWriteRequest({ type: 'req', id: 'read', method: 'chat.history', params: { sessionKey: 'agent:jane-whitmore---ceo:main' } })).toBe(false);
+    expect(isLegacyJaneWriteRequest({ type: 'req', id: 'send', method: 'chat.send', params: { sessionKey: 'agent:jane-whitmore---ceo:main' } })).toBe(true);
+    expect(isLegacyJaneWriteRequest({ type: 'req', id: 'reset', method: 'sessions.reset', params: { key: 'agent:jane-whitmore---ceo:main' } })).toBe(true);
+    expect(isLegacyJaneWriteRequest({ type: 'req', id: 'new', method: 'chat.send', params: { sessionKey: 'agent:main:main' } })).toBe(false);
+  });
+});
 import { config } from './config.js';
 import { verifySession, parseSessionCookie } from './session.js';
 import { createDeviceBlock } from './device-identity.js';
@@ -353,7 +362,7 @@ describe('ws-proxy', () => {
     });
 
     it('rotates a chat session binding after an invalid encrypted content response', async () => {
-      const sessionKey = 'agent:jane-whitmore---ceo:imessage:direct:+447494722196';
+      const sessionKey = 'agent:main:imessage:direct:+447494722196';
       const previousSessionId = '026b3a95-9d15-47ba-a3bf-a18f0fa0598e';
       await fs.writeFile(path.join(config.sessionsDir, 'sessions.json'), JSON.stringify({
         [sessionKey]: {
@@ -426,7 +435,7 @@ describe('ws-proxy', () => {
     });
 
     it('rotates when invalid encrypted content is embedded in a successful chat response', async () => {
-      const sessionKey = 'agent:jane-whitmore---ceo:imessage:direct:+447494722196';
+      const sessionKey = 'agent:main:imessage:direct:+447494722196';
       const previousSessionId = '14c6df3a-8e87-420a-a06b-30adf9732b88';
       await fs.writeFile(path.join(config.sessionsDir, 'sessions.json'), JSON.stringify({
         [sessionKey]: {
@@ -1120,7 +1129,7 @@ describe('Jane mobile internal bridge', () => {
       params: {
         minProtocol: 4, maxProtocol: 4,
         client: { id: 'jane-mobile-bridge', version: '1.0.0', platform: 'server', mode: 'webchat', instanceId: 'test' },
-        role: 'operator', scopes: ['operator.read', 'operator.write'], auth: {}, caps: ['tool-events'],
+        role: 'operator', scopes: ['operator.read', 'operator.write', 'operator.approvals'], auth: {}, caps: ['tool-events'],
       },
     }));
     await waitForCondition(() => gateway.received.some(({ data }) => {
@@ -1134,7 +1143,7 @@ describe('Jane mobile internal bridge', () => {
     ws.send(JSON.stringify({
       type: 'req', id: 'send-1', method: 'chat.send',
       params: {
-        sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+        sessionKey: 'agent:main:voice:direct:nerve-live',
         message: 'hello Jane', deliver: false, idempotencyKey: 'idem-1',
       },
     }));
@@ -1143,7 +1152,7 @@ describe('Jane mobile internal bridge', () => {
     const finalEvent = waitForMessage(ws);
     gateway.broadcast(JSON.stringify({
       type: 'event', event: 'chat',
-      payload: { sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', message: { role: 'assistant', content: 'done' } },
+      payload: { sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', message: { role: 'assistant', content: 'done' } },
     }));
     expect(JSON.parse(await finalEvent)).toMatchObject({
       type: 'event', event: 'chat', payload: { state: 'final' },

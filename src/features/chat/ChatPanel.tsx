@@ -47,6 +47,7 @@ interface ChatPanelProps {
   pathLinkPrefixes?: string[];
   /** High-priority approvals that must stay visible while the user is in chat. */
   approvalBanner?: ReactNode;
+  readOnly?: boolean;
 }
 
 export interface ChatPanelHandle {
@@ -65,6 +66,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
   onOpenWorkspacePath,
   pathLinkPrefixes,
   approvalBanner,
+  readOnly = false,
 }, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -243,7 +245,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
     <div id={id} className="h-full flex flex-col border-r border-border min-w-0 relative">
       {/* COMMS Header */}
       <ChatHeader
-        onReset={onReset}
+        onReset={readOnly ? undefined : onReset}
         onAbort={onAbort}
         isGenerating={isGenerating}
         onToggleFileBrowser={onToggleFileBrowser}
@@ -379,13 +381,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
       )}
 
       {/* Input area */}
-      <InputBar
+      {readOnly ? <div className="border-t border-border px-4 py-3 text-center text-xs text-muted-foreground">Legacy Jane history · read-only</div> : <InputBar
         ref={inputBarRef}
         onSend={onSend}
         isGenerating={isGenerating}
         onWakeWordState={onWakeWordState}
         agentName={agentName}
-      />
+      />}
 
     </div>
   );

@@ -143,10 +143,10 @@ describe('SessionList live tree', () => {
   it('uses the registry name for the family row and keeps Jane direct as the child session', () => {
     const sessions: Session[] = [
       { sessionKey: 'agent:jane-whitmore---ceo:main', label: 'heartbeat', lastActivity: Date.now() - 5 * 60_000, updatedAt: Date.now() - 5 * 60_000, state: 'running', processing: true },
-      { sessionKey: 'agent:jane-whitmore---ceo:imessage:direct:+447494722196', label: 'Jane Whitmore - CEO', lastActivity: Date.now() - 2 * 60_000, updatedAt: Date.now() - 2 * 60_000, state: 'idle' },
+      { sessionKey: 'agent:main:imessage:direct:+447494722196', label: 'Jane Whitmore - CEO', lastActivity: Date.now() - 2 * 60_000, updatedAt: Date.now() - 2 * 60_000, state: 'idle' },
     ];
     const agents: GatewayAgentRegistration[] = [
-      { id: 'jane-whitmore---ceo', name: 'Jane Registry' },
+      { id: 'main', name: 'Jane Registry' },
     ];
 
     renderSessionList({ sessions, agents });
@@ -175,11 +175,11 @@ describe('SessionList live tree', () => {
 
   it('renders one Jane Nerve Live row when direct and heartbeat records coexist', () => {
     const sessions: Session[] = [
-      { sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', label: 'Nerve Live', status: 'idle', updatedAt: Date.now() },
-      { sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live:heartbeat', label: 'heartbeat', status: 'idle', updatedAt: Date.now() - 1_000 },
+      { sessionKey: 'agent:main:voice:direct:nerve-live', label: 'Nerve Live', status: 'idle', updatedAt: Date.now() },
+      { sessionKey: 'agent:main:voice:direct:nerve-live:heartbeat', label: 'heartbeat', status: 'idle', updatedAt: Date.now() - 1_000 },
     ];
 
-    renderSessionList({ sessions, agents: [{ id: 'jane-whitmore---ceo', identityName: 'Jane Whitmore - CEO' }] });
+    renderSessionList({ sessions, agents: [{ id: 'main', identityName: 'Jane Whitmore - CEO' }] });
 
     expect(screen.getAllByText('nerve-live')).toHaveLength(1);
   });

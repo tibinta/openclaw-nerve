@@ -42,7 +42,7 @@ import { SpawnAgentDialog } from '@/features/sessions/SpawnAgentDialog';
 import { DEFAULT_CHAT_PATH_LINKS_CONFIG, parseChatPathLinksConfig } from '@/features/chat/chatPathLinks';
 import { FileTreePanel, TabbedContentArea, useOpenFiles, type FileTreeChangeEvent } from '@/features/file-browser';
 import { isImageFile } from '@/features/file-browser/utils/fileTypes';
-import { buildAgentRootSessionKey, getSessionDisplayLabel, JANE_DIRECT_CHAT_SESSION_KEY, JANE_LIVE_VOICE_SESSION_KEY } from '@/features/sessions/sessionKeys';
+import { buildAgentRootSessionKey, getSessionDisplayLabel, isLegacyJaneSessionKey, JANE_DIRECT_CHAT_SESSION_KEY, JANE_LIVE_VOICE_SESSION_KEY } from '@/features/sessions/sessionKeys';
 import { shouldGuardWorkspaceSwitch } from '@/features/workspace/workspaceSwitchGuard';
 import { getWorkspaceAgentId, getWorkspaceRootSessionKey } from '@/features/workspace/workspaceScope';
 import { ProposalInbox } from '@/features/kanban/ProposalInbox';
@@ -779,6 +779,7 @@ export default function App({ onLogout }: AppProps) {
     ? saveToast
     : null;
   const isLiveVoiceSession = currentSession === JANE_LIVE_VOICE_SESSION_KEY;
+  const isLegacyJaneHistory = isLegacyJaneSessionKey(currentSession);
   const backgroundWorkCount = isLiveVoiceSession
     ? Object.entries(busyState).filter(([sessionKey, busy]) => busy && sessionKey !== JANE_LIVE_VOICE_SESSION_KEY).length
     : 0;
@@ -826,6 +827,7 @@ export default function App({ onLogout }: AppProps) {
             onOpenWorkspacePath={openWorkspacePath}
             pathLinkPrefixes={chatPathLinkPrefixes}
             isLiveVoiceSession={isLiveVoiceSession}
+            readOnly={isLegacyJaneHistory}
             backgroundWorkCount={backgroundWorkCount}
             approvalBanner={
               <ApprovalBanner

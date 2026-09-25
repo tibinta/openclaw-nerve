@@ -18,11 +18,11 @@ import {
 describe('Codex realtime boundary', () => {
   it('extracts one useful canonical gateway final and suppresses NO_REPLY', () => {
     expect(extractJaneCanonicalFinal({
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', runId: 'run-1',
+      sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', runId: 'run-1',
       messages: [{ role: 'assistant', content: [{ text: '  Buna, Alex.  ' }] }],
     })).toEqual({ key: 'jane:run-1', text: 'Buna, Alex.', runId: 'run-1' });
     expect(extractJaneCanonicalFinal({
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', content: 'NO_REPLY',
+      sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', content: 'NO_REPLY',
     })).toBeNull();
     expect(extractJaneCanonicalFinal({ sessionKey: 'agent:other', state: 'final', content: 'ignore' })).toBeNull();
   });

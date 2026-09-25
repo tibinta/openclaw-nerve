@@ -50,8 +50,7 @@ interface GatewaySessionSummary {
   thinkingLevel?: string;
 }
 
-const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
-const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
+const PRIMARY_AGENT_SESSION_KEY = 'agent:main:main';
 
 // ─── Model catalog via active OpenClaw config ──────────────────────────────────
 
@@ -307,9 +306,6 @@ function isTopLevelAgentSessionKey(sessionKey: string): boolean {
 function pickPreferredSessionKey(sessions: GatewaySessionSummary[]): string {
   const preferredRoot = sessions.find((session) => getGatewaySessionKey(session) === PRIMARY_AGENT_SESSION_KEY);
   if (preferredRoot) return PRIMARY_AGENT_SESSION_KEY;
-
-  const explicitMain = sessions.find((session) => getGatewaySessionKey(session) === LEGACY_MAIN_SESSION_KEY);
-  if (explicitMain) return LEGACY_MAIN_SESSION_KEY;
 
   const firstRoot = sessions.find((session) => isTopLevelAgentSessionKey(getGatewaySessionKey(session)));
   if (firstRoot) return getGatewaySessionKey(firstRoot);

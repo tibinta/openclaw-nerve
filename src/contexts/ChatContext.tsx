@@ -24,6 +24,7 @@ import {
   JANE_LIVE_VOICE_SESSION_KEY,
   getRootAgentSessionKey,
   isRootChildSession,
+  isLegacyJaneSessionKey,
   isSubagentSessionKey,
   pickDefaultSessionKey,
 } from '@/features/sessions/sessionKeys';
@@ -876,6 +877,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     uploadPayload?: OutgoingUploadPayload,
     source: 'text' | 'live-voice' = 'text',
   ) => {
+    if (source !== 'live-voice' && isLegacyJaneSessionKey(currentSessionRef.current)) {
+      appendSystemMessage('This Jane history is read-only. Open Jane chat to start a new conversation.');
+      return;
+    }
     let outboundText = text;
     let outboundImages = images;
     let outboundUploadPayload = uploadPayload;
@@ -1244,11 +1249,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [rpc]);
 
   const handleReset = useCallback(() => {
+    if (isLegacyJaneSessionKey(currentSessionRef.current)) return;
     setShowResetConfirm(true);
   }, []);
 
   const confirmReset = useCallback(async () => {
     setShowResetConfirm(false);
+    if (isLegacyJaneSessionKey(currentSessionRef.current)) return;
     try {
       await rpc('sessions.reset', { key: currentSessionRef.current });
       if (currentSessionRef.current === JANE_LIVE_VOICE_SESSION_KEY) {

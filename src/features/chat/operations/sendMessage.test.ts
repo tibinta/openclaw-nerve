@@ -348,7 +348,7 @@ describe('sendChatMessage', () => {
 
     await sendChatMessage({
       rpc,
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      sessionKey: 'agent:main:voice:direct:nerve-live',
       text: 'Please inspect the target board',
       idempotencyKey: 'voice-1',
       thinking: 'low',
@@ -383,7 +383,7 @@ describe('sendChatMessage', () => {
 
     await sendChatMessage({
       rpc,
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      sessionKey: 'agent:main:voice:direct:nerve-live',
       text: 'Și după aceea?',
       idempotencyKey: 'voice-2',
       liveVoiceCoordinator: true,
@@ -399,7 +399,7 @@ describe('sendChatMessage', () => {
 
     await sendChatMessage({
       rpc,
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      sessionKey: 'agent:main:voice:direct:nerve-live',
       text: '[voice] da',
       idempotencyKey: 'voice-3',
       liveVoiceCoordinator: true,
@@ -415,7 +415,7 @@ describe('sendChatMessage', () => {
 
     await sendChatMessage({
       rpc,
-      sessionKey: 'agent:jane-whitmore---ceo:imessage:direct:+447494722196',
+      sessionKey: 'agent:main:imessage:direct:+447494722196',
       text: 'What are our targets from configs?',
       idempotencyKey: 'k1',
       thinking: 'off',

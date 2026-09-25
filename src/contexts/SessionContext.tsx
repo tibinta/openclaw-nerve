@@ -11,10 +11,10 @@ import { buildAgentSidebarTree, buildSessionTree } from '@/features/sessions/ses
 import {
   buildAgentRootSessionKey,
   getAgentRegistrationName,
-  LEGACY_MAIN_SESSION_KEY,
   JANE_DIRECT_CHAT_SESSION_KEY,
   JANE_LIVE_VOICE_SESSION_KEY,
   PRIMARY_AGENT_SESSION_KEY,
+  LEGACY_JANE_SESSION_KEY,
   getRootAgentSessionKey,
   getSessionDisplayLabel,
   getTopLevelAgentSessions,
@@ -114,7 +114,9 @@ export function isSessionActivelyBusy(session: Session | undefined, granularBusy
 }
 
 function isProtectedRootSessionKey(sessionKey: string): boolean {
-  return sessionKey === PRIMARY_AGENT_SESSION_KEY || sessionKey === LEGACY_MAIN_SESSION_KEY;
+  return sessionKey === PRIMARY_AGENT_SESSION_KEY
+    || sessionKey === LEGACY_JANE_SESSION_KEY
+    || sessionKey.startsWith('agent:jane-whitmore---ceo:');
 }
 
 function deriveGranularStatusFromSession(session: Session): GranularAgentState | null {

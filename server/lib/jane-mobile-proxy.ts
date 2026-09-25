@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { isJaneMobileCronControlRequest } from './jane-mobile-cron-control.js';
 
-export const JANE_LIVE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
-const JANE_CRON_SESSION_PREFIX = 'agent:jane-whitmore---ceo:cron:gated:';
-const JANE_AGENT_ID = 'jane-whitmore---ceo';
+export const JANE_LIVE_SESSION_KEY = 'agent:main:voice:direct:nerve-live';
+const JANE_CRON_SESSION_PREFIX = 'agent:main:cron:gated:';
+const JANE_AGENT_ID = 'main';
 const MAX_MESSAGE_CHARS = 64_000;
 const MAX_HISTORY_LIMIT = 20;
 const MAX_ATTACHMENTS = 5;

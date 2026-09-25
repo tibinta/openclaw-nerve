@@ -54,19 +54,19 @@ describe('OpenClaw Talk relay', () => {
       message: { role: 'assistant', content: 'Ignore another session' },
     } });
     emitEvent({ type: 'event', event: 'chat', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', message_id: 'cron-1',
+      sessionKey: 'agent:main:voice:direct:nerve-live', state: 'final', message_id: 'cron-1',
       message: { role: 'assistant', content: 'Cron result in the Jane conversation' },
     } });
     emitEvent({ event: 'session.message', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', messageId: 'cron-1',
+      sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'cron-1',
       message: { role: 'assistant', content: 'Cron result in the Jane conversation' },
     } });
     emitEvent({ event: 'session.message', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', messageId: 'cron-2',
+      sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'cron-2',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Assistant result from a one-shot job' }] },
     } });
     emitEvent({ event: 'session.message', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', messageId: 'user-1',
+      sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'user-1',
       message: { role: 'user', content: 'Never project this as Jane' },
     } });
     emitEvent({ event: 'talk.event', payload: { voiceSessionId: 'own', talkEvent: {
@@ -119,7 +119,7 @@ describe('OpenClaw Talk relay', () => {
     expect(client.sent.at(-1)?.params.message).toMatch(/Typed text is unavailable/);
     client.receive('thread/realtime/stop');
     await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.client.close', {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', voiceSessionId: 'own',
+      sessionKey: 'agent:main:voice:direct:nerve-live', voiceSessionId: 'own',
     }));
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
@@ -141,20 +141,20 @@ describe('OpenClaw Talk relay', () => {
       type: 'output.text.done', payload: { text: 'Live reply', entryId: 'voice-1' },
     } } });
     emitEvent({ event: 'chat', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      sessionKey: 'agent:main:voice:direct:nerve-live',
       state: 'final', runId: 'talk-realtime-consult:voice-1', message_id: 'consult-1',
       message: { role: 'assistant', content: 'Live reply' },
     } });
     emitEvent({ event: 'session.message', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', messageId: 'consult-1',
+      sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'consult-1',
       message: { role: 'assistant', content: 'Live reply', __openclaw: { runId: 'talk-realtime-consult:voice-1' } },
     } });
     emitEvent({ event: 'session.message', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', messageId: 'voice-1',
+      sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'voice-1',
       message: { role: 'assistant', content: 'Live reply', provenance: { kind: 'realtime_voice' } },
     } });
     emitEvent({ event: 'session.message', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', messageId: 'voice-2',
+      sessionKey: 'agent:main:voice:direct:nerve-live', messageId: 'voice-2',
       message: { role: 'assistant', content: 'Live reply' }, provenance: { kind: 'realtime_voice' },
     } });
     expect(client.sent.filter((item) => item.method === 'thread/realtime/transcript/done'))
@@ -164,7 +164,7 @@ describe('OpenClaw Talk relay', () => {
     expect(rpc).not.toHaveBeenCalledWith('talk.speak', expect.anything(), expect.anything());
 
     emitEvent({ event: 'chat', payload: {
-      sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+      sessionKey: 'agent:main:voice:direct:nerve-live',
       state: 'final', message_id: 'typed-1', message: { role: 'assistant', content: 'Typed reply' },
     } });
     await vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('talk.speak', { text: 'Typed reply' }, 30_000));

@@ -1,10 +1,10 @@
 import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 
-export const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
-export const JANE_DIRECT_CHAT_SESSION_KEY = 'agent:jane-whitmore---ceo:imessage:direct:+447494722196';
-export const JANE_LIVE_VOICE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
-export const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
+export const PRIMARY_AGENT_SESSION_KEY = 'agent:main:main';
+export const JANE_DIRECT_CHAT_SESSION_KEY = 'agent:main:imessage:direct:+447494722196';
+export const JANE_LIVE_VOICE_SESSION_KEY = 'agent:main:voice:direct:nerve-live';
+export const LEGACY_JANE_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
 const HEARTBEAT_SUFFIX = ':heartbeat';
 
 const ROOT_AGENT_RE = /^agent:([^:]+):main$/;
@@ -15,6 +15,10 @@ const DIRECT_RE = /^((?:agent:[^:]+))(?::[^:]+)*:direct:.+$/;
 const CHANNEL_RE = /^((?:agent:[^:]+))(?::[^:]+)*:channel:.+$/;
 
 export type SessionType = 'main' | 'subagent' | 'cron' | 'cron-run';
+
+export function isLegacyJaneSessionKey(sessionKey: string): boolean {
+  return sessionKey === LEGACY_JANE_SESSION_KEY || sessionKey.startsWith('agent:jane-whitmore---ceo:');
+}
 
 function slugifyPart(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -221,8 +225,8 @@ export function getTopLevelAgentSessions(sessions: Session[]): Session[] {
     const keyB = getSessionKey(b);
     if (keyA === PRIMARY_AGENT_SESSION_KEY) return -1;
     if (keyB === PRIMARY_AGENT_SESSION_KEY) return 1;
-    if (keyA === LEGACY_MAIN_SESSION_KEY) return -1;
-    if (keyB === LEGACY_MAIN_SESSION_KEY) return 1;
+    if (keyA === LEGACY_JANE_SESSION_KEY) return 1;
+    if (keyB === LEGACY_JANE_SESSION_KEY) return -1;
 
     const labelA = getSessionDisplayLabel(a).toLowerCase();
     const labelB = getSessionDisplayLabel(b).toLowerCase();
@@ -234,7 +238,7 @@ export function getSessionDisplayLabel(session: Session, agentName = 'Agent'): s
   const sessionKey = getSessionKey(session);
   const normalizedKey = normalizeSessionKey(sessionKey);
 
-  if (normalizedKey === PRIMARY_AGENT_SESSION_KEY || normalizedKey === LEGACY_MAIN_SESSION_KEY) {
+  if (normalizedKey === PRIMARY_AGENT_SESSION_KEY) {
     return `${agentName} (main)`;
   }
 

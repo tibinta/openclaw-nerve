@@ -12,7 +12,7 @@ import {
   isAllowedJaneMobileApprovalRequest,
 } from './jane-mobile-proxy.js';
 
-const sessionKey = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
+const sessionKey = 'agent:main:voice:direct:nerve-live';
 
 function chatSend(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -291,7 +291,7 @@ describe('Jane mobile relay policy', () => {
     const frame = policy.gatewayFrame(JSON.stringify({
       type: 'event', event: 'exec.approval.requested', payload: {
         id: 'cron-approval', createdAtMs: 1, expiresAtMs: 2,
-        request: { sessionKey: 'agent:jane-whitmore---ceo:cron:gated:mentoring', command: 'echo safe' },
+        request: { sessionKey: 'agent:main:cron:gated:mentoring', command: 'echo safe' },
       },
     }), false);
     expect(JSON.parse(String(frame))).toMatchObject({ event: 'exec.approval.requested', payload: { id: 'cron-approval' } });

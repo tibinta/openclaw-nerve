@@ -295,9 +295,9 @@ function getSessionFamilyId(
 }
 
 function pickFamilySelectionKey(familyId: string, members: Session[]): string {
-  const janeFamilyId = getRootAgentId('agent:jane-whitmore---ceo:main');
-  if (familyId === janeFamilyId) {
-    const janeDirect = members.find((session) => getSessionKey(session) === 'agent:jane-whitmore---ceo:imessage:direct:+447494722196');
+  const mainFamilyId = getRootAgentId(PRIMARY_AGENT_SESSION_KEY);
+  if (familyId === mainFamilyId) {
+    const janeDirect = members.find((session) => getSessionKey(session) === 'agent:main:imessage:direct:+447494722196');
     if (janeDirect) return getSessionKey(janeDirect);
   }
 

@@ -79,7 +79,7 @@ function textFromContent(value: unknown): string {
 }
 
 export function extractJaneCanonicalFinal(payload: Record<string, unknown>): JaneCanonicalFinal | null {
-  if (payload.sessionKey !== 'agent:jane-whitmore---ceo:voice:direct:nerve-live' || payload.state !== 'final') return null;
+  if (payload.sessionKey !== 'agent:main:voice:direct:nerve-live' || payload.state !== 'final') return null;
   const text = (Array.isArray(payload.messages)
     ? [...payload.messages].reverse().find((message) => isRecord(message) && message.role === 'assistant')
     : payload.message) as unknown;
