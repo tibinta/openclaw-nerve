@@ -19,6 +19,21 @@ function deferred<T>() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('useProposals decisions', () => {
+  it('ignores an aborted older response even when fetch resolves it anyway', async () => {
+    const older = deferred<ReturnType<typeof response>>();
+    const fetchMock = vi.fn()
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(response({ proposals: [proposal('fresh')] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useProposals());
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.proposals.map((row) => row.id)).toEqual(['fresh']);
+    older.resolve(response({ proposals: [proposal('stale')] }));
+    await act(async () => { await older.promise; });
+    expect(result.current.proposals.map((row) => row.id)).toEqual(['fresh']);
+  });
+
   it('hides one of 2001 rows immediately, blocks duplicate submits, and ignores stale polls', async () => {
     const rows = Array.from({ length: 2001 }, (_, index) => proposal(`p${index}`, index));
     const approval = deferred<ReturnType<typeof response>>();

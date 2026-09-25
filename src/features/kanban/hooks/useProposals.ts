@@ -53,6 +53,7 @@ export function useProposals() {
       const res = await fetch('/api/kanban/proposals?status=pending', { signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: ProposalsResponse = await res.json();
+      if (controller.signal.aborted) return;
       const returnedIds = new Set(data.proposals.map((proposal) => proposal.id));
       for (const id of hiddenRef.current) {
         if (!actingRef.current.has(id) && !returnedIds.has(id)) hiddenRef.current.delete(id);
