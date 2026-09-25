@@ -17,7 +17,7 @@ export type TaskPriority = 'critical' | 'high' | 'normal' | 'low';
  * Default column display order used as a fallback before the board config loads.
  * Consumers should prefer `config.columns` from useKanban() over this constant.
  */
-export const COLUMNS: TaskStatus[] = ['backlog', 'todo', 'in-progress', 'review', 'done'];
+export const COLUMNS: TaskStatus[] = ['in-progress', 'review', 'todo', 'backlog', 'done', 'cancelled'];
 
 /** Split-lane workflow groups used by the redesigned tasks view. */
 export const WORKFLOW_QUEUE_STATUSES = ['backlog', 'todo'] as const;
