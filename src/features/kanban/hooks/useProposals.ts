@@ -96,12 +96,28 @@ export function useProposals() {
     setProposals((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
+  const rejectBackgroundProposals = useCallback(async (proposalIds: string[]) => {
+    const res = await fetch('/api/kanban/proposals/reject-background', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proposalIds }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.details || body.error || `HTTP ${res.status}`);
+    }
+    const data: { rejectedCount: number } = await res.json();
+    await fetchProposals();
+    return data.rejectedCount;
+  }, [fetchProposals]);
+
   return {
     proposals,
     pendingCount,
     loading,
     approveProposal,
     rejectProposal,
+    rejectBackgroundProposals,
     refetch: fetchProposals,
   };
 }
