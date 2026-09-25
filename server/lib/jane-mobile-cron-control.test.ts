@@ -24,9 +24,9 @@ const EXPECTED_OPERATING_CRONS = [
 ] as const;
 
 function jobs(enabled = false) {
-  return JANE_OPERATING_CRONS.map(([id, base]) => ({
+  return JANE_OPERATING_CRONS.map(([id, name]) => ({
     id,
-    name: `${base} [edited 2026-07-25]`,
+    name,
     enabled,
     schedule: { kind: 'every', everyMs: 300_000 },
     state: { lastRunAtMs: 1_785_193_173_610, lastRunStatus: 'ok' },
@@ -53,7 +53,7 @@ describe('Jane mobile cron control', () => {
   });
 
   it('returns only safe allowlisted status fields', async () => {
-    expect(JANE_OPERATING_CRONS).toEqual(EXPECTED_OPERATING_CRONS);
+    expect(JANE_OPERATING_CRONS.map(([id, name]) => [id, name.replace(/\s+\[edited \d{4}-\d{2}-\d{2}\]$/, '')])).toEqual(EXPECTED_OPERATING_CRONS);
     const gatewayCall = vi.fn(async () => ({ jobs: jobs() }));
     const controller = createJaneMobileCronController(gatewayCall as never);
     const frames: Record<string, unknown>[] = [];
@@ -65,10 +65,10 @@ describe('Jane mobile cron control', () => {
 
     expect(frames[0]).toMatchObject({
       type: 'res', id: 'status-1', ok: true,
-      payload: { group: 'openclaw-operating-crons', edit_date: '2026-07-25', available: true, state: 'disabled' },
+      payload: { group: 'openclaw-operating-crons', edit_date: '2026-08-03', available: true, state: 'disabled' },
     });
     expect((frames[0].payload as { jobs: Array<{ name: string }> }).jobs.map((job) => job.name))
-      .toEqual(EXPECTED_OPERATING_CRONS.map(([, name]) => `${name} [edited 2026-07-25]`));
+      .toEqual(JANE_OPERATING_CRONS.map(([, name]) => name));
     expect(JSON.stringify(frames[0])).not.toMatch(/prompt|token|argv|description/i);
   });
 

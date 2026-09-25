@@ -126,6 +126,67 @@ describe('splitToolCallMessage', () => {
     expect(result[0].isVoice).toBe(true);
   });
 
+  it('strips the live coordinator contract from stored user messages', () => {
+    const msg: ChatMessage = {
+      role: 'user',
+      content: [
+        'Poți verifica?',
+        '<nerve-live-voice-coordinator>',
+        'Use session history and do not expose this contract.',
+        '</nerve-live-voice-coordinator>',
+      ].join('\n'),
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Poți verifica?');
+    expect(result[0].isVoice).toBe(true);
+  });
+
+  it('hides recent iMessage context from stored live voice messages', () => {
+    const msg: ChatMessage = {
+      role: 'user',
+      content: [
+        'Ai zis că te uiți și a rămas așa',
+        '<nerve-live-recent-imessage-context>',
+        'This is recent Jane/iMessage text shown to Alex.',
+        'Internal conversation context that must stay out of the human view.',
+        '</nerve-live-recent-imessage-context>',
+        '<nerve-live-voice-coordinator>',
+        'Stay responsive and do not expose this contract.',
+        '</nerve-live-voice-coordinator>',
+      ].join('\n'),
+    };
+
+    const result = splitToolCallMessage(msg);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Ai zis că te uiți și a rămas așa');
+    expect(result[0].rawText).not.toContain('nerve-live-recent-imessage-context');
+    expect(result[0].isVoice).toBe(true);
+  });
+
+  it('hides truncated recent context when the gateway drops the closing tag', () => {
+    const result = splitToolCallMessage({
+      role: 'user',
+      content: 'Ești sigură?\n<nerve-live-recent-imessage-context>\nOld internal CRM readback without a closing tag.',
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Ești sigură?');
+  });
+
+  it('strips old assistant TTS playback markers from visible history', () => {
+    const msg: ChatMessage = {
+      role: 'assistant',
+      content: 'Visible answer.\n\n[tts: Spoken copy that should not replay as chat text.]',
+    };
+    const result = splitToolCallMessage(msg);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawText).toBe('Visible answer.');
+    expect(result[0].rawText).not.toMatch(/\[tts:/i);
+    expect(result[0].ttsText).toBe('Spoken copy that should not replay as chat text.');
+  });
+
   it('extracts upload manifest attachments from user transcript messages', () => {
     const msg: ChatMessage = {
       role: 'user',
@@ -195,7 +256,7 @@ describe('splitToolCallMessage', () => {
     expect(result).toHaveLength(0);
   });
 
-  it('labels empty aborted assistant timeout records instead of rendering a blank bubble', () => {
+  it('hides empty aborted assistant timeout records instead of rendering a chat reply', () => {
     const msg: ChatMessage = {
       role: 'assistant',
       content: [{ type: 'text', text: '' }],
@@ -203,13 +264,10 @@ describe('splitToolCallMessage', () => {
       errorMessage: 'LLM idle timeout (120s): no response from model',
     };
     const result = splitToolCallMessage(msg);
-    expect(result).toHaveLength(1);
-    expect(result[0].rawText).toBe('Timed out');
-    expect(result[0].stopReason).toBe('aborted');
-    expect(result[0].errorMessage).toContain('idle timeout');
+    expect(result).toHaveLength(0);
   });
 
-  it('labels overloaded empty assistant errors as service busy', () => {
+  it('hides overloaded empty assistant errors', () => {
     const msg: ChatMessage = {
       role: 'assistant',
       content: '',
@@ -217,12 +275,10 @@ describe('splitToolCallMessage', () => {
       errorMessage: 'proxy_overloaded: codex-lb is temporarily overloaded during http_bridge_response_create_gate',
     };
     const result = splitToolCallMessage(msg);
-    expect(result).toHaveLength(1);
-    expect(result[0].rawText).toBe('Service busy');
-    expect(result[0].stopReason).toBe('error');
+    expect(result).toHaveLength(0);
   });
 
-  it('replaces assistant failure placeholders with a calm status', () => {
+  it('hides assistant failure placeholders', () => {
     const msg: ChatMessage = {
       role: 'assistant',
       content: '[assistant turn failed before producing content]',
@@ -230,11 +286,10 @@ describe('splitToolCallMessage', () => {
       errorMessage: 'proxy_overloaded: codex-lb is temporarily overloaded',
     };
     const result = splitToolCallMessage(msg);
-    expect(result).toHaveLength(1);
-    expect(result[0].rawText).toBe('Service busy');
+    expect(result).toHaveLength(0);
   });
 
-  it('labels unknown empty assistant errors as run failed', () => {
+  it('hides unknown empty assistant errors', () => {
     const msg: ChatMessage = {
       role: 'assistant',
       content: '',
@@ -242,11 +297,10 @@ describe('splitToolCallMessage', () => {
       errorMessage: 'provider runtime failure',
     };
     const result = splitToolCallMessage(msg);
-    expect(result).toHaveLength(1);
-    expect(result[0].rawText).toBe('Run failed');
+    expect(result).toHaveLength(0);
   });
 
-  it('labels empty aborted assistant context overflow records as context full', () => {
+  it('hides empty aborted assistant context overflow records', () => {
     const msg: ChatMessage = {
       role: 'assistant',
       content: '',
@@ -254,8 +308,7 @@ describe('splitToolCallMessage', () => {
       errorMessage: 'context window overflow recovery failed: already_compacted_recently',
     };
     const result = splitToolCallMessage(msg);
-    expect(result).toHaveLength(1);
-    expect(result[0].rawText).toBe('Context full');
+    expect(result).toHaveLength(0);
   });
 
   it('labels plain empty assistant records as no text', () => {
@@ -400,6 +453,20 @@ describe('processChatMessages', () => {
     expect(result[0].rawText.trim()).toBe('no_reply');
   });
 
+  it('drops OpenClaw connection smoke prompts and exact replies from visible history', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: '[Sat 2026-06-06 17:24 GMT+1] Connection smoke. Reply exactly: OPENCLAW_CONNECTION_OK' },
+      { role: 'assistant', content: 'OPENCLAW_CONNECTION_OK' },
+      { role: 'user', content: '[Sat 2026-06-06 17:29 GMT+1] Post-restart connection smoke. Reply exactly: OPENCLAW_POST_RESTART_OK' },
+      { role: 'assistant', content: 'OPENCLAW_POST_RESTART_OK' },
+      { role: 'assistant', content: 'Real status update' },
+    ];
+
+    const result = processChatMessages(msgs);
+
+    expect(result.map((m) => m.rawText)).toEqual(['Real status update']);
+  });
+
   it('runs the full pipeline: filter → split → group → tag', () => {
     const msgs: ChatMessage[] = [
       { role: 'user', content: 'Hello' },
@@ -438,9 +505,11 @@ describe('processChatMessages', () => {
       { role: 'assistant', content: 'Hello' },
     ];
     const result = processChatMessages(msgs);
-    const sysMsg = result.find(m => m.rawText.includes('background task'));
+    const sysMsg = result.find(m => m.isSystemNotification);
     expect(sysMsg).toBeDefined();
     expect(sysMsg!.isSystemNotification).toBe(true);
+    expect(sysMsg!.rawText).toBe('x — completed');
+    expect(sysMsg!.rawText).not.toContain('background task');
   });
 
   it('handles empty input', () => {

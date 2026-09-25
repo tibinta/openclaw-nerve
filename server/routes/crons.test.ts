@@ -238,6 +238,16 @@ describe('cron routes', () => {
           jobId: 'job-123',
           clearAgentOverride: true,
           state: { lastRunAtMs: 789 },
+          scheduledToolPolicy: { mode: 'account' },
+          configRevision: 10,
+          nextRunAtMs: 1234,
+          lastRunAtMs: 789,
+          lastRunStatus: 'ok',
+          lastDelivered: true,
+          lastDeliveryError: null,
+          lastFailureNotificationDeliveryStatus: 'sent',
+          schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'Europe/London' },
+          delivery: { mode: 'announce', channel: 'slack', to: '#ops' },
           agentId: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
           sessionKey: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
           sessionTarget: 'main',
@@ -256,6 +266,8 @@ describe('cron routes', () => {
       sessionKey: 'agent-jane-whitmore---ceo-imessage-direct-447494722196',
       sessionTarget: 'isolated',
       payload: { kind: 'agentTurn', message: 'Check the board.' },
+      schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'Europe/London' },
+      delivery: { mode: 'announce', channel: 'slack', to: '#ops' },
     });
     expect(patch).not.toHaveProperty('id');
     expect(patch).not.toHaveProperty('createdAtMs');
@@ -263,6 +275,13 @@ describe('cron routes', () => {
     expect(patch).not.toHaveProperty('jobId');
     expect(patch).not.toHaveProperty('clearAgentOverride');
     expect(patch).not.toHaveProperty('state');
+    for (const key of [
+      'scheduledToolPolicy', 'configRevision', 'nextRunAtMs', 'lastRunAtMs',
+      'lastRunStatus', 'lastDelivered', 'lastDeliveryError',
+      'lastFailureNotificationDeliveryStatus',
+    ]) {
+      expect(patch).not.toHaveProperty(key);
+    }
   });
 
   it('moves legacy top-level agent options into the gateway payload when updating', async () => {

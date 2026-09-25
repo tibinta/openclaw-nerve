@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -25,8 +25,10 @@ const {
   dirtyStateByAgent,
   reloadCalls,
   topBarRenderSnapshots,
+  statusBarRenderSnapshots,
   tabRenderSnapshots,
   connectDialogRenderSnapshots,
+  resizableRenderSnapshots,
   useOpenFilesMock,
 } = vi.hoisted(() => {
   const settingsContext = {
@@ -73,12 +75,14 @@ const {
   };
   const reloadCalls: Array<{ agentId: string; path: string }> = [];
   const topBarRenderSnapshots: Array<{ showKanbanView?: boolean; viewMode?: string }> = [];
+  const statusBarRenderSnapshots: Array<{ contextTokens?: number; contextLimit?: number }> = [];
   const tabRenderSnapshots: Array<{
     workspaceAgentId: string;
     hasSaveToast: boolean;
     saveToastPath: string | null;
   }> = [];
   const connectDialogRenderSnapshots: Array<{ open: boolean }> = [];
+  const resizableRenderSnapshots: Array<{ rightWidthPx?: number | null }> = [];
 
   const useOpenFilesMock = vi.fn((agentId: string) => ({
     openFiles: [{ path: 'shared.md', name: 'shared.md', content: 'draft', savedContent: 'draft', dirty: dirtyStateByAgent[agentId] ?? false }],
@@ -109,8 +113,10 @@ const {
     dirtyStateByAgent,
     reloadCalls,
     topBarRenderSnapshots,
+    statusBarRenderSnapshots,
     tabRenderSnapshots,
     connectDialogRenderSnapshots,
+    resizableRenderSnapshots,
     useOpenFilesMock,
   };
 });
@@ -153,6 +159,8 @@ vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
     soundEnabled: false,
     toggleSound: vi.fn(),
+    voiceReadbackEnabled: true,
+    toggleVoiceReadback: vi.fn(),
     ttsProvider: 'off',
     ttsModel: 'none',
     setTtsProvider: vi.fn(),
@@ -172,6 +180,9 @@ vi.mock('@/contexts/SettingsContext', () => ({
     toggleContinuousVoice: vi.fn(),
     liveVoicePauseMs: 1800,
     setLiveVoicePauseMs: vi.fn(),
+    wakeVoicePauseMs: 1800,
+    setWakeVoicePauseMs: vi.fn(),
+    stopSpeaking: vi.fn(),
     isTtsSpeaking: false,
     panelRatio: 60,
     setPanelRatio: vi.fn(),
@@ -281,7 +292,13 @@ vi.mock('@/components/TopBar', () => ({
 }));
 
 vi.mock('@/components/StatusBar', () => ({
-  StatusBar: () => null,
+  StatusBar: (props: { contextTokens?: number; contextLimit?: number }) => {
+    statusBarRenderSnapshots.push({
+      contextTokens: props.contextTokens,
+      contextLimit: props.contextLimit,
+    });
+    return <div data-testid="statusbar-context">{props.contextTokens ?? 'none'} / {props.contextLimit ?? 'none'}</div>;
+  },
 }));
 
 vi.mock('@/components/ConfirmDialog', () => ({
@@ -293,12 +310,15 @@ vi.mock('@/features/chat/ChatPanel', () => ({
 }));
 
 vi.mock('@/components/ResizablePanels', () => ({
-  ResizablePanels: ({ left, right }: { left: ReactNode; right: ReactNode }) => (
+  ResizablePanels: ({ left, right, rightWidthPx }: { left: ReactNode; right: ReactNode; rightWidthPx?: number | null }) => {
+    resizableRenderSnapshots.push({ rightWidthPx });
+    return (
     <div>
       <div>{left}</div>
       <div>{right}</div>
     </div>
-  ),
+    );
+  },
 }));
 
 vi.mock('@/components/PanelErrorBoundary', () => ({
@@ -359,14 +379,70 @@ vi.mock('@/features/sessions/SessionList', () => ({
 }));
 
 vi.mock('@/features/workspace/WorkspacePanel', () => ({
-  WorkspacePanel: () => null,
+  WorkspacePanel: () => <div data-testid="workspace-panel" />,
+}));
+
+vi.mock('@/features/kanban/hooks/useProposals', () => ({
+  useProposals: () => ({
+    proposals: [
+      {
+        id: 'proposal-1',
+        type: 'create',
+        status: 'pending',
+        version: 1,
+        proposedAt: Date.now(),
+        proposedBy: 'agent:test',
+        payload: { title: 'Tim proposal' },
+      },
+    ],
+    pendingCount: 1,
+    loading: false,
+    approveProposal: vi.fn(),
+    rejectProposal: vi.fn(),
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock('@/features/kanban/hooks/useAgentSuggestedTasks', () => ({
+  useAgentSuggestedTasks: () => ({
+    tasks: [
+      {
+        id: 'task-1',
+        title: 'Suggested task',
+        status: 'todo',
+        priority: 'normal',
+        createdBy: 'agent:omnibrain-sync',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        version: 1,
+        labels: ['omnibrain'],
+        columnOrder: 0,
+        feedback: [],
+      },
+    ],
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
+vi.mock('@/features/kanban/ProposalInbox', () => ({
+  ProposalInbox: () => <div data-testid="proposal-inbox">Proposal inbox</div>,
 }));
 
 vi.mock('@/features/kanban/KanbanPanel', () => ({
   KanbanPanel: () => null,
 }));
 
+vi.mock('@/features/agents/AgentsView', () => ({
+  AgentsView: () => null,
+}));
+
 beforeEach(() => {
+  sessionContext.sessions = [
+    { key: 'agent:alpha:main', label: 'Alpha' },
+    { key: 'agent:alpha:subagent:abc', label: 'Alpha helper' },
+    { key: 'agent:bravo:main', label: 'Bravo' },
+  ];
   connectDialogRenderSnapshots.length = 0;
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
@@ -397,8 +473,10 @@ describe('App save toast workspace scoping', () => {
     settingsContext.kanbanVisible = true;
     reloadCalls.length = 0;
     topBarRenderSnapshots.length = 0;
+    statusBarRenderSnapshots.length = 0;
     tabRenderSnapshots.length = 0;
     connectDialogRenderSnapshots.length = 0;
+    resizableRenderSnapshots.length = 0;
     useOpenFilesMock.mockClear();
   });
 
@@ -491,9 +569,41 @@ describe('App save toast workspace scoping', () => {
   });
 });
 
+describe('App context meter', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionContext.currentSession = 'agent:alpha:main';
+    sessionContext.sessions = [
+      {
+        key: 'agent:alpha:main',
+        label: 'Alpha',
+        inputTokens: 450067,
+        outputTokens: 5141,
+        contextTokens: 272000,
+      },
+    ];
+    statusBarRenderSnapshots.length = 0;
+  });
+
+  it('uses input and output tokens when totalTokens is missing', () => {
+    render(<App />);
+
+    expect(statusBarRenderSnapshots.at(-1)).toMatchObject({
+      contextTokens: 455208,
+      contextLimit: 272000,
+    });
+    expect(screen.getByTestId('statusbar-context')).toHaveTextContent('455208 / 272000');
+  });
+});
+
 describe('App workspace switch guard', () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionContext.sessions = [
+      { key: 'agent:alpha:main', label: 'Alpha' },
+      { key: 'agent:alpha:subagent:abc', label: 'Alpha helper' },
+      { key: 'agent:bravo:main', label: 'Bravo' },
+    ];
     sessionContext.currentSession = 'agent:alpha:main';
     sessionContext.setCurrentSession.mockReset();
     sessionContext.spawnSession.mockReset();
@@ -644,5 +754,39 @@ describe('App kanban visibility gating', () => {
     render(<App />);
 
     expect(connectDialogRenderSnapshots).toHaveLength(0);
+  });
+});
+
+describe('App right rail panels', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionContext.currentSession = 'agent:alpha:main';
+    settingsContext.kanbanVisible = true;
+    dirtyStateByAgent.alpha = false;
+    resizableRenderSnapshots.length = 0;
+  });
+
+  it('renders proposals, agents, and kanban as collapsible right rail panels', () => {
+    render(<App />);
+
+    expect(screen.getByLabelText('Agent Suggestions')).toBeInTheDocument();
+    expect(screen.getByLabelText('Agents')).toBeInTheDocument();
+    expect(screen.getByLabelText('Kanban')).toBeInTheDocument();
+    expect(screen.getByTestId('proposal-inbox')).toBeInTheDocument();
+    // 1 pending proposal + 1 agent-suggested task from the mocked hooks
+    expect(
+      within(screen.getByTestId('right-panel-proposals')).getByText('2'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Agent Suggestions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Agents' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Kanban' }));
+
+    expect(screen.getByTestId('right-panel-rail-collapsed')).toBeInTheDocument();
+    expect(resizableRenderSnapshots.at(-1)).toMatchObject({ rightWidthPx: 72 });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Kanban' }));
+
+    expect(screen.getByTestId('right-panel-rail')).toBeInTheDocument();
   });
 });

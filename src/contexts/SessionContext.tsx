@@ -5,6 +5,7 @@ import { useSettings } from './SettingsContext';
 import { getSessionKey, type Session, type AgentLogEntry, type EventEntry, type GatewayEvent, type EventPayload, type AgentEventPayload, type ChatEventPayload, type ContentBlock, type SessionsListResponse, type ChatMessage, type GranularAgentState } from '@/types';
 import { CONTEXT_AUTO_COMPACT_THRESHOLD } from '@/lib/constants';
 import { playPing } from '@/features/voice/audio-feedback';
+import { resetCodexRealtimeSessionSync } from '@/features/voice/codexRealtimeBridge';
 import { describeToolUse } from '@/utils/helpers';
 import { buildAgentSidebarTree, buildSessionTree } from '@/features/sessions/sessionTree';
 import {
@@ -12,6 +13,7 @@ import {
   getAgentRegistrationName,
   LEGACY_MAIN_SESSION_KEY,
   JANE_DIRECT_CHAT_SESSION_KEY,
+  JANE_LIVE_VOICE_SESSION_KEY,
   PRIMARY_AGENT_SESSION_KEY,
   getRootAgentSessionKey,
   getSessionDisplayLabel,
@@ -36,11 +38,12 @@ const FULL_SESSIONS_LIMIT = 50;
 // startup/poll. A bounded recent window keeps the sidebar useful while avoiding
 // multi-minute sessions.list calls when old heartbeat/subagent ledgers are huge.
 const SESSION_REFRESH_ACTIVE_MINUTES = 7 * 24 * 60;
-// When the gateway is already slow, backing off the fallback polling keeps the
-// session list from piling on top of live event-driven refreshes.
-const SESSION_REFRESH_POLL_INTERVAL_MS = 300_000;
+// The local network can afford a short fallback poll. This keeps chat, iMessage
+// jobs, and agent presence visible even if the live event stream drops a frame.
+const SESSION_REFRESH_POLL_INTERVAL_MS = 5_000;
 const FULL_SESSION_REFRESH_DELAY_MS = 60_000;
 const DELAYED_SESSION_REFRESH_MS = 30_000;
+const STALE_THINKING_STATUS_MS = 90_000;
 
 export interface GatewayAgentRegistration {
   id: string;
@@ -114,6 +117,84 @@ function isProtectedRootSessionKey(sessionKey: string): boolean {
   return sessionKey === PRIMARY_AGENT_SESSION_KEY || sessionKey === LEGACY_MAIN_SESSION_KEY;
 }
 
+function deriveGranularStatusFromSession(session: Session): GranularAgentState | null {
+  const state = String(session.state ?? session.agentState ?? session.status ?? '').toLowerCase();
+  const now = Date.now();
+
+  if (session.hasActiveRun === false) {
+    return { status: 'IDLE', since: now };
+  }
+
+  if (session.hasActiveRun === true) {
+    return { status: 'THINKING', since: now };
+  }
+
+  if (['streaming', 'delta'].includes(state)) {
+    return { status: 'STREAMING', since: now };
+  }
+
+  if (['running', 'thinking', 'tool_use', 'started', 'busy', 'working', 'processing', 'live', 'active'].includes(state) || session.busy || session.processing) {
+    return { status: 'THINKING', since: now };
+  }
+
+  if (['error'].includes(state)) {
+    return { status: 'ERROR', since: now };
+  }
+
+  if (['done', 'final', 'completed', 'finished'].includes(state)) {
+    return { status: 'DONE', since: now };
+  }
+
+  if (['idle', 'aborted', 'cancelled', 'cancelled', 'timeout', 'stopped', 'ended'].includes(state)) {
+    return { status: 'IDLE', since: now };
+  }
+
+  return null;
+}
+
+function syncAgentStatusFromSessions(
+  sessions: Session[],
+  previous: Record<string, GranularAgentState>,
+): Record<string, GranularAgentState> {
+  const next: Record<string, GranularAgentState> = { ...previous };
+  let changed = false;
+
+  for (const session of sessions) {
+    const sessionKey = getSessionKey(session);
+    if (!sessionKey) continue;
+
+    const derived = deriveGranularStatusFromSession(session);
+    if (!derived) continue;
+
+    const existing = next[sessionKey];
+    const shouldClearTool =
+      derived.status === 'IDLE'
+      || derived.status === 'DONE'
+      || derived.status === 'ERROR';
+    const current = shouldClearTool
+      ? { status: derived.status, since: derived.since }
+      : {
+          status: derived.status,
+          since: derived.since,
+          toolName: existing?.toolName,
+          toolDescription: existing?.toolDescription,
+        };
+
+    const same =
+      existing?.status === current.status
+      && existing?.since === current.since
+      && existing?.toolName === current.toolName
+      && existing?.toolDescription === current.toolDescription;
+
+    if (!same) {
+      next[sessionKey] = current;
+      changed = true;
+    }
+  }
+
+  return changed ? next : previous;
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const { connectionState, rpc, subscribe } = useGateway();
   const { soundEnabled } = useSettings();
@@ -138,6 +219,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const listAuthoritativeSessionsInFlightRef = useRef<Promise<Session[]> | null>(null);
   const emptySnapshotSeenRef = useRef(false);
   const initialSessionSnapshotLoadedRef = useRef(false);
+  const autoResetPromptedRef = useRef<Record<string, boolean>>({});
 
   // Derive busyState from agentStatus for backward compatibility
   const busyState = useMemo(() => {
@@ -601,6 +683,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           const changed = (
             existing.state !== newSession.state ||
             existing.totalTokens !== newSession.totalTokens ||
+            existing.inputTokens !== newSession.inputTokens ||
+            existing.outputTokens !== newSession.outputTokens ||
             existing.contextTokens !== newSession.contextTokens ||
             existing.model !== newSession.model ||
             existing.thinking !== newSession.thinking ||
@@ -623,6 +707,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return hasChanges ? merged : prev;
       });
       setCurrentSession(nextCurrentSession);
+      setAgentStatus((prev) => syncAgentStatusFromSessions(newSessions, prev));
       if (mode === 'initial') {
         initialSessionSnapshotLoadedRef.current = true;
       }
@@ -643,7 +728,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (isSessionActivelyBusy(session, Boolean(busyState[currentSession]))) return;
 
     const sessionKey = getSessionKey(session);
-    const totalTokens = typeof session.totalTokens === 'number' ? session.totalTokens : 0;
+    const explicitTotalTokens = typeof session.totalTokens === 'number' ? session.totalTokens : 0;
+    const fallbackTotalTokens =
+      (typeof session.inputTokens === 'number' ? session.inputTokens : 0)
+      + (typeof session.outputTokens === 'number' ? session.outputTokens : 0);
+    const totalTokens = explicitTotalTokens > 0 ? explicitTotalTokens : fallbackTotalTokens;
     const contextTokens = typeof session.contextTokens === 'number' ? session.contextTokens : 0;
 
     if (!sessionKey || totalTokens <= 0 || contextTokens <= 0) return;
@@ -658,11 +747,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     void rpc('sessions.compact', { key: sessionKey })
       .then(() => {
+        if (sessionKey === JANE_LIVE_VOICE_SESSION_KEY) {
+          resetCodexRealtimeSessionSync();
+        }
         // Refresh after compaction so the UI and future threshold checks use the updated token count.
         void refreshSessions();
       })
       .catch((err) => {
         console.debug('[SessionContext] Auto compact failed:', err);
+        if (autoResetPromptedRef.current[sessionKey]) return;
+        autoResetPromptedRef.current[sessionKey] = true;
+        setEventEntries((prev) => [
+          ...prev,
+          {
+            badge: 'WARN',
+            badgeCls: 'warn',
+            desc: `Compaction failed for ${sessionKey}. Reset the session and send the next message with fresh context.`,
+            ts: new Date(),
+          },
+        ]);
       });
   }, [busyState, connectionState, currentSession, currentSessionData, refreshSessions, rpc]);
 
@@ -719,6 +822,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const updates: Partial<Session> = {};
     if (state) updates.state = state;
     if ('totalTokens' in payload && typeof payload.totalTokens === 'number') updates.totalTokens = payload.totalTokens;
+    if ('inputTokens' in payload && typeof payload.inputTokens === 'number') updates.inputTokens = payload.inputTokens;
+    if ('outputTokens' in payload && typeof payload.outputTokens === 'number') updates.outputTokens = payload.outputTokens;
     if ('contextTokens' in payload && typeof payload.contextTokens === 'number') updates.contextTokens = payload.contextTokens;
     return updates;
   }, []);
@@ -867,6 +972,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         delayedRefreshTimeoutRef.current = null;
       }
     };
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setAgentStatus((prev) => {
+        let changed = false;
+        const next: Record<string, GranularAgentState> = {};
+        for (const [key, status] of Object.entries(prev)) {
+          if (status.status === 'THINKING' && now - status.since > STALE_THINKING_STATUS_MS) {
+            // Gateway/session stores can miss terminal events or keep
+            // hasActiveRun=true after provider failure. Let the UI recover.
+            next[key] = { status: 'IDLE', since: now };
+            changed = true;
+          } else {
+            next[key] = status;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, SESSION_REFRESH_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
   }, []);
 
   // Poll sessions only as a fallback. WebSocket events keep the visible tree

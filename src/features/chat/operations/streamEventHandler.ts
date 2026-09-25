@@ -14,6 +14,7 @@ import type { ActivityLogEntry, ProcessingStage } from '@/contexts/ChatContext';
 import { extractText, describeToolUse } from '@/utils/helpers';
 import { extractTTSMarkers } from '@/features/tts/useTTS';
 import { extractChartMarkers } from '@/features/charts/extractCharts';
+import { isConnectionSmokeText } from './smokeMessages';
 import type { ChartData } from '@/features/charts/extractCharts';
 
 // ─── Agent states that indicate active processing ──────────────────────────────
@@ -187,17 +188,20 @@ function createSyntheticAssistantMessage(content: string | ContentBlock[]): Chat
  */
 export function extractFinalMessages(chatPayload: ChatEventPayload): ChatMessage[] {
   if (Array.isArray(chatPayload.messages) && chatPayload.messages.length > 0) {
-    return chatPayload.messages;
+    return chatPayload.messages.filter((message) => !isConnectionSmokeText(extractText(message) || ''));
   }
 
   if (chatPayload.message) {
     if (typeof chatPayload.message === 'string') {
+      if (isConnectionSmokeText(chatPayload.message)) return [];
       return [createSyntheticAssistantMessage(chatPayload.message)];
     }
+    if (isConnectionSmokeText(extractText(chatPayload.message) || '')) return [];
     return [chatPayload.message];
   }
 
   if (Array.isArray(chatPayload.content) && chatPayload.content.length > 0) {
+    if (isConnectionSmokeText(extractText(createSyntheticAssistantMessage(chatPayload.content)) || '')) return [];
     return [createSyntheticAssistantMessage(chatPayload.content)];
   }
 

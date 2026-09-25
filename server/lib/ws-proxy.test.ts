@@ -17,6 +17,8 @@ vi.mock('./config.js', () => {
       sslPort: 3443,
       sessionSecret: 'test-secret',
       gatewayToken: 'test-token',
+      gatewayUrl: 'ws://127.0.0.1:1',
+      janeMobileBridgeToken: 'bridge-secret',
       sessionsDir: '/tmp/openclaw-nerve-ws-proxy-test-sessions',
     },
     WS_ALLOWED_HOSTS,
@@ -55,7 +57,12 @@ import { verifySession, parseSessionCookie } from './session.js';
 import { createDeviceBlock } from './device-identity.js';
 import { createServer as createHttpServer } from 'node:http';
 
-const mockedConfig = config as { auth: boolean; sessionSecret: string };
+const mockedConfig = config as {
+  auth: boolean;
+  sessionSecret: string;
+  gatewayUrl: string;
+  janeMobileBridgeToken: string;
+};
 const mockedVerifySession = verifySession as ReturnType<typeof vi.fn>;
 const mockedParseSessionCookie = parseSessionCookie as ReturnType<typeof vi.fn>;
 
@@ -1060,5 +1067,98 @@ describe('ws-proxy observability', () => {
     ws2.close();
     await new Promise((r) => setTimeout(r, 50));
     logSpy.mockRestore();
+  });
+});
+
+describe('Jane mobile internal bridge', () => {
+  let gateway: MockGateway;
+  let server: Server;
+  let port: number;
+
+  beforeAll(async () => {
+    gateway = new MockGateway({ requireToken: 'test-token' });
+    await gateway.start();
+  });
+
+  afterAll(async () => {
+    closeAllWebSockets();
+    await gateway.close();
+  });
+
+  beforeEach(async () => {
+    mockedConfig.auth = true;
+    mockedConfig.gatewayUrl = gateway.url;
+    mockedConfig.janeMobileBridgeToken = 'bridge-secret';
+    gateway.clearReceived();
+    server = createServer();
+    setupWebSocketProxy(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    port = typeof address === 'object' && address ? address.port : 0;
+  });
+
+  afterEach(async () => {
+    closeAllWebSockets();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('rejects a loopback bridge without the dedicated bearer', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/internal/jane-mobile`);
+    const closed = await waitForCloseOrError(ws);
+    expect(closed.reason).toContain('401');
+  });
+
+  it('injects gateway auth without a browser cookie and relays only Jane Live chat', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/internal/jane-mobile`, {
+      headers: { Authorization: 'Bearer bridge-secret' },
+    });
+    expect(JSON.parse(await waitForMessage(ws)).event).toBe('connect.challenge');
+
+    const connectResponse = waitForMessage(ws);
+    ws.send(JSON.stringify({
+      type: 'req', id: 'connect-1', method: 'connect',
+      params: {
+        minProtocol: 4, maxProtocol: 4,
+        client: { id: 'jane-mobile-bridge', version: '1.0.0', platform: 'server', mode: 'webchat', instanceId: 'test' },
+        role: 'operator', scopes: ['operator.read', 'operator.write'], auth: {}, caps: ['tool-events'],
+      },
+    }));
+    await waitForCondition(() => gateway.received.some(({ data }) => {
+      const message = data as Record<string, unknown>;
+      if (message.method !== 'connect') return false;
+      const auth = ((message.params as Record<string, unknown>)?.auth || {}) as Record<string, unknown>;
+      return auth.token === 'test-token';
+    }));
+    expect(JSON.parse(await connectResponse)).toMatchObject({ type: 'res', id: 'connect-1', ok: true });
+
+    ws.send(JSON.stringify({
+      type: 'req', id: 'send-1', method: 'chat.send',
+      params: {
+        sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live',
+        message: 'hello Jane', deliver: false, idempotencyKey: 'idem-1',
+      },
+    }));
+    await waitForCondition(() => gateway.received.some(({ data }) => (data as Record<string, unknown>).method === 'chat.send'));
+
+    const finalEvent = waitForMessage(ws);
+    gateway.broadcast(JSON.stringify({
+      type: 'event', event: 'chat',
+      payload: { sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', state: 'final', message: { role: 'assistant', content: 'done' } },
+    }));
+    expect(JSON.parse(await finalEvent)).toMatchObject({
+      type: 'event', event: 'chat', payload: { state: 'final' },
+    });
+    ws.close();
+  });
+
+  it('closes the bridge when it requests an unscoped gateway method', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/internal/jane-mobile`, {
+      headers: { Authorization: 'Bearer bridge-secret' },
+    });
+    await waitForMessage(ws);
+    ws.send(JSON.stringify({ type: 'req', id: 'bad-1', method: 'sessions.list', params: {} }));
+    const closed = await waitForClose(ws);
+    expect(closed.code).toBe(1008);
+    expect(closed.reason).toContain('not allowed');
   });
 });

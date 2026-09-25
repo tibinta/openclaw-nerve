@@ -13,6 +13,7 @@ import {
   isDirectSessionKey,
   inferParentSessionKey,
   JANE_DIRECT_CHAT_SESSION_KEY,
+  JANE_LIVE_VOICE_SESSION_KEY,
   isRootChildSession,
   isTopLevelAgentSessionKey,
   pickDefaultSessionKey,
@@ -122,18 +123,37 @@ describe('sessionKeys', () => {
     expect(pickDefaultSessionKey(sessions)).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
   });
 
-  it('returns Jane direct even when the preferred key is another Jane-family session', () => {
+  it('keeps the preferred Jane-family session when Jane direct is also available', () => {
     const sessions = [
       session('agent:jane-whitmore---ceo:main', { label: 'Jane Whitmore' }),
       session(JANE_DIRECT_CHAT_SESSION_KEY, { label: 'Jane Direct' }),
       session('agent:reviewer:main', { label: 'Reviewer' }),
     ];
 
-    expect(pickDefaultSessionKey(sessions, 'agent:jane-whitmore---ceo:main')).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
+    expect(pickDefaultSessionKey(sessions, 'agent:jane-whitmore---ceo:main')).toBe('agent:jane-whitmore---ceo:main');
   });
 
   it('keeps the preferred session while the live list is still empty', () => {
     expect(pickDefaultSessionKey([], JANE_DIRECT_CHAT_SESSION_KEY)).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
+  });
+
+  it('keeps the virtual Nerve Live session across gateway session polls', () => {
+    expect(pickDefaultSessionKey([
+      session(JANE_DIRECT_CHAT_SESSION_KEY, { label: 'Jane Direct' }),
+    ], JANE_LIVE_VOICE_SESSION_KEY)).toBe(JANE_LIVE_VOICE_SESSION_KEY);
+  });
+
+  it('keeps the selected Live key when a heartbeat alias appears in a refresh', () => {
+    expect(pickDefaultSessionKey([
+      session(`${JANE_LIVE_VOICE_SESSION_KEY}:heartbeat`, { label: 'heartbeat' }),
+      session(JANE_DIRECT_CHAT_SESSION_KEY, { label: 'Jane Direct' }),
+    ], JANE_LIVE_VOICE_SESSION_KEY)).toBe(JANE_LIVE_VOICE_SESSION_KEY);
+  });
+
+  it('keeps a selected ordinary session when it is absent from a partial poll', () => {
+    expect(pickDefaultSessionKey([
+      session(JANE_DIRECT_CHAT_SESSION_KEY, { label: 'Jane Direct' }),
+    ], 'agent:reviewer:main')).toBe('agent:reviewer:main');
   });
 
   it('deduplicates heartbeat aliases when choosing top-level agents', () => {

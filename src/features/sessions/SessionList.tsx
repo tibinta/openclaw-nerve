@@ -27,6 +27,9 @@ import { Button } from '@/components/ui/button';
 import { AlertTriangle, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { SpawnAgentDialog } from './SpawnAgentDialog';
 
+const INITIAL_SESSION_VISIBILITY = 3;
+const SESSION_VISIBILITY_INCREMENT = 5;
+
 function isSessionRunning(
   session: Session,
   sessionKey: string,
@@ -51,6 +54,16 @@ function isSessionRunning(
   );
 }
 
+function getSessionTokenTotal(session: Session): number {
+  if (typeof session.totalTokens === 'number' && session.totalTokens > 0) {
+    return session.totalTokens;
+  }
+
+  const inputTokens = typeof session.inputTokens === 'number' ? session.inputTokens : 0;
+  const outputTokens = typeof session.outputTokens === 'number' ? session.outputTokens : 0;
+  return inputTokens + outputTokens;
+}
+
 interface SessionListProps {
   sessions: Session[];
   currentSession: string;
@@ -69,6 +82,7 @@ interface SessionListProps {
   agents?: GatewayAgentRegistration[];
   /** Render in compact dropdown mode (chat-first topbar panel). */
   compact?: boolean;
+  hideTitle?: boolean;
 }
 
 function countDescendants(node: TreeNode): number {
@@ -146,7 +160,7 @@ function resolveSidebarLabel(
 }
 
 /** Sidebar list of agent sessions with tree structure and context menus. */
-export function SessionList({ sessions, currentSession, busyState, agentStatus, unreadSessions, onSelect, onRefresh, onDelete, onDeleteAllSessions, onSpawn, onRename, onAbort, isLoading, agentName = 'Agent', agents = [], compact = false }: SessionListProps) {
+export function SessionList({ sessions, currentSession, busyState, agentStatus, unreadSessions, onSelect, onRefresh, onDelete, onDeleteAllSessions, onSpawn, onRename, onAbort, isLoading, agentName = 'Agent', agents = [], compact = false, hideTitle = false }: SessionListProps) {
   const [deleteTarget, setDeleteTarget] = useState<{ key: string; label: string; descendantCount: number; isRootAgent: boolean } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
@@ -156,6 +170,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
+  const [visibleSessionLimit, setVisibleSessionLimit] = useState(INITIAL_SESSION_VISIBILITY);
 
   const startRename = useCallback((sessionKey: string, currentLabel: string) => {
     setRenamingKey(sessionKey);
@@ -193,7 +208,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     const result: Record<string, boolean> = {};
     sessions.forEach(s => {
       const sessionKey = getSessionKey(s);
-      const used = s.totalTokens || 0;
+      const used = getSessionTokenTotal(s);
       const max = s.contextTokens || 200000;
       const pct = Math.min(100, Math.round((used / max) * 100));
       const prevPct = prevPercentsRef.current[sessionKey];
@@ -206,7 +221,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   useEffect(() => {
     sessions.forEach(s => {
       const sessionKey = getSessionKey(s);
-      const used = s.totalTokens || 0;
+      const used = getSessionTokenTotal(s);
       const max = s.contextTokens || 200000;
       const pct = Math.min(100, Math.round((used / max) * 100));
       prevPercentsRef.current[sessionKey] = pct;
@@ -219,6 +234,26 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   // The AGENTS panel is agent-first: keep only agent roots and their descendants.
   const liveTree = useMemo(() => buildAgentSidebarTree(sessions, agents), [agents, sessions]);
   const liveFlatNodes = useMemo(() => flattenTree(liveTree, expandedState), [liveTree, expandedState]);
+  const selectedSessionNormalized = useMemo(() => normalizeSessionKey(currentSession), [currentSession]);
+  const selectedSessionIndex = useMemo(
+    () => liveFlatNodes.findIndex((node) => normalizeSessionKey(node.selectKey || node.key) === selectedSessionNormalized),
+    [liveFlatNodes, selectedSessionNormalized],
+  );
+  const visibleSessionLimitWithSelection = useMemo(
+    () => Math.min(
+      Math.max(
+        visibleSessionLimit,
+        selectedSessionIndex >= 0 ? selectedSessionIndex + 1 : INITIAL_SESSION_VISIBILITY,
+      ),
+      liveFlatNodes.length,
+    ),
+    [liveFlatNodes.length, selectedSessionIndex, visibleSessionLimit],
+  );
+  const visibleLiveFlatNodes = useMemo(
+    () => liveFlatNodes.slice(0, visibleSessionLimitWithSelection),
+    [liveFlatNodes, visibleSessionLimitWithSelection],
+  );
+  const hasMoreLiveSessions = visibleLiveFlatNodes.length < liveFlatNodes.length;
   const liveFamilyIds = useMemo(
     () => new Set(liveTree.map((node) => node.familyId).filter((familyId): familyId is string => Boolean(familyId))),
     [liveTree],
@@ -244,6 +279,14 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   // Count the visible live agent rows, not the raw gateway payload, so the
   // bulk-delete confirmation matches what the user actually sees.
   const liveSessionCount = liveFlatNodes.length;
+
+  useEffect(() => {
+    setVisibleSessionLimit((prev) => Math.min(Math.max(prev, INITIAL_SESSION_VISIBILITY), liveFlatNodes.length));
+  }, [liveFlatNodes.length]);
+
+  const loadMoreSessions = useCallback(() => {
+    setVisibleSessionLimit((prev) => Math.min(prev + SESSION_VISIBILITY_INCREMENT, liveFlatNodes.length));
+  }, [liveFlatNodes.length]);
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget || !onDelete) return;
@@ -294,7 +337,7 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
     const granularStatus = node.session.hasActiveRun === false ? undefined : agentStatus?.[sessionKey];
     const activationKey = normalizeSessionKey(node.selectKey || sessionKey);
     const isActive = activationKey === normalizeSessionKey(currentSession);
-    const currentTokens = node.session.totalTokens || 0;
+    const currentTokens = getSessionTokenTotal(node.session);
     const prevTokens = prevTokensRef.current[sessionKey] || 0;
     const displayTokens = Math.max(currentTokens, prevTokens);
     const isExpanded = expandedState[sessionKey] ?? !isCron;
@@ -358,10 +401,12 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
   return (
     <div className={compact ? 'flex flex-col max-h-[65vh]' : 'h-full flex flex-col min-h-0'}>
       <div className="panel-header border-l-[3px] border-l-info">
-        <span className="panel-label text-info">
-          <span className="panel-diamond">◆</span>
-          AGENTS
-        </span>
+        {!hideTitle && (
+          <span className="panel-label text-info">
+            <span className="panel-diamond">◆</span>
+            AGENTS
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
           {onSpawn && (
             <button
@@ -406,7 +451,23 @@ export function SessionList({ sessions, currentSession, busyState, agentStatus, 
           <>
             {liveFlatNodes.length === 0 ? (
               <div className="text-muted-foreground px-3 py-2 text-[0.733rem]">No active sessions</div>
-            ) : liveFlatNodes.map((node) => renderSessionNode(node, true))}
+            ) : (
+              <>
+                {visibleLiveFlatNodes.map((node) => renderSessionNode(node, true))}
+                {hasMoreLiveSessions && (
+                  <div className="px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={loadMoreSessions}
+                      className="w-full rounded border border-border/60 px-2 py-2 text-left text-[0.667rem] text-muted-foreground hover:text-foreground"
+                      aria-label="Load more sessions"
+                    >
+                      Load {Math.min(SESSION_VISIBILITY_INCREMENT, liveFlatNodes.length - visibleSessionLimitWithSelection)} more sessions
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
 
             {fallbackFlatNodes.length > 0 && (
               <section className="mt-3 border-t border-border/40 pt-3">

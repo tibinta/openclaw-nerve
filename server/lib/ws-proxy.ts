@@ -22,22 +22,19 @@ import { randomUUID } from 'node:crypto';
 import { config, WS_ALLOWED_HOSTS, SESSION_COOKIE_NAME } from './config.js';
 import { verifySession, parseSessionCookie } from './session.js';
 import { createDeviceBlock, getDeviceIdentity } from './device-identity.js';
-import { gatewayRpcCall, subscribeGatewayEvents } from './gateway-rpc.js';
+import { gatewayRpcCall } from './gateway-rpc.js';
 import { canInjectGatewayToken } from './trust-utils.js';
 import { isAllowedOrigin } from './origin-utils.js';
 import {
   isInvalidEncryptedContentError,
   rotateSessionAfterInvalidEncryptedContent,
 } from './session-recovery.js';
-import {
-  createCodexRealtimeRelay,
-  extractJaneCanonicalFinal,
-  JaneRealtimeDispatcher,
-} from './codex-realtime-proxy.js';
+import { createOpenClawTalkRelay } from './openclaw-talk-relay.js';
 import {
   authorizeJaneMobileBridge,
   createJaneMobileRelayPolicy,
   gatewayWebSocketUrl,
+  normalizeJaneMobileClientFrame,
   type JaneMobileRelayPolicy,
 } from './jane-mobile-proxy.js';
 import { createJaneMobileCronController, type JaneMobileCronController } from './jane-mobile-cron-control.js';
@@ -180,18 +177,6 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
   const codexRealtimeWss = new WebSocketServer({ noServer: true });
   const janeMobileWss = new WebSocketServer({ noServer: true });
   const janeRealtimeWss = new WebSocketServer({ noServer: true });
-  const janeRealtimeDispatcher = new JaneRealtimeDispatcher();
-  subscribeGatewayEvents((event) => {
-    if (event.event !== 'chat' || !isRecord(event.payload)) return;
-    const runId = event.payload.runId;
-    const idempotencyKey = event.payload.idempotencyKey;
-    // Direct Live turns are already resolved by dispatchJaneRealtimeRequest.
-    // Only gateway-produced background finals (cron/runtime injections) enter here.
-    if ((typeof runId === 'string' && runId.startsWith('jane-realtime:'))
-      || (typeof idempotencyKey === 'string' && idempotencyKey.startsWith('jane-realtime:'))) return;
-    const final = extractJaneCanonicalFinal(event.payload);
-    if (final) janeRealtimeDispatcher.enqueueFinal(final);
-  });
   const janeMobileCronController = createJaneMobileCronController();
   activeWssInstances.push(wss, codexRealtimeWss, janeMobileWss, janeRealtimeWss);
 
@@ -244,8 +229,8 @@ export function setupWebSocketProxy(server: HttpServer | HttpsServer): void {
     }
   });
 
-  codexRealtimeWss.on('connection', (clientWs: WebSocket) => createCodexRealtimeRelay(clientWs));
-  janeRealtimeWss.on('connection', (clientWs: WebSocket) => createCodexRealtimeRelay(clientWs, janeRealtimeDispatcher));
+  codexRealtimeWss.on('connection', (clientWs: WebSocket) => createOpenClawTalkRelay(clientWs));
+  janeRealtimeWss.on('connection', (clientWs: WebSocket) => createOpenClawTalkRelay(clientWs));
   janeMobileWss.on('connection', (clientWs: WebSocket) => {
     createGatewayRelay(
       clientWs,
@@ -616,10 +601,11 @@ export function createGatewayRelay(
 
   // Client → Gateway (attached once, references mutable gwWs)
   clientWs.on('message', (data: Buffer | string, isBinary: boolean) => {
-    if (janeMobileCronController?.handle(data, isBinary, (frame) => {
+    const clientData = relayPolicy ? normalizeJaneMobileClientFrame(data, isBinary) : data;
+    if (janeMobileCronController?.handle(clientData, isBinary, (frame) => {
       if (clientWs.readyState === WebSocket.OPEN) clientWs.send(frame);
     })) return;
-    if (relayPolicy && !relayPolicy.allowClientFrame(data, isBinary)) {
+    if (relayPolicy && !relayPolicy.allowClientFrame(clientData, isBinary)) {
       clientWs.close(1008, 'Jane mobile method not allowed');
       return;
     }
@@ -627,7 +613,7 @@ export function createGatewayRelay(
       // Gateway not open — intercept connect messages and hold them separately
       if (!isBinary) {
         try {
-          const msg = JSON.parse(data.toString());
+          const msg = JSON.parse(clientData.toString());
           if (msg.type === 'req' && msg.method === 'connect' && msg.params) {
             savedConnectMsg = msg;
             updateClientKindFromConnect(msg);
@@ -636,7 +622,7 @@ export function createGatewayRelay(
         } catch { /* pass through */ }
       }
 
-      const pendingData = normalizeControlUiFrame(data, isBinary, isControlUiClient);
+      const pendingData = normalizeControlUiFrame(clientData, isBinary, isControlUiClient);
       if (!enqueuePending(pendingData, isBinary)) {
         clientWs.close(1008, 'Too many pending messages');
         return;
@@ -649,7 +635,7 @@ export function createGatewayRelay(
     if (!handshakeComplete && savedConnectMsg && !connectSent) {
       if (!isBinary) {
         try {
-          const msg = JSON.parse(data.toString());
+          const msg = JSON.parse(clientData.toString());
           if (msg.type === 'req' && msg.method === 'connect' && msg.params) {
             // Last-write-wins if multiple connect frames arrive before dispatch.
             savedConnectMsg = msg;
@@ -664,7 +650,7 @@ export function createGatewayRelay(
         } catch { /* pass through to pending queue */ }
       }
 
-      const pendingData = normalizeControlUiFrame(data, isBinary, isControlUiClient);
+      const pendingData = normalizeControlUiFrame(clientData, isBinary, isControlUiClient);
       if (!enqueuePending(pendingData, isBinary)) {
         clientWs.close(1008, 'Too many pending messages');
       }
@@ -672,10 +658,10 @@ export function createGatewayRelay(
     }
 
     // Gateway is open — parse message for interception
-    let outboundData: Buffer | string = data;
+    let outboundData: Buffer | string = clientData;
     if (!isBinary) {
       try {
-        const msg = JSON.parse(data.toString());
+        const msg = JSON.parse(clientData.toString());
 
         // Intercept connect request — defer until challenge nonce arrives
         if (!handshakeComplete && msg.type === 'req' && msg.method === 'connect' && msg.params) {

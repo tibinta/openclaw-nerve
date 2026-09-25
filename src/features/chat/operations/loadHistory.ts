@@ -14,6 +14,7 @@ import { extractChartMarkers } from '@/features/charts/extractCharts';
 import { extractEditBlocks, extractWriteBlocks } from '@/features/chat/edit-blocks';
 import { extractImages } from '@/features/chat/extractImages';
 import type { MessageImage } from '@/features/chat/types';
+import { isConnectionSmokeText } from './smokeMessages';
 
 interface TranscriptMediaContentBlock {
   type?: string;
@@ -117,27 +118,14 @@ function chatFailureMeta(m: ChatMessage): Pick<ChatMsg, 'errorMessage' | 'stopRe
   };
 }
 
-function emptyAssistantStatus(m: ChatMessage): string | null {
-  if (m.role !== 'assistant') return null;
-
-  const failureText = `${m.stopReason || ''} ${m.errorMessage || ''}`.toLowerCase();
-  if (/\bcontext\b|overflow|already_compacted|compacted_recently|context window/.test(failureText)) {
-    return 'Context full';
-  }
-  if (/proxy_overloaded|overloaded|service is temporarily|temporarily overloaded|\b503\b/.test(failureText)) {
-    return 'Service busy';
-  }
-  if (/\btimeout\b|timed out|idle timeout|aborted/.test(failureText)) {
-    return 'Timed out';
-  }
-  if (/\berror\b|failed|failure/.test(failureText)) {
-    return 'Run failed';
-  }
-  return 'No text';
-}
-
 function isAssistantFailurePlaceholder(text: string): boolean {
   return /^\[assistant turn failed before producing content\]$/i.test(text.trim());
+}
+
+function isFailedAssistantTurn(m: ChatMessage): boolean {
+  if (m.role !== 'assistant') return false;
+  const failureText = `${m.stopReason || ''} ${m.errorMessage || ''}`.toLowerCase();
+  return /\berror\b|failed|failure|timeout|timed out|aborted|overloaded|unavailable|503|context window|overflow|already_compacted|compacted_recently/.test(failureText);
 }
 
 // ─── RPC type alias ────────────────────────────────────────────────────────────
@@ -189,6 +177,7 @@ export function filterMessage(m: ChatMessage): boolean {
   const trimmedText = text.trim();
 
   if (trimmedText === 'NO_REPLY') return false;
+  if (isConnectionSmokeText(trimmedText)) return false;
 
   // System notifications are now rendered as collapsible strips, not hidden.
   // They pass through the filter and get tagged during message processing.
@@ -222,6 +211,8 @@ const SYSTEM_EVENT_LINE = /^System: \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? [
 /** Strip legacy and current TTS prompt contracts appended to voice messages by sendMessage. */
 const TTS_SYSTEM_HINT_RE = /\s*\[system: User sent a voice message\.[\s\S]*$/;
 const TTS_CONTRACT_HINT_RE = /\s*<openclaw-voice-reply-contract>[\s\S]*?<\/openclaw-voice-reply-contract>/g;
+const LIVE_VOICE_COORDINATOR_HINT_RE = /\s*<nerve-live-voice-coordinator>[\s\S]*?<\/nerve-live-voice-coordinator>/g;
+const LIVE_VOICE_RECENT_CONTEXT_RE = /\s*<nerve-live-recent-imessage-context>[\s\S]*?(?:<\/nerve-live-recent-imessage-context>|$)/g;
 
 /**
  * Strip the "Conversation info (untrusted metadata)" envelope that the OpenClaw
@@ -395,19 +386,7 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
         }
       }
 
-      if (result.length === 0) {
-        const fallbackText = emptyAssistantStatus(m);
-        if (fallbackText) {
-          result.push({
-            role: 'assistant',
-            html: renderToolResults(renderMarkdown(fallbackText)),
-            rawText: fallbackText,
-            ...chatFailureMeta(m),
-            timestamp,
-            streaming: false,
-          });
-        }
-      }
+      if (result.length === 0 && isFailedAssistantTurn(m)) return [];
 
       return result;
     }
@@ -421,7 +400,11 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
   if (m.role === 'user') {
     isVoice = TTS_CONTRACT_HINT_RE.test(rawText);
     TTS_CONTRACT_HINT_RE.lastIndex = 0;
+    isVoice = LIVE_VOICE_COORDINATOR_HINT_RE.test(rawText) || isVoice;
+    LIVE_VOICE_COORDINATOR_HINT_RE.lastIndex = 0;
     rawText = rawText.replace(TTS_CONTRACT_HINT_RE, '');
+    rawText = rawText.replace(LIVE_VOICE_COORDINATOR_HINT_RE, '');
+    rawText = rawText.replace(LIVE_VOICE_RECENT_CONTEXT_RE, '');
     rawText = rawText.replace(TTS_SYSTEM_HINT_RE, '');
     rawText = rawText.replace(WEBCHAT_ENVELOPE_RE, '');
     // Detect voice messages before stripping the marker
@@ -488,9 +471,15 @@ export function splitToolCallMessage(m: ChatMessage, context: MediaAttachmentCon
     || contentImages.length > 0
     || mediaAttachments.length > 0,
   );
-  // A failed assistant turn can be persisted with empty text; show a small
-  // recovery status so Nerve never presents a blank bubble as a valid reply.
-  const visibleText = hasRenderableContent ? text : (emptyAssistantStatus(m) ?? text);
+  // Gateway transcripts can contain terminal failed assistant turns with no
+  // user-facing text. They are useful audit records, but showing them as chat
+  // replies creates false "Service busy" / "Run failed" bubbles before a later
+  // successful reply.
+  if (!hasRenderableContent && isFailedAssistantTurn(m)) return [];
+
+  const visibleText = sysNotif.match
+    ? (sysNotif.label || 'Background work updated')
+    : hasRenderableContent ? text : 'No text';
 
   return [{
     role: m.role as ChatMsgRole,

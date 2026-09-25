@@ -224,6 +224,20 @@ describe('extractFinalMessages', () => {
     expect(result[0].role).toBe('assistant');
   });
 
+  it('drops OpenClaw connection smoke finals from live event extraction', () => {
+    expect(extractFinalMessages({
+      state: 'final',
+      message: 'OPENCLAW_CONNECTION_OK',
+    })).toHaveLength(0);
+    expect(extractFinalMessages({
+      state: 'final',
+      message: {
+        role: 'user',
+        content: '[Sat 2026-06-06 17:29 GMT+1] Post-restart connection smoke. Reply exactly: OPENCLAW_POST_RESTART_OK',
+      },
+    })).toHaveLength(0);
+  });
+
   it('creates synthetic message from content blocks', () => {
     const blocks = [{ type: 'text' as const, text: 'content block' }];
     const result = extractFinalMessages({ state: 'final', content: blocks });

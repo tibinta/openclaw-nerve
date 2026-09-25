@@ -3,6 +3,7 @@ import { getSessionKey } from '@/types';
 
 export const PRIMARY_AGENT_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
 export const JANE_DIRECT_CHAT_SESSION_KEY = 'agent:jane-whitmore---ceo:imessage:direct:+447494722196';
+export const JANE_LIVE_VOICE_SESSION_KEY = 'agent:jane-whitmore---ceo:voice:direct:nerve-live';
 export const LEGACY_MAIN_SESSION_KEY = 'agent:main:main';
 const HEARTBEAT_SUFFIX = ':heartbeat';
 
@@ -261,36 +262,9 @@ export function getSessionDisplayLabel(session: Session, agentName = 'Agent'): s
 }
 
 export function pickDefaultSessionKey(sessions: Session[], preferredKey?: string): string {
+  if (preferredKey) return preferredKey;
+
   const janeDirectChatSession = findSessionByFamilyKey(sessions, JANE_DIRECT_CHAT_SESSION_KEY);
-
-  if (preferredKey) {
-    const preferred = findSessionByFamilyKey(sessions, preferredKey);
-    if (preferred) {
-      const preferredRootId = getRootAgentId(preferredKey);
-      const janeDirectRootId = getRootAgentId(JANE_DIRECT_CHAT_SESSION_KEY);
-      if (
-        janeDirectChatSession &&
-        preferredRootId &&
-        janeDirectRootId &&
-        preferredRootId === janeDirectRootId
-      ) {
-        // Jane's direct iMessage thread is the operator-facing default.
-        // If the current selection is any other Jane-family session, switch
-        // back to the real direct thread so refreshes and sends stay on the
-        // phone-backed conversation instead of a stale sibling row.
-        return getSessionKey(janeDirectChatSession);
-      }
-
-      return getSessionKey(preferred);
-    }
-
-    // Keep Jane's direct lane selected even when the first tiny startup
-    // sessions.list does not include it. Chat is the priority surface; the
-    // sidebar can reconcile later without stealing focus.
-    if (preferredKey === JANE_DIRECT_CHAT_SESSION_KEY || sessions.length === 0) {
-      return preferredKey;
-    }
-  }
 
   if (janeDirectChatSession) {
     // Jane is the operator-facing default chat thread, so prefer it before

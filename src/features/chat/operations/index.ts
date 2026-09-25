@@ -7,8 +7,15 @@ export {
   groupToolMessages,
   tagIntermediateMessages,
 } from './loadHistory';
-export { buildUserMessage, sendChatMessage } from './sendMessage';
-export type { ChatSendAck, ChatSendStatus } from './sendMessage';
+export {
+  appendFinanceContext,
+  appendLiveVoiceCoordinatorContext,
+  buildLiveVoiceContextDelta,
+  buildUserMessage,
+  sendChatMessage,
+  shouldAttachLiveStatusContext,
+} from './sendMessage';
+export type { ChatSendAck, ChatSendStatus, LiveVoiceContextItem } from './sendMessage';
 export {
   classifyStreamEvent,
   extractStreamDelta,

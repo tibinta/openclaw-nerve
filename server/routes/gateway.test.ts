@@ -842,7 +842,7 @@ describe('gateway routes', () => {
     });
   });
 
-  describe('GET /api/gateway/agents', () => {
+describe('GET /api/gateway/agents', () => {
     it('returns the configured agent registry from openclaw.json', async () => {
       execFileImpl = (_bin: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
         (cb as (err: null, stdout: string) => void)(null, '');

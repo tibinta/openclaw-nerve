@@ -14,13 +14,14 @@ import {
   useReducer,
   lazy,
   Suspense,
+  type ReactNode,
 } from 'react';
-import { AlertTriangle, CheckCircle2, RotateCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Minus, Plus, RotateCw, Volume2 } from 'lucide-react';
 import { useGateway } from '@/contexts/GatewayContext';
 import { useSessionContext, type SpawnSessionOpts } from '@/contexts/SessionContext';
 import { useChat } from '@/contexts/ChatContext';
 import { useSettings, type STTInputMode } from '@/contexts/SettingsContext';
-import { getSessionKey } from '@/types';
+import { getSessionKey, type Session } from '@/types';
 import { useConnectionManager } from '@/hooks/useConnectionManager';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { useGatewayRestart } from '@/hooks/useGatewayRestart';
@@ -41,9 +42,12 @@ import { SpawnAgentDialog } from '@/features/sessions/SpawnAgentDialog';
 import { DEFAULT_CHAT_PATH_LINKS_CONFIG, parseChatPathLinksConfig } from '@/features/chat/chatPathLinks';
 import { FileTreePanel, TabbedContentArea, useOpenFiles, type FileTreeChangeEvent } from '@/features/file-browser';
 import { isImageFile } from '@/features/file-browser/utils/fileTypes';
-import { buildAgentRootSessionKey, getSessionDisplayLabel, JANE_DIRECT_CHAT_SESSION_KEY } from '@/features/sessions/sessionKeys';
+import { buildAgentRootSessionKey, getSessionDisplayLabel, JANE_DIRECT_CHAT_SESSION_KEY, JANE_LIVE_VOICE_SESSION_KEY } from '@/features/sessions/sessionKeys';
 import { shouldGuardWorkspaceSwitch } from '@/features/workspace/workspaceSwitchGuard';
 import { getWorkspaceAgentId, getWorkspaceRootSessionKey } from '@/features/workspace/workspaceScope';
+import { ProposalInbox } from '@/features/kanban/ProposalInbox';
+import { useProposals } from '@/features/kanban/hooks/useProposals';
+import { useAgentSuggestedTasks } from '@/features/kanban/hooks/useAgentSuggestedTasks';
 
 // Lazy-loaded features (not needed in initial bundle)
 const SettingsDrawer = lazy(() => import('@/features/settings/SettingsDrawer').then(m => ({ default: m.SettingsDrawer })));
@@ -55,6 +59,8 @@ const WorkspacePanel = lazy(() => import('@/features/workspace/WorkspacePanel').
 
 // Lazy-loaded view modes
 const KanbanPanel = lazy(() => import('@/features/kanban/KanbanPanel').then(m => ({ default: m.KanbanPanel })));
+const FinancePanel = lazy(() => import('@/features/finance/FinancePanel').then(m => ({ default: m.FinancePanel })));
+const AgentsView = lazy(() => import('@/features/agents/AgentsView').then(m => ({ default: m.AgentsView })));
 const TargetBoardModal = lazy(() => import('@/features/kanban/TargetBoardModal').then(m => ({ default: m.TargetBoardModal })));
 
 interface AppProps {
@@ -66,6 +72,65 @@ interface PendingWorkspaceSwitch {
   execute: () => Promise<void>;
   resolve: (didSwitch: boolean) => void;
   reject: (error: unknown) => void;
+}
+
+type RightPanelKey = 'proposals' | 'agents' | 'workspace';
+
+function CollapsibleRightPanel({
+  id,
+  title,
+  count,
+  collapsed,
+  railCollapsed,
+  onToggle,
+  children,
+}: {
+  id: RightPanelKey;
+  title: string;
+  count?: number;
+  collapsed: boolean;
+  railCollapsed: boolean;
+  onToggle: (id: RightPanelKey) => void;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={`shell-panel flex min-h-0 flex-col overflow-hidden rounded-[28px] transition-[flex-basis,height] ${
+        collapsed ? 'shrink-0' : 'flex-1'
+      }`}
+      aria-label={title}
+      data-testid={`right-panel-${id}`}
+      data-collapsed={collapsed}
+    >
+      <div className={`flex shrink-0 items-center gap-2 border-b border-border/50 bg-secondary/35 px-3 py-2.5 ${railCollapsed ? 'justify-center' : 'justify-between'}`}>
+        {!railCollapsed && (
+          <div className="cockpit-kicker min-w-0">
+            <span className="text-primary">◆</span>
+            <span className="truncate">{title}</span>
+            {typeof count === 'number' && (
+              <span className="ml-2 rounded-full border border-primary/35 bg-primary/10 px-2 py-0.5 font-mono text-[0.667rem] text-primary">
+                {count}
+              </span>
+            )}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => onToggle(id)}
+          className="shell-icon-button size-9 shrink-0 px-0"
+          aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${title}`}
+          title={`${collapsed ? 'Expand' : 'Collapse'} ${title}`}
+        >
+          {collapsed ? <Plus size={14} /> : <Minus size={14} />}
+        </button>
+      </div>
+      {!collapsed && (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {children}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function buildWorkspaceSwitchErrorMessage(result: {
@@ -83,11 +148,24 @@ function getInitialViewMode(canShowKanban: boolean): ViewMode {
   try {
     const saved = localStorage.getItem('nerve:viewMode');
     if (saved === 'kanban' && canShowKanban) return 'kanban';
+    if (saved === 'agents') return 'agents';
+    if (saved === 'finance') return 'finance';
   } catch {
     // ignore storage errors
   }
 
   return 'chat';
+}
+
+function getSessionTokenTotal(session: Session | undefined): number {
+  if (!session) return 0;
+  if (typeof session.totalTokens === 'number' && session.totalTokens > 0) {
+    return session.totalTokens;
+  }
+
+  const inputTokens = typeof session.inputTokens === 'number' ? session.inputTokens : 0;
+  const outputTokens = typeof session.outputTokens === 'number' ? session.outputTokens : 0;
+  return inputTokens + outputTokens;
 }
 
 export default function App({ onLogout }: AppProps) {
@@ -110,18 +188,19 @@ export default function App({ onLogout }: AppProps) {
   const {
     messages, isGenerating, stream, processingStage,
     lastEventTimestamp, activityLog, currentToolDescription,
-    handleSend, handleAbort, handleReset,
+    handleSend, handleLiveTranscript, handleAbort, handleReset,
     loadMore, hasMore,
     showResetConfirm, confirmReset, cancelReset,
   } = useChat();
 
   // Settings state
   const {
-    soundEnabled, toggleSound,
+    soundEnabled, toggleSound, voiceReadbackEnabled, toggleVoiceReadback, voicePlaybackUnlocked, unlockVoicePlayback,
     ttsProvider, ttsModel, setTtsProvider, setTtsModel,
     sttProvider, setSttProvider, sttInputMode, setSttInputMode, sttModel, setSttModel,
     wakeWordEnabled, handleToggleWakeWord, handleWakeWordState,
     liveTranscriptionPreview, toggleLiveTranscriptionPreview, continuousVoiceEnabled, toggleContinuousVoice, liveVoicePauseMs, setLiveVoicePauseMs, wakeVoicePauseMs, setWakeVoicePauseMs,
+    stopSpeaking, isTtsSpeaking,
     panelRatio, setPanelRatio,
     eventsVisible, logVisible,
     toggleEvents, toggleLog, toggleTelemetry,
@@ -300,8 +379,28 @@ export default function App({ onLogout }: AppProps) {
   const [logGlow, setLogGlow] = useState(false);
   const [isMobileTopBarHidden, setIsMobileTopBarHidden] = useState(false);
   const [desktopRightPanelWidth, setDesktopRightPanelWidth] = useState<number | null>(null);
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState<Record<RightPanelKey, boolean>>({
+    proposals: false,
+    agents: false,
+    workspace: false,
+  });
   const prevLogCount = useRef(0);
   const chatPanelRef = useRef<ChatPanelHandle>(null);
+  const {
+    proposals,
+    pendingCount: pendingProposalCount,
+    approveProposal,
+    rejectProposal,
+    rejectBackgroundProposals,
+  } = useProposals();
+  const { tasks: suggestedTasks } = useAgentSuggestedTasks();
+  const [kanbanFocusTaskId, setKanbanFocusTaskId] = useState<string | null>(null);
+  const allRightPanelsCollapsed = rightPanelCollapsed.proposals && rightPanelCollapsed.agents && rightPanelCollapsed.workspace;
+  const rightRailWidthPx = allRightPanelsCollapsed ? 72 : (fileBrowserCollapsed ? desktopRightPanelWidth : null);
+
+  const toggleRightPanel = useCallback((panel: RightPanelKey) => {
+    setRightPanelCollapsed(prev => ({ ...prev, [panel]: !prev[panel] }));
+  }, []);
 
   // Gateway restart
   const {
@@ -325,7 +424,7 @@ export default function App({ onLogout }: AppProps) {
     const nextMode = mode === 'kanban' && !kanbanVisible ? 'chat' : mode;
     setViewModeRaw(nextMode);
 
-    if (nextMode === 'kanban' && isCompactLayout) {
+    if (nextMode !== 'chat' && isCompactLayout) {
       setFileBrowserCollapsed(true);
     }
 
@@ -470,7 +569,7 @@ export default function App({ onLogout }: AppProps) {
     return agentName;
   }, [currentSessionData, agentName]);
 
-  const contextTokens = currentSessionData?.totalTokens ?? 0;
+  const contextTokens = getSessionTokenTotal(currentSessionData);
   const contextLimit = currentSessionData?.contextTokens || getContextLimit(model);
 
   const getWorkspaceSwitchLabel = useCallback((sessionKey: string) => {
@@ -575,6 +674,16 @@ export default function App({ onLogout }: AppProps) {
     handleSessionChange(JANE_DIRECT_CHAT_SESSION_KEY);
   }, [handleSessionChange, setViewMode]);
 
+  const handleOpenAgentSession = useCallback((sessionKey: string) => {
+    setViewMode('chat');
+    handleSessionChange(sessionKey);
+  }, [handleSessionChange, setViewMode]);
+
+  const handleOpenAgentTask = useCallback((taskId: string) => {
+    setKanbanFocusTaskId(taskId);
+    setViewMode('kanban');
+  }, [setViewMode]);
+
   const handleSpawnSession = useCallback((opts: SpawnSessionOpts) => {
     const targetSessionKey = opts.kind === 'root'
       ? buildAgentRootSessionKey(opts.agentName?.trim() || 'agent', sessions.map(getSessionKey))
@@ -669,6 +778,10 @@ export default function App({ onLogout }: AppProps) {
     && saveToast.workspaceVersion === workspaceVersion
     ? saveToast
     : null;
+  const isLiveVoiceSession = currentSession === JANE_LIVE_VOICE_SESSION_KEY;
+  const backgroundWorkCount = isLiveVoiceSession
+    ? Object.entries(busyState).filter(([sessionKey, busy]) => busy && sessionKey !== JANE_LIVE_VOICE_SESSION_KEY).length
+    : 0;
 
   const chatContent = (
     <TabbedContentArea
@@ -691,6 +804,7 @@ export default function App({ onLogout }: AppProps) {
             id="main-chat"
             messages={messages}
             onSend={handleSend}
+            onLiveTranscript={handleLiveTranscript}
             onAbort={handleAbort}
             isGenerating={isGenerating}
             stream={stream}
@@ -711,6 +825,8 @@ export default function App({ onLogout }: AppProps) {
             isMobileTopBarHidden={isMobileTopBarHidden}
             onOpenWorkspacePath={openWorkspacePath}
             pathLinkPrefixes={chatPathLinkPrefixes}
+            isLiveVoiceSession={isLiveVoiceSession}
+            backgroundWorkCount={backgroundWorkCount}
             approvalBanner={
               <ApprovalBanner
                 pendingApprovals={approvalState.pendingApprovals}
@@ -727,9 +843,38 @@ export default function App({ onLogout }: AppProps) {
 
   const renderRightPanels = (onSelect: (key: string) => Promise<void> | void) => (
     <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-xs bg-background">Loading…</div>}>
-      {/* Sessions + Memory stacked vertically */}
-      <div className="flex-1 flex flex-col gap-3 min-h-0">
-        <div className="shell-panel flex-1 flex flex-col min-h-0 overflow-hidden rounded-[28px]">
+      <div
+        className={`flex flex-1 flex-col gap-3 min-h-0 ${allRightPanelsCollapsed ? 'items-stretch' : ''}`}
+        data-testid={allRightPanelsCollapsed ? 'right-panel-rail-collapsed' : 'right-panel-rail'}
+      >
+        <CollapsibleRightPanel
+          id="proposals"
+          title="Agent Suggestions"
+          count={pendingProposalCount + suggestedTasks.length}
+          collapsed={rightPanelCollapsed.proposals}
+          railCollapsed={allRightPanelsCollapsed}
+          onToggle={toggleRightPanel}
+        >
+          <ProposalInbox
+            proposals={proposals}
+            onApprove={approveProposal}
+            onReject={rejectProposal}
+            onRejectBackground={rejectBackgroundProposals}
+            suggestedTasks={suggestedTasks}
+            onOpenTask={(taskId) => {
+              setKanbanFocusTaskId(taskId);
+              setViewMode('kanban');
+            }}
+          />
+        </CollapsibleRightPanel>
+
+        <CollapsibleRightPanel
+          id="agents"
+          title="Agents"
+          collapsed={rightPanelCollapsed.agents}
+          railCollapsed={allRightPanelsCollapsed}
+          onToggle={toggleRightPanel}
+        >
           <PanelErrorBoundary name="Sessions">
             <SessionList
               sessions={sessions}
@@ -747,10 +892,18 @@ export default function App({ onLogout }: AppProps) {
               isLoading={sessionsLoading}
               agentName={agentName}
               agents={agents}
+              hideTitle
             />
           </PanelErrorBoundary>
-        </div>
-        <div className="shell-panel flex-1 flex flex-col min-h-0 overflow-hidden rounded-[28px]">
+        </CollapsibleRightPanel>
+
+        <CollapsibleRightPanel
+          id="workspace"
+          title="Kanban"
+          collapsed={rightPanelCollapsed.workspace}
+          railCollapsed={allRightPanelsCollapsed}
+          onToggle={toggleRightPanel}
+        >
           <PanelErrorBoundary name="Workspace">
             <WorkspacePanel
               workspaceAgentId={workspaceAgentId}
@@ -761,7 +914,7 @@ export default function App({ onLogout }: AppProps) {
               onOpenBoard={() => setViewMode('kanban')}
             />
           </PanelErrorBoundary>
-        </div>
+        </CollapsibleRightPanel>
       </div>
     </Suspense>
   );
@@ -807,7 +960,7 @@ export default function App({ onLogout }: AppProps) {
     </Suspense>
   );
 
-  const showCompactFileBrowser = isCompactLayout && viewMode !== 'kanban' && !fileBrowserCollapsed;
+  const showCompactFileBrowser = isCompactLayout && viewMode === 'chat' && !fileBrowserCollapsed;
 
   return (
     <div className="scan-lines relative h-screen flex flex-col overflow-hidden" data-booted={booted}>
@@ -858,6 +1011,19 @@ export default function App({ onLogout }: AppProps) {
             {gatewayRestartNotice.ok ? <CheckCircle2 size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}
           </span>
           <span className="min-w-0 text-left leading-5">{gatewayRestartNotice.message}</span>
+        </button>
+      )}
+
+      {!voicePlaybackUnlocked && (
+        <button
+          type="button"
+          onClick={() => void unlockVoicePlayback()}
+          className="fixed bottom-8 left-1/2 z-50 flex min-h-14 max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-2xl border border-orange/30 bg-card/96 px-5 py-3 text-sm font-semibold text-foreground shadow-[0_24px_64px_rgba(0,0,0,0.34)] backdrop-blur-xl transition-transform hover:-translate-x-1/2 hover:-translate-y-px"
+        >
+          <span className="inline-flex size-8 items-center justify-center rounded-xl bg-orange/10 text-orange">
+            <Volume2 size={16} aria-hidden="true" />
+          </span>
+          <span>Enable voice</span>
         </button>
       )}
       
@@ -926,7 +1092,7 @@ export default function App({ onLogout }: AppProps) {
       <div className="flex-1 flex gap-3 overflow-hidden min-h-0 px-2 pt-1.5 pb-2 sm:px-4 sm:pt-2 sm:pb-2">
         {/* File tree — desktop inline, mobile drawer */}
         {!isCompactLayout && (
-          <div className={viewMode === 'kanban' ? 'hidden' : fileBrowserCollapsed ? 'contents' : 'h-full min-h-0'}>
+          <div className={viewMode !== 'chat' ? 'hidden' : fileBrowserCollapsed ? 'contents' : 'h-full min-h-0'}>
             <PanelErrorBoundary name="File Explorer">
               <FileTreePanel
                 workspaceAgentId={workspaceAgentId}
@@ -980,30 +1146,42 @@ export default function App({ onLogout }: AppProps) {
         {viewMode === 'kanban' && (
           <div className="shell-panel boot-panel flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden rounded-[28px]">
             <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-xs bg-background">Loading…</div>}>
-              <KanbanPanel />
+              <KanbanPanel
+                initialTaskId={kanbanFocusTaskId}
+                onInitialTaskConsumed={() => setKanbanFocusTaskId(null)}
+              />
             </Suspense>
           </div>
         )}
-        {isCompactLayout ? (
-          <div className={`shell-panel flex-1 min-w-0 min-h-0 overflow-hidden rounded-[28px] boot-panel${viewMode === 'kanban' ? ' hidden' : ''}`}>
-            {chatContent}
-          </div>
-        ) : (
-          <div style={{ display: viewMode === 'kanban' ? 'none' : 'contents' }}>
-            <ResizablePanels
-              leftPercent={panelRatio}
-              onResize={setPanelRatio}
-              minLeftPercent={30}
-              maxLeftPercent={85}
-              rightWidthPx={fileBrowserCollapsed ? desktopRightPanelWidth : null}
-              onRightWidthChange={fileBrowserCollapsed ? undefined : setDesktopRightPanelWidth}
-              leftClassName="shell-panel boot-panel rounded-[28px] overflow-hidden"
-              rightClassName="boot-panel flex flex-col"
-              left={chatContent}
-              right={renderRightPanels(handleSessionChange)}
-            />
+        {viewMode === 'agents' && (
+          <div className="shell-panel boot-panel flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden rounded-[28px]">
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-xs bg-background">Loading…</div>}>
+              <AgentsView onOpenSession={handleOpenAgentSession} onOpenTask={handleOpenAgentTask} />
+            </Suspense>
           </div>
         )}
+        {viewMode === 'finance' && (
+          <div className="shell-panel boot-panel flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden rounded-[28px]">
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-xs bg-background">Loading…</div>}>
+              <FinancePanel />
+            </Suspense>
+          </div>
+        )}
+        <div style={{ display: viewMode !== 'chat' ? 'none' : 'contents' }}>
+          <ResizablePanels
+            compact={isCompactLayout}
+            leftPercent={panelRatio}
+            onResize={setPanelRatio}
+            minLeftPercent={30}
+            maxLeftPercent={85}
+            rightWidthPx={rightRailWidthPx}
+            onRightWidthChange={rightRailWidthPx !== null ? undefined : setDesktopRightPanelWidth}
+            leftClassName="shell-panel boot-panel rounded-[28px] overflow-hidden"
+            rightClassName="boot-panel flex flex-col"
+            left={chatContent}
+            right={renderRightPanels(handleSessionChange)}
+          />
+        </div>
       </div>
 
       {/* Status Bar */}
@@ -1014,6 +1192,10 @@ export default function App({ onLogout }: AppProps) {
           sparkline={sparkline}
           contextTokens={contextTokens}
           contextLimit={contextLimit}
+          voiceReadbackEnabled={voiceReadbackEnabled}
+          onToggleVoiceReadback={toggleVoiceReadback}
+          isTtsSpeaking={isTtsSpeaking}
+          onStopSpeaking={stopSpeaking}
         />
       </div>
 

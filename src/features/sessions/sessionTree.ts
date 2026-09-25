@@ -3,6 +3,7 @@ import { getSessionKey } from '@/types';
 import {
   humanizeAgentFamilyId,
   isDirectSessionKey,
+  PRIMARY_AGENT_SESSION_KEY,
   getSessionType,
   getRootAgentId,
   normalizeSessionKey,
@@ -52,6 +53,13 @@ function getSessionSortTime(session: Session | undefined): number {
     }
   }
   return 0;
+}
+
+const PRIORITY_ROOT_AGENT_ID = getRootAgentId(PRIMARY_AGENT_SESSION_KEY);
+
+function isPriorityRootSession(sessionKey: string): boolean {
+  if (!PRIORITY_ROOT_AGENT_ID) return false;
+  return getRootAgentId(normalizeSessionKey(sessionKey)) === PRIORITY_ROOT_AGENT_ID;
 }
 
 function pickRepresentativeSession(familyKey: string, members: Session[]): Session {
@@ -186,6 +194,11 @@ function buildTreeNodes(
       const keyB = getSessionKey(b);
 
       if (parentKey === null) {
+        const aIsPriorityRoot = isPriorityRootSession(keyA);
+        const bIsPriorityRoot = isPriorityRootSession(keyB);
+        if (aIsPriorityRoot && !bIsPriorityRoot) return -1;
+        if (!aIsPriorityRoot && bIsPriorityRoot) return 1;
+
         const familyTimeA = getFamilySortTime(keyA);
         const familyTimeB = getFamilySortTime(keyB);
         if (familyTimeA !== familyTimeB) return familyTimeB - familyTimeA;
@@ -373,6 +386,16 @@ export function buildAgentSidebarTree(sessions: Session[], agents: AgentRegistry
     const summaryTime = getSessionSortTime(summarySession);
     const familyLabel = resolveFamilyLabel(familyId, members, agents);
     const selectKey = pickFamilySelectionKey(familyId, members);
+    const memberRepresentatives = new Map<string, Session>();
+    for (const member of members) {
+      const familyKey = normalizeSessionKey(getSessionKey(member));
+      const current = memberRepresentatives.get(familyKey);
+      if (!current) {
+        memberRepresentatives.set(familyKey, member);
+        continue;
+      }
+      memberRepresentatives.set(familyKey, pickRepresentativeSession(familyKey, [current, member]));
+    }
     const wrapperSession: Session = {
       ...summarySession,
       sessionKey: `family:${familyId}`,
@@ -383,7 +406,7 @@ export function buildAgentSidebarTree(sessions: Session[], agents: AgentRegistry
       lastActivity: summarySession.lastActivity ?? summaryTime,
     };
 
-    const childNodes = [...members]
+    const childNodes = [...memberRepresentatives.values()]
       .sort((a, b) => {
         const timeA = getSessionSortTime(a);
         const timeB = getSessionSortTime(b);

@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { SessionProvider, isSessionActivelyBusy, useSessionContext } from './SessionContext';
 import { getSessionKey, type GatewayEvent } from '@/types';
-import { JANE_DIRECT_CHAT_SESSION_KEY } from '@/features/sessions/sessionKeys';
+import { JANE_DIRECT_CHAT_SESSION_KEY, JANE_LIVE_VOICE_SESSION_KEY } from '@/features/sessions/sessionKeys';
+import {
+  CODEX_REALTIME_BOOTSTRAP_STORAGE_KEY,
+  CODEX_REALTIME_CONTEXT_DELIVERED_STORAGE_KEY,
+} from '@/features/voice/codexRealtimeBridge';
 
 const mockUseGateway = vi.fn();
 const mockUseSettings = vi.fn();
@@ -65,11 +69,12 @@ function SessionStatusProbe() {
 }
 
 function SessionDeleteAllProbe() {
-  const { currentSession, deleteAllSessions } = useSessionContext();
+  const { currentSession, deleteAllSessions, sessions } = useSessionContext();
 
   return (
     <div>
       <div data-testid="current-session">{currentSession}</div>
+      <div data-testid="session-count">{sessions.length}</div>
       <button data-testid="delete-all" onClick={() => void deleteAllSessions()}>
         Delete all
       </button>
@@ -78,11 +83,14 @@ function SessionDeleteAllProbe() {
 }
 
 function SessionDeleteSingleProbe() {
-  const { currentSession, deleteSession } = useSessionContext();
+  const { currentSession, deleteSession, setCurrentSession } = useSessionContext();
 
   return (
     <div>
       <div data-testid="current-session">{currentSession}</div>
+      <button data-testid="select-designer" onClick={() => setCurrentSession('agent:designer:main')}>
+        Select designer
+      </button>
       <button data-testid="delete-single" onClick={() => void deleteSession('agent:designer:main')}>
         Delete single
       </button>
@@ -91,11 +99,14 @@ function SessionDeleteSingleProbe() {
 }
 
 function SessionAutoCompactProbe() {
-  const { currentSession, refreshSessions } = useSessionContext();
+  const { currentSession, refreshSessions, setCurrentSession } = useSessionContext();
 
   return (
     <div>
       <div data-testid="current-session">{currentSession}</div>
+      <button data-testid="select-live" onClick={() => setCurrentSession(JANE_LIVE_VOICE_SESSION_KEY)}>
+        Select live
+      </button>
       <button data-testid="refresh" onClick={() => void refreshSessions()}>
         Refresh
       </button>
@@ -104,12 +115,15 @@ function SessionAutoCompactProbe() {
 }
 
 function SessionRefreshProbe() {
-  const { currentSession, sessions, refreshSessions } = useSessionContext();
+  const { currentSession, sessions, refreshSessions, setCurrentSession } = useSessionContext();
 
   return (
     <div>
       <div data-testid="current-session">{currentSession}</div>
       <div data-testid="session-count">{sessions.length}</div>
+      <button data-testid="select-reviewer" onClick={() => setCurrentSession('agent:reviewer:main')}>
+        Select reviewer
+      </button>
       <button data-testid="refresh" onClick={() => void refreshSessions()}>
         Refresh
       </button>
@@ -127,6 +141,7 @@ describe('SessionContext', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     subscribedHandler = null;
     soundEnabledValue = true;
     connectionStateValue = 'connected';
@@ -595,7 +610,7 @@ describe('SessionContext', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Designer')).toBeInTheDocument();
+      expect(screen.getByTestId('session-count').textContent).toBe('2');
     });
     expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
 
@@ -603,13 +618,142 @@ describe('SessionContext', () => {
       screen.getByTestId('refresh').click();
     });
 
-    await waitFor(() => {
-      expect(screen.getByText('Designer')).toBeInTheDocument();
-    });
-
     expect(screen.getByTestId('session-count').textContent).toBe('2');
     expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     expect(sessionsListCalls).toBe(2);
+  });
+
+  it('keeps the manually selected session when a manual refresh returns a partial snapshot', async () => {
+    let sessionsListCalls = 0;
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        sessionsListCalls += 1;
+        return {
+          sessions: sessionsListCalls === 1
+            ? [
+                { sessionKey: 'agent:jane-whitmore---ceo:main', label: 'Jane' },
+                { sessionKey: 'agent:reviewer:main', label: 'Reviewer' },
+              ]
+            : [{ sessionKey: 'agent:jane-whitmore---ceo:main', label: 'Jane' }],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionRefreshProbe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-count').textContent).toBe('2');
+    });
+    await act(async () => {
+      screen.getByTestId('select-reviewer').click();
+    });
+
+    await act(async () => {
+      screen.getByTestId('refresh').click();
+    });
+
+    expect(screen.getByTestId('current-session').textContent).toBe('agent:reviewer:main');
+    expect(screen.getByTestId('session-count').textContent).toBe('1');
+    expect(sessionsListCalls).toBe(2);
+  });
+
+  it('refreshes agent presence from the session snapshot so stale busy states clear without a manual reload', async () => {
+    vi.useFakeTimers();
+
+    let sessionsListCalls = 0;
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        sessionsListCalls += 1;
+        return {
+          sessions: sessionsListCalls === 1
+            ? [
+                { sessionKey: 'agent:main:main', label: 'Main' },
+                { sessionKey: 'agent:reviewer:main', label: 'Reviewer', state: 'running', hasActiveRun: true },
+              ]
+            : [
+                { sessionKey: 'agent:main:main', label: 'Main' },
+                { sessionKey: 'agent:reviewer:main', label: 'Reviewer', state: 'idle', hasActiveRun: false },
+              ],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionStatusProbe />
+      </SessionProvider>,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('reviewer-status').textContent).toBe('THINKING');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('reviewer-status').textContent).toBe('IDLE');
+
+    expect(sessionsListCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('clears a stale event-only thinking status when no terminal event arrives', async () => {
+    vi.useFakeTimers();
+
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [
+            { sessionKey: 'agent:main:main', label: 'Main' },
+            { sessionKey: 'agent:reviewer:main', label: 'Reviewer' },
+          ],
+        };
+      }
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionStatusProbe />
+      </SessionProvider>,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('reviewer-status').textContent).toBe('NONE');
+
+    act(() => {
+      subscribedHandler?.({
+        type: 'event',
+        event: 'chat',
+        payload: {
+          sessionKey: 'agent:reviewer:main',
+          state: 'started',
+        },
+      });
+    });
+
+    expect(screen.getByTestId('reviewer-status').textContent).toBe('THINKING');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(95_000);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('reviewer-status').textContent).toBe('IDLE');
   });
 
   it('shows a newly announced session immediately before the full session list catches up', async () => {
@@ -677,6 +821,9 @@ describe('SessionContext', () => {
     await waitFor(() => {
       expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
+    await waitFor(() => {
+      expect(screen.getByTestId('session-count').textContent).toBe('3');
+    });
 
     await act(async () => {
       screen.getByTestId('delete-all').click();
@@ -720,6 +867,7 @@ describe('SessionContext', () => {
     });
 
     await act(async () => {
+      screen.getByTestId('select-designer').click();
       screen.getByTestId('delete-single').click();
     });
 
@@ -735,6 +883,7 @@ describe('SessionContext', () => {
         }),
       );
     });
+    expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
   });
 
   it('auto-compacts the current session once when context usage crosses 70 percent', async () => {
@@ -785,6 +934,43 @@ describe('SessionContext', () => {
     });
 
     expect(sessionsListCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('clears live voice delivery cursors after auto-compacting Nerve Live', async () => {
+    window.localStorage.setItem(CODEX_REALTIME_BOOTSTRAP_STORAGE_KEY, '1');
+    window.localStorage.setItem(CODEX_REALTIME_CONTEXT_DELIVERED_STORAGE_KEY, JSON.stringify(['ctx-old']));
+
+    rpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.list') {
+        return {
+          sessions: [{
+            sessionKey: JANE_LIVE_VOICE_SESSION_KEY,
+            label: 'Nerve Live',
+            totalTokens: 71_000,
+            contextTokens: 100_000,
+          }],
+        };
+      }
+      if (method === 'sessions.compact') return { ok: true };
+      return {};
+    });
+
+    render(
+      <SessionProvider>
+        <SessionAutoCompactProbe />
+      </SessionProvider>,
+    );
+
+    await act(async () => {
+      screen.getByTestId('select-live').click();
+    });
+    await waitFor(() => {
+      expect(rpcMock).toHaveBeenCalledWith('sessions.compact', { key: JANE_LIVE_VOICE_SESSION_KEY });
+    });
+    await waitFor(() => {
+      expect(window.localStorage.getItem(CODEX_REALTIME_BOOTSTRAP_STORAGE_KEY)).toBeNull();
+      expect(window.localStorage.getItem(CODEX_REALTIME_CONTEXT_DELIVERED_STORAGE_KEY)).toBeNull();
+    });
   });
 
   it('marks background top-level roots unread on start and pings when chat reaches a terminal event', async () => {

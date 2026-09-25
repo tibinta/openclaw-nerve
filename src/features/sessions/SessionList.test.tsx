@@ -40,9 +40,12 @@ describe('SessionList live tree', () => {
     });
 
     expect(screen.getByText('Sean Root')).toBeInTheDocument();
-    expect(screen.getByText('WhatsApp Root')).toBeInTheDocument();
     expect(screen.getByText('Worker')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /load more sessions/i })).toBeInTheDocument();
     expect(screen.queryByText('No active sessions')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more sessions/i }));
+    expect(screen.getByText('WhatsApp Root')).toBeInTheDocument();
   });
 
   it('shows live subagents with their current status text', () => {
@@ -170,6 +173,17 @@ describe('SessionList live tree', () => {
     expect(screen.queryByText('Agent henry')).not.toBeInTheDocument();
   });
 
+  it('renders one Jane Nerve Live row when direct and heartbeat records coexist', () => {
+    const sessions: Session[] = [
+      { sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live', label: 'Nerve Live', status: 'idle', updatedAt: Date.now() },
+      { sessionKey: 'agent:jane-whitmore---ceo:voice:direct:nerve-live:heartbeat', label: 'heartbeat', status: 'idle', updatedAt: Date.now() - 1_000 },
+    ];
+
+    renderSessionList({ sessions, agents: [{ id: 'jane-whitmore---ceo', identityName: 'Jane Whitmore - CEO' }] });
+
+    expect(screen.getAllByText('nerve-live')).toHaveLength(1);
+  });
+
   it('hides non-agent root sessions from the AGENTS panel', () => {
     const sessions: Session[] = [
       { sessionKey: 'discord:sean', label: 'Discord Root' },
@@ -181,5 +195,59 @@ describe('SessionList live tree', () => {
     expect(screen.getByText('No active sessions')).toBeInTheDocument();
     expect(screen.queryByText('Discord Root')).not.toBeInTheDocument();
     expect(screen.queryByText('Dispatch Run')).not.toBeInTheDocument();
+  });
+
+  it('hides only the title when embedded and keeps the compact title by default', () => {
+    renderSessionList({ hideTitle: true, onDeleteAllSessions: vi.fn().mockResolvedValue(undefined) });
+
+    expect(screen.queryByText('AGENTS', { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete all sessions' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh sessions' })).toBeInTheDocument();
+
+    renderSessionList({ compact: true });
+    expect(screen.getByText('AGENTS', { exact: true })).toBeInTheDocument();
+  });
+
+  it('shows only the first 3 live sessions by default and loads in batches of 5', () => {
+    const now = Date.now();
+    renderSessionList({
+      sessions: Array.from({ length: 10 }, (_, i) => ({
+        sessionKey: `agent:agent${i}:main`,
+        label: `Agent ${i}`,
+        updatedAt: now - i * 1000,
+      })),
+    });
+
+    const initialAgentLabelCount = screen.getAllByText((text) => /^Agent \d+$/.test(text)).length;
+    expect(initialAgentLabelCount).toBeGreaterThan(0);
+    expect(screen.queryAllByText('Agent 3')).toHaveLength(0);
+    const loadMoreBtn = screen.getByRole('button', { name: /load more sessions/i });
+    expect(loadMoreBtn).toBeInTheDocument();
+    expect(loadMoreBtn.textContent).toMatch(/Load \d+ more sessions/);
+
+    fireEvent.click(screen.getByRole('button', { name: /load more sessions/i }));
+    const loadedAgentLabelCount = screen.getAllByText((text) => /^Agent \d+$/.test(text)).length;
+
+    expect(loadedAgentLabelCount).toBeGreaterThan(initialAgentLabelCount);
+    expect(screen.queryByText('Agent 8')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /load more sessions/i }).textContent).toMatch(/Load \d+ more sessions/);
+  });
+
+  it('keeps the current selected session visible when it is beyond the live batch window', () => {
+    const now = Date.now();
+    renderSessionList({
+      currentSession: 'agent:agent3:main',
+      sessions: [
+        { sessionKey: 'agent:agent0:main', label: 'Agent 0', updatedAt: now - 5_000 },
+        { sessionKey: 'agent:agent1:main', label: 'Agent 1', updatedAt: now - 4_000 },
+        { sessionKey: 'agent:agent2:main', label: 'Agent 2', updatedAt: now - 3_000 },
+        { sessionKey: 'agent:agent3:main', label: 'Agent 3', updatedAt: now - 2_000 },
+        { sessionKey: 'agent:agent4:main', label: 'Agent 4', updatedAt: now - 1_000 },
+        { sessionKey: 'agent:agent5:main', label: 'Agent 5', updatedAt: now },
+      ],
+    });
+
+    expect(screen.getAllByText('Agent 3').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /load more sessions/i })).toBeInTheDocument();
   });
 });
