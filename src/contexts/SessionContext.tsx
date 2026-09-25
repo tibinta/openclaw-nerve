@@ -44,6 +44,15 @@ const SESSION_REFRESH_POLL_INTERVAL_MS = 5_000;
 const FULL_SESSION_REFRESH_DELAY_MS = 60_000;
 const DELAYED_SESSION_REFRESH_MS = 30_000;
 const STALE_THINKING_STATUS_MS = 90_000;
+const SELECTED_SESSION_STORAGE_KEY = 'nerve:selected-session';
+
+function savedSessionSelection(): string {
+  try {
+    return localStorage.getItem(SELECTED_SESSION_STORAGE_KEY) || JANE_DIRECT_CHAT_SESSION_KEY;
+  } catch {
+    return JANE_DIRECT_CHAT_SESSION_KEY;
+  }
+}
 
 export interface GatewayAgentRegistration {
   id: string;
@@ -204,7 +213,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [agents, setAgents] = useState<GatewayAgentRegistration[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
-  const [currentSession, setCurrentSessionRaw] = useState(JANE_DIRECT_CHAT_SESSION_KEY);
+  const [currentSession, setCurrentSessionRaw] = useState(savedSessionSelection);
   const [agentLogEntries, setAgentLogEntries] = useState<AgentLogEntry[]>([]);
   const [eventEntries, setEventEntries] = useState<EventEntry[]>([]);
   const [agentStatus, setAgentStatus] = useState<Record<string, GranularAgentState>>({});
@@ -260,6 +269,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const setCurrentSession = useCallback((key: string) => {
     currentSessionRef.current = key;
     setCurrentSessionRaw(key);
+    try {
+      if (key) localStorage.setItem(SELECTED_SESSION_STORAGE_KEY, key);
+      else localStorage.removeItem(SELECTED_SESSION_STORAGE_KEY);
+    } catch { /* Keep in-memory selection when browser storage is unavailable. */ }
     markSessionRead(key);
   }, [markSessionRead]);
 

@@ -134,6 +134,17 @@ function SessionRefreshProbe() {
   );
 }
 
+function SessionSelectionProbe({ sessionKey }: { sessionKey: string }) {
+  const { currentSession, sessions, setCurrentSession } = useSessionContext();
+  return (
+    <div>
+      <div data-testid="current-session">{currentSession}</div>
+      <div data-testid="session-count">{sessions.length}</div>
+      <button data-testid="select-session" onClick={() => setCurrentSession(sessionKey)}>Select session</button>
+    </div>
+  );
+}
+
 describe('SessionContext', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -535,6 +546,23 @@ describe('SessionContext', () => {
     await waitFor(() => {
       expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
     });
+  });
+
+  it.each([
+    ['legacy Live', 'agent:jane-whitmore---ceo:voice:direct:nerve-live'],
+    ['iMessage', 'agent:main:imessage:direct:+441234567890'],
+  ])('keeps an explicitly selected %s conversation after a full page reload', async (_label, sessionKey) => {
+    const first = render(<SessionProvider><SessionSelectionProbe sessionKey={sessionKey} /></SessionProvider>);
+    await waitFor(() => expect(screen.getByTestId('session-count').textContent).not.toBe('0'));
+
+    act(() => screen.getByTestId('select-session').click());
+    expect(screen.getByTestId('current-session').textContent).toBe(sessionKey);
+    expect(window.localStorage.getItem('nerve:selected-session')).toBe(sessionKey);
+
+    first.unmount();
+    render(<SessionProvider><SessionSelectionProbe sessionKey={sessionKey} /></SessionProvider>);
+    await waitFor(() => expect(screen.getByTestId('session-count').textContent).not.toBe('0'));
+    expect(screen.getByTestId('current-session').textContent).toBe(sessionKey);
   });
 
   it('uses a unique config name when spawning a duplicate root agent', async () => {
