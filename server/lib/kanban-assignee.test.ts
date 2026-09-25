@@ -6,9 +6,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   InvalidKanbanAssigneeError,
+  isArchivedJaneAssignee,
   canonicalizeKanbanAssignee,
   resolveKanbanAssigneeRootSessionKey,
 } from './kanban-assignee.js';
+
+it('identifies archived Jane assignees while leaving historical normalization intact', () => {
+  expect(isArchivedJaneAssignee('agent:jane-whitmore---ceo')).toBe(true);
+  expect(isArchivedJaneAssignee('agent:jane-whitmore---ceo:main')).toBe(true);
+  expect(isArchivedJaneAssignee('agent:main')).toBe(false);
+  expect(canonicalizeKanbanAssignee('agent:jane-whitmore---ceo:main')).toBe('agent:jane-whitmore---ceo');
+});
 
 describe('canonicalizeKanbanAssignee', () => {
   it('keeps canonical agent assignees unchanged', () => {

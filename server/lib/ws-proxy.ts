@@ -608,23 +608,21 @@ export function createGatewayRelay(
   // Client → Gateway (attached once, references mutable gwWs)
   clientWs.on('message', (data: Buffer | string, isBinary: boolean) => {
     const clientData = relayPolicy ? normalizeJaneMobileClientFrame(data, isBinary) : data;
-    if (!isBinary) {
-      try {
-        const request = JSON.parse(clientData.toString()) as unknown;
-        if (isLegacyJaneWriteRequest(request)) {
-          const id = isRecord(request) ? request.id : undefined;
-          if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({
-              type: 'res',
-              id,
-              ok: false,
-              error: { code: -32000, message: 'Legacy Jane history is read-only.' },
-            }));
-          }
-          return;
+    try {
+      const request = JSON.parse(clientData.toString()) as unknown;
+      if (isLegacyJaneWriteRequest(request)) {
+        const id = isRecord(request) ? request.id : undefined;
+        if (clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(JSON.stringify({
+            type: 'res',
+            id,
+            ok: false,
+            error: { code: -32000, message: 'Legacy Jane history is read-only.' },
+          }));
         }
-      } catch { /* pass malformed frames through to existing handling */ }
-    }
+        return;
+      }
+    } catch { /* pass malformed frames through to existing handling */ }
     if (janeMobileCronController?.handle(clientData, isBinary, (frame) => {
       if (clientWs.readyState === WebSocket.OPEN) clientWs.send(frame);
     })) return;

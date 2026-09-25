@@ -29,7 +29,7 @@ import {
   ProposalAlreadyResolvedError,
   ProofGateRequiredError,
 } from '../lib/kanban-store.js';
-import { InvalidKanbanAssigneeError, resolveKanbanAssigneeRootSessionKey } from '../lib/kanban-assignee.js';
+import { InvalidKanbanAssigneeError, isArchivedJaneAssignee, resolveKanbanAssigneeRootSessionKey } from '../lib/kanban-assignee.js';
 import { invokeGatewayTool } from '../lib/gateway-client.js';
 import { gatewayRpcCall } from '../lib/gateway-rpc.js';
 import { withMutex } from '../lib/mutex.js';
@@ -362,6 +362,7 @@ async function reportKanbanChildCompletionToParent(params: {
   result?: string;
   error?: string;
 }): Promise<void> {
+  if (isArchivedJaneAssignee(params.parentSessionKey)) return;
   const message = buildKanbanParentCompletionMessage(params);
   const suffix = params.outcome === 'completed' ? 'done' : 'failed';
 
@@ -783,6 +784,7 @@ const taskActorSchema = z.union([
   z.literal('operator'),
   z.string().regex(/^agent:.+$/),
 ]) as z.ZodType<TaskActor>;
+const activeAssigneeSchema = taskActorSchema.refine((value) => !isArchivedJaneAssignee(value), 'Archived Jane cannot be assigned new work');
 const thinkingSchema = z.enum(['off', 'low', 'medium', 'high']);
 
 const feedbackSchema = z.object({
@@ -913,7 +915,7 @@ const createTaskSchema = z.object({
   priority: taskPrioritySchema.optional(),
   createdBy: taskActorSchema.default('operator'),
   sourceSessionKey: z.string().max(500).optional(),
-  assignee: taskActorSchema.optional(),
+  assignee: activeAssigneeSchema.optional(),
   labels: z.array(z.string().max(100)).max(50).default([]),
   model: z.string().max(200).optional(),
   thinking: thinkingSchema.optional(),
@@ -927,7 +929,7 @@ const updateTaskSchema = z.object({
   description: z.string().max(10_000).optional().nullable(),
   status: taskStatusSchema.optional(),
   priority: taskPrioritySchema.optional(),
-  assignee: taskActorSchema.optional().nullable(),
+  assignee: activeAssigneeSchema.optional().nullable(),
   labels: z.array(z.string().max(100)).max(50).optional(),
   model: z.string().max(200).optional().nullable(),
   thinking: thinkingSchema.optional().nullable(),
@@ -976,7 +978,7 @@ const proposalCreatePayloadSchema = z.object({
   description: z.string().max(10_000).optional(),
   status: taskStatusSchema.optional(),
   priority: taskPrioritySchema.optional(),
-  assignee: taskActorSchema.optional(),
+  assignee: activeAssigneeSchema.optional(),
   labels: z.array(z.string().max(100)).max(50).optional(),
   model: z.string().max(200).optional(),
   thinking: thinkingSchema.optional(),
@@ -990,7 +992,7 @@ const proposalUpdatePayloadSchema = z.object({
   description: z.string().max(10_000).optional(),
   status: taskStatusSchema.optional(),
   priority: taskPrioritySchema.optional(),
-  assignee: taskActorSchema.optional(),
+  assignee: activeAssigneeSchema.optional(),
   labels: z.array(z.string().max(100)).max(50).optional(),
   result: z.string().max(50_000).optional(),
 }).merge(proofGateFieldsSchema).merge(delegationProofFieldsSchema).merge(swarmFieldsSchema).superRefine(validateProofGateIfDone);
@@ -1824,6 +1826,9 @@ app.post('/api/kanban/tasks/:id/execute', rateLimitGeneral, async (c) => {
       }
 
       const assignedParentSessionKey = resolveKanbanAssigneeRootSessionKey(existing.assignee);
+      if (isArchivedJaneAssignee(existing.assignee)) {
+        throw new KanbanExecutionPreflightError('Archived Jane tasks cannot be executed.');
+      }
       if (assignedParentSessionKey) {
         const sessionsResponse = await gatewayRpcCall('sessions.list', {
           activeMinutes: PARENT_ROOT_LOOKUP_ACTIVE_MINUTES,

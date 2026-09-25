@@ -433,6 +433,20 @@ describe('POST /api/kanban/tasks', () => {
     expect(body.assignee).toBe('agent:main');
   });
 
+  it('rejects new assignments to archived Jane', async () => {
+    const app = await buildApp();
+    const create = await app.request('/api/kanban/tasks', json({
+      title: 'Archived assignee', createdBy: 'operator', assignee: 'agent:jane-whitmore---ceo:main',
+    }));
+    expect(create.status).toBe(400);
+
+    const task = await createTask(app, { assignee: 'agent:reviewer' });
+    const update = await app.request(`/api/kanban/tasks/${task.id}`, jsonPatch({
+      version: task.version, assignee: 'agent:jane-whitmore---ceo',
+    }));
+    expect(update.status).toBe(400);
+  });
+
   it('returns 400 for invalid status', async () => {
     const app = await buildApp();
     const res = await app.request('/api/kanban/tasks', json({
@@ -1183,6 +1197,21 @@ describe('PUT /api/kanban/config', () => {
 // ── POST /api/kanban/tasks/:id/execute ───────────────────────────────
 
 describe('POST /api/kanban/tasks/:id/execute', () => {
+  it('keeps archived Jane tasks readable but refuses execution', async () => {
+    const gatewayRpcMock = vi.fn(async () => ({}));
+    const app = await buildApp({ gatewayRpcMock });
+    const task = await createTask(app, { status: 'todo', assignee: 'agent:reviewer' });
+    const { getKanbanStore } = await import('../lib/kanban-store.js');
+    await getKanbanStore().updateTask(task.id, task.version, { assignee: 'agent:jane-whitmore---ceo:main' });
+
+    const read = await app.request(`/api/kanban/tasks/${task.id}`);
+    expect(read.status).toBe(200);
+    expect((await read.json() as KanbanTask).assignee).toBe('agent:jane-whitmore---ceo');
+    const execute = await app.request(`/api/kanban/tasks/${task.id}/execute`, json({}));
+    expect(execute.status).toBe(409);
+    expect(gatewayRpcMock).not.toHaveBeenCalled();
+  });
+
   it('routes assigned execution through the owning root session with a 1-week preflight lookup', async () => {
     const invokeGatewayToolMock = vi.fn(async () => ({ sessionKey: 'agent:main:subagent:unexpected' }));
     const launchMock = vi.fn(async ({ label, parentSessionKey }: { label: string; parentSessionKey: string }) => ({

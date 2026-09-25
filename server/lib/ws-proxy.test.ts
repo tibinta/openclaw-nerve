@@ -226,6 +226,26 @@ describe('ws-proxy', () => {
   });
 
   describe('message relaying', () => {
+    it('rejects binary JSON writes to archived Jane without forwarding them', async () => {
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(mockGw.url + '/ws')}`,
+      );
+      expect(JSON.parse(await waitForMessage(ws)).event).toBe('connect.challenge');
+      mockGw.clearReceived();
+
+      const response = waitForMessage(ws);
+      ws.send(Buffer.from(JSON.stringify({
+        type: 'req', id: 'archived-write', method: 'chat.send',
+        params: { sessionKey: 'agent:jane-whitmore---ceo:main', message: 'no' },
+      })));
+      expect(JSON.parse(await response)).toMatchObject({
+        type: 'res', id: 'archived-write', ok: false,
+        error: { message: 'Legacy Jane history is read-only.' },
+      });
+      expect(mockGw.received).toEqual([]);
+      ws.close();
+    });
+
     it('forwards restricted session mutations for control-ui clients instead of intercepting them', async () => {
       const ws = new WebSocket(
         `ws://127.0.0.1:${proxyPort}/ws?target=${encodeURIComponent(mockGw.url + '/ws')}`,

@@ -10,6 +10,10 @@ export class InvalidKanbanAssigneeError extends Error {
   }
 }
 
+export function isArchivedJaneAssignee(value?: string | null): boolean {
+  return value === 'agent:jane-whitmore---ceo' || Boolean(value?.startsWith('agent:jane-whitmore---ceo:'));
+}
+
 export function canonicalizeKanbanAssignee(
   value?: string | null,
 ): `agent:${string}` | 'operator' | undefined {
