@@ -2,7 +2,7 @@ import type { Session } from '@/types';
 import { getSessionKey } from '@/types';
 
 export const PRIMARY_AGENT_SESSION_KEY = 'agent:main:main';
-export const JANE_DIRECT_CHAT_SESSION_KEY = 'agent:main:imessage:direct:+447494722196';
+export const JANE_DIRECT_CHAT_SESSION_KEY = PRIMARY_AGENT_SESSION_KEY;
 export const JANE_LIVE_VOICE_SESSION_KEY = 'agent:main:voice:direct:nerve-live';
 export const LEGACY_JANE_SESSION_KEY = 'agent:jane-whitmore---ceo:main';
 const HEARTBEAT_SUFFIX = ':heartbeat';

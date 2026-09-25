@@ -14,6 +14,7 @@ import {
   inferParentSessionKey,
   JANE_DIRECT_CHAT_SESSION_KEY,
   JANE_LIVE_VOICE_SESSION_KEY,
+  PRIMARY_AGENT_SESSION_KEY,
   isRootChildSession,
   isTopLevelAgentSessionKey,
   pickDefaultSessionKey,
@@ -113,14 +114,17 @@ describe('sessionKeys', () => {
     expect(pickDefaultSessionKey(sessions)).toBe('agent:main:main');
   });
 
-  it('prefers the Jane direct chat thread when it is available', () => {
+  it('opens Jane chat on main while preserving explicit iMessage history', () => {
+    const imessageKey = 'agent:main:imessage:direct:+447494722196';
     const sessions = [
       session('agent:reviewer:main', { label: 'Reviewer' }),
-      session(JANE_DIRECT_CHAT_SESSION_KEY, { label: 'Jane Direct' }),
+      session(imessageKey, { label: 'Jane iMessage' }),
       session('agent:main:main', { label: 'Main' }),
     ];
 
-    expect(pickDefaultSessionKey(sessions)).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
+    expect(JANE_DIRECT_CHAT_SESSION_KEY).toBe(PRIMARY_AGENT_SESSION_KEY);
+    expect(pickDefaultSessionKey(sessions)).toBe(PRIMARY_AGENT_SESSION_KEY);
+    expect(pickDefaultSessionKey(sessions, imessageKey)).toBe(imessageKey);
   });
 
   it('keeps the preferred Jane-family session when Jane direct is also available', () => {

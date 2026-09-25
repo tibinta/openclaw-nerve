@@ -230,7 +230,7 @@ describe('SessionContext', () => {
     });
   });
 
-  it('seeds Jane direct as the usable default before the first sessions poll completes', async () => {
+  it('seeds Jane chat on the main root before the first sessions poll completes', async () => {
     rpcMock.mockImplementation(async (method: string) => {
       if (method === 'sessions.list') {
         return { sessions: [] };
@@ -241,7 +241,7 @@ describe('SessionContext', () => {
     render(<SessionProvider><SessionLabels /></SessionProvider>);
 
     await waitFor(() => {
-      expect(screen.getByTestId('current-session').textContent).toBe(JANE_DIRECT_CHAT_SESSION_KEY);
+      expect(screen.getByTestId('current-session').textContent).toBe('agent:main:main');
     });
   });
 
