@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- hook intentionally co-located with provider */
 import { createContext, useContext, useCallback, useRef, useState, useEffect, useMemo, type ReactNode } from 'react';
 import { useTTS, migrateTTSProvider, type TTSProvider } from '@/features/tts/useTTS';
+import { unlockBrowserAudio } from '@/features/voice/audio-feedback';
 import { type ThemeName, applyTheme, themeNames } from '@/lib/themes';
 import { type FontName, applyFont, fontNames } from '@/lib/fonts';
 
@@ -22,6 +23,11 @@ interface TTSVoiceConfigSnapshot {
 interface SettingsContextValue {
   soundEnabled: boolean;
   toggleSound: () => void;
+  voiceReadbackEnabled: boolean;
+  toggleVoiceReadback: () => void;
+  disableVoiceReadback: () => void;
+  voicePlaybackUnlocked: boolean;
+  unlockVoicePlayback: () => Promise<boolean>;
   ttsProvider: TTSProvider;
   ttsModel: string;
   setTtsProvider: (provider: TTSProvider) => void;
@@ -46,6 +52,7 @@ interface SettingsContextValue {
   wakeVoicePauseMs: number;
   setWakeVoicePauseMs: (ms: number) => void;
   speak: (text: string) => Promise<void>;
+  stopSpeaking: () => void;
   isTtsSpeaking: boolean;
   panelRatio: number;
   setPanelRatio: (ratio: number) => void;
@@ -71,6 +78,8 @@ const SettingsContext = createContext<SettingsContextValue | null>(null);
 const FONT_REFRESH_STORAGE_KEY = 'nerve:font-refresh-20260312';
 const KANBAN_VISIBILITY_STORAGE_KEY = 'nerve:workspace:kanban-visible';
 const HOLLER_DEFAULT_MIGRATION_KEY = 'nerve:holler-default-tts-20260518';
+const VOICE_UNLOCK_STORAGE_KEY = 'nerve:voice-playback-unlocked';
+const VOICE_READBACK_STORAGE_KEY = 'nerve:voice-readback-enabled';
 
 const ALLOWED_FONT_SIZES = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24]);
 const ALLOWED_EDITOR_FONT_SIZES = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24]);
@@ -124,6 +133,11 @@ function resolveInitialTtsProvider(): TTSProvider {
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [soundEnabled, setSoundEnabled] = useState(localStorage.getItem('oc-sound') === 'true');
+  const [voiceReadbackEnabled, setVoiceReadbackEnabled] = useState(() => {
+    const saved = localStorage.getItem(VOICE_READBACK_STORAGE_KEY);
+    return saved !== 'false';
+  });
+  const [voicePlaybackUnlocked, setVoicePlaybackUnlocked] = useState(false);
   const [ttsProvider, setTtsProvider] = useState<TTSProvider>(resolveInitialTtsProvider);
   const [ttsModel, setTtsModelState] = useState(() => localStorage.getItem('oc-tts-model') || '');
   const [ttsVoiceConfig, setTtsVoiceConfig] = useState<TTSVoiceConfigSnapshot | null>(null);
@@ -200,7 +214,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     : ttsProvider === 'xiaomi'
     ? (ttsModel || ttsVoiceConfig?.xiaomi?.model)
     : (ttsModel || ttsVoiceConfig?.openai?.model);
-  const { speak, isSpeaking: isTtsSpeaking } = useTTS(true, ttsProvider, { model: selectedTtsModel || undefined, voice: selectedTtsVoice || undefined });
+  const { speak, stopSpeaking, isSpeaking: isTtsSpeaking } = useTTS(true, ttsProvider, { model: selectedTtsModel || undefined, voice: selectedTtsVoice || undefined });
   const wakeWordToggleRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -249,6 +263,49 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       return next;
     });
   }, []);
+
+  const toggleVoiceReadback = useCallback(() => {
+    setVoiceReadbackEnabled(prev => {
+      const next = !prev;
+      localStorage.setItem(VOICE_READBACK_STORAGE_KEY, String(next));
+      if (!next) {
+        stopSpeaking();
+      }
+      return next;
+    });
+  }, [stopSpeaking]);
+  const disableVoiceReadback = useCallback(() => {
+    setVoiceReadbackEnabled(false);
+    localStorage.setItem(VOICE_READBACK_STORAGE_KEY, 'false');
+    stopSpeaking();
+  }, [stopSpeaking]);
+
+  const unlockVoicePlayback = useCallback(async () => {
+    // Safari needs a real user gesture before later async TTS audio can play.
+    // Keep this explicit so sales users can enable voice once after loading Nerve.
+    const ok = await unlockBrowserAudio();
+    setVoicePlaybackUnlocked(true);
+    localStorage.setItem(VOICE_UNLOCK_STORAGE_KEY, 'true');
+    setSoundEnabled(true);
+    localStorage.setItem('oc-sound', 'true');
+    setVoiceReadbackEnabled(true);
+    localStorage.setItem(VOICE_READBACK_STORAGE_KEY, 'true');
+    return ok;
+  }, []);
+
+  useEffect(() => {
+    if (voicePlaybackUnlocked) return;
+    if (localStorage.getItem(VOICE_UNLOCK_STORAGE_KEY) !== 'true') return;
+
+    const handleGesture = () => {
+      void unlockVoicePlayback();
+    };
+    const events = ['click', 'touchstart', 'keydown'] as const;
+    events.forEach((event) => window.addEventListener(event, handleGesture, { capture: true, once: true }));
+    return () => {
+      events.forEach((event) => window.removeEventListener(event, handleGesture, { capture: true }));
+    };
+  }, [unlockVoicePlayback, voicePlaybackUnlocked]);
 
   const toggleLiveTranscriptionPreview = useCallback(() => {
     setLiveTranscriptionPreview(prev => {
@@ -427,6 +484,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SettingsContextValue>(() => ({
     soundEnabled,
     toggleSound,
+    voiceReadbackEnabled,
+    toggleVoiceReadback,
+    disableVoiceReadback,
+    voicePlaybackUnlocked,
+    unlockVoicePlayback,
     ttsProvider,
     ttsModel,
     setTtsProvider: changeTtsProvider,
@@ -451,6 +513,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     wakeVoicePauseMs,
     setWakeVoicePauseMs,
     speak,
+    stopSpeaking,
     isTtsSpeaking,
     panelRatio,
     setPanelRatio,
@@ -471,11 +534,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     kanbanVisible,
     toggleKanbanVisible,
   }), [
-    soundEnabled, toggleSound, ttsProvider, ttsModel, changeTtsProvider, changeTtsModel, toggleTtsProvider,
+    soundEnabled, toggleSound, voiceReadbackEnabled, toggleVoiceReadback, disableVoiceReadback, voicePlaybackUnlocked, unlockVoicePlayback, ttsProvider, ttsModel, changeTtsProvider, changeTtsModel, toggleTtsProvider,
     sttProvider, changeSttProvider, sttInputMode, changeSttInputMode, sttModel, changeSttModel,
     wakeWordEnabled, handleToggleWakeWord, handleWakeWordState,
     liveTranscriptionPreview, toggleLiveTranscriptionPreview, continuousVoiceEnabled, toggleContinuousVoice,
-    liveVoicePauseMs, setLiveVoicePauseMs, wakeVoicePauseMs, setWakeVoicePauseMs, speak, isTtsSpeaking, panelRatio, setPanelRatio, telemetryVisible, toggleTelemetry,
+    liveVoicePauseMs, setLiveVoicePauseMs, wakeVoicePauseMs, setWakeVoicePauseMs, speak, stopSpeaking, isTtsSpeaking, panelRatio, setPanelRatio, telemetryVisible, toggleTelemetry,
     eventsVisible, toggleEvents, logVisible, toggleLog, theme, setTheme, font, setFont,
     fontSize, setFontSize, editorFontSize, setEditorFontSize, kanbanVisible, toggleKanbanVisible,
   ]);
