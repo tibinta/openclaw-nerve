@@ -318,6 +318,8 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
     setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
 
+  const isCommandEdit = mode === 'edit' && (form.raw.payload as Record<string, unknown> | undefined)?.kind === 'command';
+
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -329,12 +331,12 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
       setError('Name is required');
       return;
     }
-    if (!message) {
+    if (!isCommandEdit && !message) {
       setError('Assistant task prompt is required');
       return;
     }
 
-    if (form.deliveryMode === 'announce' && availableChannels.length > 0 && !form.deliveryChannel) {
+    if (!isCommandEdit && form.deliveryMode === 'announce' && availableChannels.length > 0 && !form.deliveryChannel) {
       setError('Select a delivery channel or switch to Keep inside Nerve');
       return;
     }
@@ -357,7 +359,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
       const everyMs = partsToEveryMs(form.everyValue, form.everyUnit);
       schedule = { kind: 'every', everyMs };
       const previous = (form.raw.schedule || {}) as Record<string, unknown>;
-      if (previous.everyMs === everyMs && typeof previous.anchorMs === 'number') schedule.anchorMs = previous.anchorMs;
+      if (typeof previous.anchorMs === 'number') schedule.anchorMs = previous.anchorMs;
     }
 
     const timeoutSeconds = Number(form.timeoutSeconds);
@@ -392,7 +394,12 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
     );
     const sessionKey = form.sessionKey.trim();
     const agentId = form.agentId.trim();
-    const job: Record<string, unknown> = {
+    const job: Record<string, unknown> = isCommandEdit ? {
+      ...preservedRaw,
+      name,
+      enabled: form.enabled,
+      schedule,
+    } : {
       ...preservedRaw,
       name,
       description: form.description.trim() || undefined,
@@ -424,7 +431,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
     } else {
       setError(`Failed to ${mode === 'edit' ? 'update' : 'create'} cron job`);
     }
-  }, [availableChannels.length, form, handleClose, mode, onSubmit]);
+  }, [availableChannels.length, form, handleClose, isCommandEdit, mode, onSubmit]);
 
   if (!open) return null;
 
@@ -475,7 +482,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
             <SectionShell
               eyebrow="Basics"
               title="Name and state"
-              description="Name the job, add a short note, and choose the agent it belongs to."
+              description={isCommandEdit ? 'Rename the saved task and change when it runs.' : 'Name the job, add a short note, and choose the agent it belongs to.'}
             >
               <div className="grid gap-3">
                 <div className="flex flex-col gap-1">
@@ -491,7 +498,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                 </div>
               </div>
 
-              <div className="grid gap-3">
+              {!isCommandEdit && <div className="grid gap-3">
                 <div className="flex flex-col gap-1">
                   <label htmlFor="cron-agent-id" className="cockpit-field-label">Agent ID</label>
                   <input
@@ -503,9 +510,9 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                     className="cockpit-input cockpit-input-mono"
                   />
                 </div>
-              </div>
+              </div>}
 
-              <div className="flex flex-col gap-1">
+              {!isCommandEdit && <div className="flex flex-col gap-1">
                 <label htmlFor="cron-description" className="cockpit-field-label">Description</label>
                 <textarea
                   id="cron-description"
@@ -515,7 +522,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                   placeholder="Short note for the team."
                   className="cockpit-textarea min-h-[84px]"
                 />
-              </div>
+              </div>}
 
               <label className="flex items-center gap-2 rounded-2xl border border-border/70 bg-background/35 px-3 py-2 text-sm text-foreground">
                 <input
@@ -618,7 +625,9 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
               )}
             </SectionShell>
 
-            <SectionShell
+            {isCommandEdit ? (
+              <SectionShell eyebrow="Execution" title="Saved command task" description="The command and its routing stay as saved when you edit its schedule or name.">{null}</SectionShell>
+            ) : <SectionShell
               eyebrow="Execution"
               title="What runs"
               description="Choose where it wakes and what it should do."
@@ -681,10 +690,11 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                   placeholder="60"
                 />
               </div>
-            </SectionShell>
+            </SectionShell>}
           </div>
 
           <div className="space-y-4">
+            {!isCommandEdit && <>
             <SectionShell
               eyebrow="Delivery"
               title="What happens after it finishes"
@@ -854,6 +864,7 @@ export function CronDialog({ open, onClose, onSubmit, mode, initialData }: CronD
                 </div>
               </div>
             </SectionShell>
+            </>}
 
             {error && <div className="cockpit-note" data-tone="danger">{error}</div>}
 

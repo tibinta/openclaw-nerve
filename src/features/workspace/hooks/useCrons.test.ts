@@ -78,6 +78,28 @@ describe('normalizeCronJob', () => {
     expect(job.sessionTarget).toBe('session:agent:main:voice:direct:nerve-live');
     expect(job.payloadKind).toBe('agentTurn');
   });
+
+  it('keeps command jobs distinct from agent turns', () => {
+    const job = normalizeCronJob({
+      id: 'work-runner', enabled: false, agentId: 'main',
+      schedule: { kind: 'every', everyMs: 900000, anchorMs: 1781766298433 },
+      sessionTarget: 'isolated',
+      payload: {
+        kind: 'command', argv: ['python3', 'scripts/openclaw_work_runner.py'],
+        cwd: '/Users/alexnedelea/.openclaw', noOutputTimeoutSeconds: 120,
+        outputMaxBytes: 8192, timeoutSeconds: 900,
+      },
+      delivery: { mode: 'none' },
+    });
+
+    expect(job.payloadKind).toBe('command');
+    expect(job.message).toBe('');
+    expect(job.raw.payload).toEqual({
+      kind: 'command', argv: ['python3', 'scripts/openclaw_work_runner.py'],
+      cwd: '/Users/alexnedelea/.openclaw', noOutputTimeoutSeconds: 120,
+      outputMaxBytes: 8192, timeoutSeconds: 900,
+    });
+  });
 });
 
 describe('sortCronJobsByLastRun', () => {

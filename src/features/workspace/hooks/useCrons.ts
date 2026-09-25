@@ -27,7 +27,7 @@ export interface CronJob {
   everyMs?: number;
   at?: string;            // ISO string
   // Payload
-  payloadKind: 'agentTurn' | 'systemEvent';
+  payloadKind: 'agentTurn' | 'systemEvent' | 'command';
   message?: string;       // agentTurn message or systemEvent text
   model?: string;
   thinking?: string;
@@ -104,7 +104,7 @@ export function normalizeCronJob(j: Record<string, unknown>): CronJob {
     everyMs: sched.everyMs as number | undefined,
     at: sched.at as string | undefined,
     // Payload
-    payloadKind: (payload.kind as string) === 'systemEvent' ? 'systemEvent' : 'agentTurn',
+    payloadKind: payload.kind === 'systemEvent' ? 'systemEvent' : payload.kind === 'command' ? 'command' : 'agentTurn',
     message: (payload.message || payload.text || '') as string,
     model: payload.model as string | undefined,
     thinking: typeof payload.thinking === 'string' ? payload.thinking : typeof j.thinking === 'string' ? j.thinking : undefined,
