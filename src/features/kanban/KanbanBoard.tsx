@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState, useRef } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { Archive, LayoutGrid, RotateCcw } from 'lucide-react';
 import { DndContext, DragOverlay } from '@dnd-kit/core';
 import { useDroppable } from '@dnd-kit/core';
@@ -8,6 +8,7 @@ import type { KanbanTask, TaskStatus } from './types';
 import { COLUMN_LABELS, WORKFLOW_VISIBLE_STATUSES } from './types';
 import { KanbanCard } from './KanbanCard';
 import { useKanbanDragDrop } from './hooks/useKanbanDragDrop';
+import { compareTaskPriority } from './hooks/useKanban';
 import { TASK_STATUS_TONE } from './tone';
 
 interface KanbanBoardProps {
@@ -177,7 +178,6 @@ export const KanbanBoard = memo(function KanbanBoard({
   const [archiveLoading, setArchiveLoading] = useState(false);
 
   const [dragOverride, setDragOverride] = useState<KanbanTask[] | null>(null);
-  const isDraggingRef = useRef(false);
 
   const localTasks = dragOverride ?? propTasks;
 
@@ -201,7 +201,6 @@ export const KanbanBoard = memo(function KanbanBoard({
 
   const handleDragStart = useCallback(
     (event: Parameters<typeof onDragStart>[0]) => {
-      isDraggingRef.current = true;
       setDragOverride(propTasks);
       onDragStart(event);
     },
@@ -211,17 +210,13 @@ export const KanbanBoard = memo(function KanbanBoard({
   const handleDragEnd = useCallback(
     async (event: Parameters<typeof onDragEnd>[0]) => {
       await onDragEnd(event);
-      setTimeout(() => {
-        isDraggingRef.current = false;
-        setDragOverride(null);
-      }, 500);
+      setDragOverride(null);
     },
     [onDragEnd],
   );
 
   const handleDragCancel = useCallback(() => {
     onDragCancel();
-    isDraggingRef.current = false;
     setDragOverride(null);
   }, [onDragCancel]);
 
@@ -301,8 +296,8 @@ export const KanbanBoard = memo(function KanbanBoard({
               <div className="mt-1 text-sm text-muted-foreground">Ready list first. Backlog below.</div>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
-              <TaskStack status="todo" tasks={tasksByStatus('todo')} onCardClick={onCardClick} />
-              <TaskStack status="backlog" tasks={tasksByStatus('backlog')} onCardClick={onCardClick} />
+              <TaskStack status="todo" tasks={localTasks.filter(task => task.status === 'todo').sort(compareTaskPriority)} onCardClick={onCardClick} />
+              <TaskStack status="backlog" tasks={localTasks.filter(task => task.status === 'backlog').sort(compareTaskPriority)} onCardClick={onCardClick} />
             </div>
           </section>
 
@@ -335,11 +330,11 @@ export const KanbanBoard = memo(function KanbanBoard({
               ) : null}
               <TaskStack
                 status="in-progress"
-                tasks={tasksByStatus('in-progress')}
+                tasks={localTasks.filter(task => task.status === 'in-progress').sort(compareTaskPriority)}
                 onCardClick={onCardClick}
                 featuredTaskId={currentActiveTask?.id ?? null}
               />
-              <TaskStack status="review" tasks={tasksByStatus('review')} onCardClick={onCardClick} />
+              <TaskStack status="review" tasks={localTasks.filter(task => task.status === 'review').sort(compareTaskPriority)} onCardClick={onCardClick} />
             </div>
           </section>
 

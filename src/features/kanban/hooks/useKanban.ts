@@ -94,10 +94,9 @@ function hasActiveFilters(filters: KanbanFilters): boolean {
   return Boolean(filters.q || filters.priority.length > 0 || filters.assignee || filters.labels.length > 0);
 }
 
-function mergeById(existing: KanbanTask[], incoming: KanbanTask[]): KanbanTask[] {
-  const map = new Map(existing.map((task) => [task.id, task] as const));
-  for (const task of incoming) map.set(task.id, task);
-  return [...map.values()];
+const PRIORITY_ORDER: Record<TaskPriority, number> = { critical: 0, high: 1, normal: 2, low: 3 };
+export function compareTaskPriority(a: KanbanTask, b: KanbanTask): number {
+  return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || a.columnOrder - b.columnOrder;
 }
 
 /* ── Board config ── */
@@ -129,6 +128,8 @@ export function useKanban() {
   const [archiveLoaded, setArchiveLoaded] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const refreshInFlightRef = useRef(false);
+  const listRetryAtRef = useRef(0);
+  const mutationRevisionRef = useRef(0);
 
   /* ── Fetch board config (columns are user-configurable) ── */
   useEffect(() => {
@@ -146,74 +147,58 @@ export function useKanban() {
 
   /* ── Fetch ── */
 
-  const fetchTasks = useCallback(async (f?: KanbanFilters, { silent = false }: { silent?: boolean } = {}) => {
-    if (silent && refreshInFlightRef.current) return;
-
-    if (!silent) {
-      abortRef.current?.abort();
-    }
-
+  const fetchTasks = useCallback(async (f?: KanbanFilters, { silent = false, force = false }: { silent?: boolean; force?: boolean } = {}) => {
+    if (Date.now() < listRetryAtRef.current) return;
+    if (silent && !force && refreshInFlightRef.current) return;
+    abortRef.current?.abort();
     const controller = new AbortController();
+    const revision = mutationRevisionRef.current;
     abortRef.current = controller;
     refreshInFlightRef.current = true;
-
-    // Only show loading skeleton on first load or explicit filter changes, not background polls
     if (!silent) {
       setLoading(true);
       setError(null);
     }
     try {
       const effectiveFilters = f ?? filters;
+      const qs = new URLSearchParams(buildQuery(effectiveFilters));
       if (!hasActiveFilters(effectiveFilters)) {
-        let merged: KanbanTask[] = [];
-        let totalLoaded = 0;
-        let firstUsefulPaintDone = false;
-
-        // Load the work surface first. This gives the UI useful tasks before
-        // backlog/archive work can slow down first paint.
-        for (const status of BOARD_LOAD_ORDER) {
-          const qs = new URLSearchParams();
-          qs.set('status', status);
-          qs.set('limit', '200');
-          const res = await fetch(`/api/kanban/tasks?${qs.toString()}`, { signal: controller.signal });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data: TasksResponse = await res.json();
-          merged = mergeById(merged, data.items);
-          totalLoaded += data.total;
-          if (!silent) {
-            setTasks(merged);
-            setTotal(totalLoaded);
-            // Keep the skeleton until there is something real to show, so an
-            // empty in-progress lane never looks like the whole board vanished.
-            if (!firstUsefulPaintDone && (merged.length > 0 || status === BOARD_LOAD_ORDER.at(-1))) {
-              setLoading(false);
-              firstUsefulPaintDone = true;
-            }
-          }
-        }
-        if (silent) {
-          // Background refreshes update once after the ordered fetch completes.
-          // This prevents lower-priority lanes briefly disappearing every poll.
-          setTasks(merged);
-          setTotal(totalLoaded);
-        }
-      } else {
-        const qs = buildQuery(effectiveFilters);
-        const res = await fetch(`/api/kanban/tasks?${qs}`, { signal: controller.signal });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data: TasksResponse = await res.json();
-        setTasks(data.items);
-        setTotal(data.total);
+        for (const status of BOARD_LOAD_ORDER) qs.append('status', status);
       }
-      if (!silent) setError(null);
+      const items: KanbanTask[] = [];
+      let count = 0;
+      let more = true;
+      while (more) {
+        qs.set('offset', String(items.length));
+        const res = await fetch(`/api/kanban/tasks?${qs}`, { signal: controller.signal });
+        if (controller.signal.aborted || revision !== mutationRevisionRef.current) return;
+        if (!res.ok) {
+          if (res.status === 429) {
+            const retry = res.headers.get('Retry-After');
+            const seconds = Number(retry);
+            listRetryAtRef.current = Date.now() + (retry && Number.isFinite(seconds) ? Math.max(1, seconds) * 1000 : 60_000);
+          }
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data: TasksResponse = await res.json();
+        items.push(...data.items);
+        count = data.total;
+        more = data.hasMore && data.items.length > 0;
+      }
+      // A list requested before a move must never replace its newer version.
+      if (controller.signal.aborted || revision !== mutationRevisionRef.current) return;
+      setTasks(items);
+      setTotal(count);
+      setError(null);
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      // Only surface errors on explicit fetches, not silent polls
+      if (controller.signal.aborted) return;
       if (!silent) setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      refreshInFlightRef.current = false;
-      if (!silent) setLoading(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        refreshInFlightRef.current = false;
+        if (!silent) setLoading(false);
+      }
     }
   }, [filters]);
 
@@ -231,7 +216,7 @@ export function useKanban() {
     return () => abortRef.current?.abort();
   }, [filters, fetchTasks]);
 
-  /* Auto-refresh every 5s so board stays current (silent — no loading flash) */
+  /* Refresh visible boards without multiplying requests by the number of columns. */
   useEffect(() => {
     const id = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -284,23 +269,28 @@ export function useKanban() {
     targetStatus: TaskStatus,
     targetIndex: number,
   ): Promise<KanbanTask> => {
+    mutationRevisionRef.current += 1;
+    abortRef.current?.abort();
     const res = await fetch(`/api/kanban/tasks/${encodeURIComponent(id)}/reorder`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ version, targetStatus, targetIndex }),
     });
+    mutationRevisionRef.current += 1;
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       if (res.status === 409) {
-        const err = new Error('version_conflict');
-        (err as VersionConflictError).latest = body.latest;
+        if (body.latest) setTasks(prev => prev.map(task => task.id === id ? body.latest : task));
+        void fetchTasks(undefined, { silent: true, force: true });
+        const err: VersionConflictError = new Error('version_conflict');
+        err.latest = body.latest;
         throw err;
       }
       throw new Error(body.details || body.error || `HTTP ${res.status}`);
     }
     const updated: KanbanTask = await res.json();
-    // Refetch to sync all columnOrder values from server
-    await fetchTasks(undefined, { silent: true });
+    setTasks(prev => prev.map(task => task.id === id ? updated : task));
+    void fetchTasks(undefined, { silent: true, force: true });
     return updated;
   }, [fetchTasks]);
 
@@ -415,7 +405,7 @@ export function useKanban() {
       if (!list) { list = []; map.set(t.status, list); }
       list.push(t);
     }
-    for (const list of map.values()) list.sort((a, b) => a.columnOrder - b.columnOrder);
+    for (const list of map.values()) list.sort(compareTaskPriority);
     return map;
   }, [rootTasks]);
 

@@ -11,6 +11,7 @@ import type { DragStartEvent, DragOverEvent, DragEndEvent } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable';
 import type { KanbanTask, TaskStatus } from '../types';
 import { COLUMNS } from '../types';
+import { compareTaskPriority } from './useKanban';
 
 interface UseKanbanDragDropOptions {
   tasks: KanbanTask[];
@@ -20,6 +21,23 @@ interface UseKanbanDragDropOptions {
   /** Active column keys — used to distinguish column drop targets from card IDs. Defaults to COLUMNS. */
   activeColumns?: TaskStatus[];
 }
+
+const visualOrder = (a: KanbanTask, b: KanbanTask) =>
+  compareTaskPriority(a, b) || a.columnOrder - b.columnOrder;
+
+// Translate a visible insertion inside the task's priority band back to
+// the raw columnOrder index used by the server.
+const rawInsertionIndex = (rawTasks: KanbanTask[], priority: KanbanTask['priority'], visibleIndex: number) => {
+  const visible = [...rawTasks].sort(visualOrder);
+  const peers = visible.filter((task) => task.priority === priority);
+  const peerStart = visible.findIndex((task) => task.priority === priority);
+  const peerIndex = Math.max(0, Math.min(visibleIndex - Math.max(0, peerStart), peers.length));
+  const raw = [...rawTasks].sort((a, b) => a.columnOrder - b.columnOrder);
+  const nextPeer = peers[peerIndex];
+  if (nextPeer) return raw.findIndex((task) => task.id === nextPeer.id);
+  const lastPeer = peers.at(-1);
+  return lastPeer ? raw.findIndex((task) => task.id === lastPeer.id) + 1 : raw.length;
+};
 
 /**
  * Encapsulates all dnd-kit drag-and-drop logic for the Kanban board.
@@ -37,6 +55,7 @@ export function useKanbanDragDrop({
 
   // Snapshot of tasks before a drag starts — used for rollback on error
   const snapshotRef = useRef<KanbanTask[] | null>(null);
+  const submittingRef = useRef(false);
 
   /* ── Sensors ── */
   const pointerSensor = useSensor(PointerSensor, {
@@ -63,6 +82,7 @@ export function useKanbanDragDrop({
   /* ── Drag Start ── */
   const onDragStart = useCallback(
     (event: DragStartEvent) => {
+      if (submittingRef.current) return;
       const task = tasks.find((t) => t.id === event.active.id);
       if (!task) return;
       setActiveTask(task);
@@ -74,6 +94,7 @@ export function useKanbanDragDrop({
   /* ── Drag Over (live column transfer for visual feedback) ── */
   const onDragOver = useCallback(
     (event: DragOverEvent) => {
+      if (submittingRef.current) return;
       const { active, over } = event;
       if (!over) return;
 
@@ -91,7 +112,7 @@ export function useKanbanDragDrop({
 
         const destTasks = prev
           .filter((t) => t.status === toColumn && t.id !== activeId)
-          .sort((a, b) => a.columnOrder - b.columnOrder);
+          .sort(visualOrder);
 
         // Find index to insert at: if over is a task, insert at its index; else append
         let newIndex = destTasks.length;
@@ -100,38 +121,14 @@ export function useKanbanDragDrop({
           if (overIndex >= 0) newIndex = overIndex;
         }
 
-        // Recompute columnOrder for the destination column
-        const updatedTasks = prev.map((t) => {
-          if (t.id === activeId) {
-            return { ...t, status: toColumn, columnOrder: newIndex };
-          }
-          return t;
-        });
+        const rawIndex = rawInsertionIndex(destTasks, activeTask.priority, newIndex);
+        const rawTasks = [...destTasks].sort((a, b) => a.columnOrder - b.columnOrder);
+        rawTasks.splice(rawIndex, 0, { ...activeTask, status: toColumn });
+        const orderMap = new Map(rawTasks.map((task, index) => [task.id, index]));
 
-        // Reassign sequential columnOrder for all tasks in destination column
-        const destAll = updatedTasks
-          .filter((t) => t.status === toColumn)
-          .sort((a, b) => {
-            if (a.id === activeId) return newIndex - b.columnOrder + 0.5;
-            if (b.id === activeId) return a.columnOrder - newIndex - 0.5;
-            return a.columnOrder - b.columnOrder;
-          });
-
-        // Ensure moved card is at newIndex
-        const withoutActive = destAll.filter((t) => t.id !== activeId);
-        const activeItem = destAll.find((t) => t.id === activeId);
-        if (!activeItem) return prev; // task deleted concurrently, bail out
-        withoutActive.splice(newIndex, 0, activeItem);
-
-        const orderMap = new Map<string, number>();
-        withoutActive.forEach((t, i) => orderMap.set(t.id, i));
-
-        return updatedTasks.map((t) => {
-          if (t.status === toColumn && orderMap.has(t.id)) {
-            return { ...t, columnOrder: orderMap.get(t.id)! };
-          }
-          return t;
-        });
+        return prev.map((task) => orderMap.has(task.id)
+          ? { ...task, status: toColumn, columnOrder: orderMap.get(task.id)! }
+          : task);
       });
     },
     [findColumnForId, setTasksOptimistic, activeColumns],
@@ -142,11 +139,13 @@ export function useKanbanDragDrop({
     async (event: DragEndEvent) => {
       const { active, over } = event;
       setActiveTask(null);
+      if (submittingRef.current) return;
 
       if (!over) {
         // Dropped outside — rollback
-        if (snapshotRef.current) {
-          setTasksOptimistic(() => snapshotRef.current!);
+        const snapshot = snapshotRef.current;
+        if (snapshot) {
+          setTasksOptimistic(() => snapshot);
           snapshotRef.current = null;
         }
         return;
@@ -169,7 +168,7 @@ export function useKanbanDragDrop({
       // Use the live tasks state (already optimistically updated in onDragOver)
       const columnTasks = tasks
         .filter((t) => t.status === targetColumn)
-        .sort((a, b) => a.columnOrder - b.columnOrder);
+        .sort(visualOrder);
 
       let targetIndex: number;
 
@@ -208,6 +207,23 @@ export function useKanbanDragDrop({
         return;
       }
 
+      const movedTask = columnTasks.find((task) => task.id === activeId) ?? originalTask;
+      const withoutActive = columnTasks.filter((task) => task.id !== activeId);
+      const groupStart = withoutActive.findIndex((task) => task.priority === movedTask.priority);
+      const visibleInsertion = originalTask.status === targetColumn
+        ? targetIndex
+        : activeColumns.includes(overId)
+          ? withoutActive.length
+          : Math.max(0, withoutActive.findIndex((task) => task.id === overId));
+      const peerInsertion = withoutActive
+        .slice(0, visibleInsertion)
+        .filter((task) => task.priority === movedTask.priority).length;
+      targetIndex = rawInsertionIndex(
+        withoutActive,
+        movedTask.priority,
+        Math.max(0, groupStart) + Math.max(0, peerInsertion),
+      );
+
       // Optimistic state is already applied from onDragOver / implicit ordering.
       // Now apply the final correct ordering in local state.
       setTasksOptimistic((prev) => {
@@ -236,19 +252,25 @@ export function useKanbanDragDrop({
       });
 
       // Call API — rollback on failure
+      submittingRef.current = true;
       try {
-        await reorderTask(activeId, originalTask.version, targetColumn, targetIndex);
+        const updated = await reorderTask(activeId, originalTask.version, targetColumn, targetIndex);
+        setTasksOptimistic((prev) => prev.map((task) => task.id === updated.id ? updated : task));
       } catch (err: unknown) {
-        // Rollback
-        if (snapshotRef.current) {
-          setTasksOptimistic(() => snapshotRef.current!);
+        // Restore the pre-drag order while keeping the server's latest task
+        // version when another writer changed it during the drag.
+        const snapshot = snapshotRef.current;
+        if (snapshot) {
+          const latest = (err as Error & { latest?: KanbanTask }).latest;
+          setTasksOptimistic(() => snapshot.map((task) => latest?.id === task.id ? latest : task));
         }
         const msg =
           err instanceof Error && err.message === 'version_conflict'
-            ? 'Task was modified by someone else — board refreshed'
+            ? 'Task changed elsewhere. The latest task details were kept; try the move again.'
             : 'Failed to move task — reverted';
         onError?.(msg);
       } finally {
+        submittingRef.current = false;
         snapshotRef.current = null;
       }
     },
@@ -256,8 +278,10 @@ export function useKanbanDragDrop({
   );
 
   const onDragCancel = useCallback(() => {
-    if (snapshotRef.current) {
-      setTasksOptimistic(() => snapshotRef.current!);
+    if (submittingRef.current) return;
+    const snapshot = snapshotRef.current;
+    if (snapshot) {
+      setTasksOptimistic(() => snapshot);
     }
     snapshotRef.current = null;
     setActiveTask(null);
