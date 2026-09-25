@@ -1,4 +1,8 @@
 import { gatewayRpcCall } from './gateway-rpc.js';
+import fs from 'node:fs/promises';
+import { join } from 'node:path';
+import { config } from './config.js';
+import { writeJSON } from './files.js';
 
 const EDIT_DATE = '2026-08-03';
 const RPC_TIMEOUT_MS = 60_000;
@@ -21,6 +25,42 @@ export const JANE_OPERATING_CRONS = [
   ['d03f6b19-d8bb-46d6-9a54-de28ac4d0149', 'Omni-Nerve Task Sync [edited 2026-08-03]'],
   ['e0560373-4143-4aaa-b3cb-2c5d927e4a2a', 'Weekly Mentor Review [edited 2026-08-03]'],
 ] as const;
+
+const PHONE_CRON_SELECTION_FILE = join(config.home, '.nerve', 'phone-cron-selection.json');
+let selectionWriteQueue: Promise<unknown> = Promise.resolve();
+
+function validSelection(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || !id.trim())) {
+    throw new Error('Invalid phone cron selection file.');
+  }
+  return [...new Set(value as string[])];
+}
+
+export async function getPhoneCronSelection(): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(PHONE_CRON_SELECTION_FILE, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return JANE_OPERATING_CRONS.map(([id]) => id);
+    throw error;
+  }
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || !Array.isArray(parsed.jobIds)) throw new Error('Invalid phone cron selection file.');
+  return validSelection(parsed.jobIds);
+}
+
+export function setPhoneCronSelection(id: string, available: boolean): Promise<string[]> {
+  const operation = selectionWriteQueue.then(async () => {
+    const selected = new Set(await getPhoneCronSelection());
+    if (available) selected.add(id);
+    else selected.delete(id);
+    const result = [...selected];
+    await writeJSON(PHONE_CRON_SELECTION_FILE, { jobIds: result });
+    return result;
+  });
+  selectionWriteQueue = operation.catch(() => {});
+  return operation;
+}
 
 type GatewayCall = typeof gatewayRpcCall;
 type SendFrame = (frame: string) => void;
@@ -140,16 +180,16 @@ export function createJaneMobileCronController(gatewayCall: GatewayCall = gatewa
   async function status(): Promise<GroupStatus> {
     const result = await gatewayCall('cron.list', { includeDisabled: true }, RPC_TIMEOUT_MS);
     const byId = new Map(cronJobs(result).map((job) => [String(job.id || ''), job]));
+    const selectedIds = await getPhoneCronSelection();
     const mismatches: string[] = [];
-    const jobs = JANE_OPERATING_CRONS.map(([id, expectedName]) => {
+    const jobs = selectedIds.map((id) => {
       const job = byId.get(id);
-      const base = expectedName.replace(/\s+\[edited \d{4}-\d{2}-\d{2}\]$/, '');
-      if (!job) mismatches.push(`${base}:missing`);
-      else if (job.name !== expectedName) mismatches.push(`${base}:name_changed`);
+      if (!job) mismatches.push(`${id}:missing`);
+      else if ((job as Record<string, unknown>).declarationKey != null || (job as Record<string, unknown>).systemOwned === true) mismatches.push(`${id}:system_owned`);
       const run = lastRun(job || {});
       return {
         id,
-        name: typeof job?.name === 'string' ? job.name : expectedName,
+        name: typeof job?.name === 'string' ? job.name : id,
         enabled: job?.enabled === true,
         schedule: scheduleLabel(job?.schedule),
         last_run_at: run.at,

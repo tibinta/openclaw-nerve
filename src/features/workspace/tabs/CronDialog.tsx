@@ -37,6 +37,7 @@ const CRON_READONLY_KEYS = new Set([
   'scheduledToolPolicy',
   'configRevision',
   'effectiveAgentId',
+  'systemOwned',
   'displayName',
   'declarationKey',
   'status',

@@ -20,6 +20,8 @@ export interface CronJob {
   description?: string;
   agentId?: string;
   enabled: boolean;
+  availableOnPhone?: boolean;
+  phoneSelectable?: boolean;
   // Schedule (normalized)
   scheduleKind: 'every' | 'cron' | 'at';
   schedule?: string;      // cron expr
@@ -382,10 +384,27 @@ export function useCrons() {
     }
   }, [setErrorState]);
 
+  const setAvailableOnPhone = useCallback(async (id: string, available: boolean) => {
+    try {
+      const res = await fetch(`/api/crons/${encodeURIComponent(id)}/phone-selection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ available }),
+      });
+      const data = await res.json() as { ok: boolean; error?: string };
+      if (!data.ok) throw new Error(data.error || 'Failed to update phone availability');
+      setJobs((prev) => prev.map((job) => job.id === id ? { ...job, availableOnPhone: available } : job));
+      return true;
+    } catch (err) {
+      setErrorState(err);
+      return false;
+    }
+  }, [setErrorState]);
+
   const activeCount = jobs.filter(j => j.enabled).length;
   const totalCount = jobs.length;
 
-  return { jobs, isLoading, error, cronWarning, activeCount, totalCount, fetchJobs, toggleJob, runJob, fetchRuns, addJob, updateJob, deleteJob };
+  return { jobs, isLoading, error, cronWarning, activeCount, totalCount, fetchJobs, toggleJob, runJob, fetchRuns, addJob, updateJob, deleteJob, setAvailableOnPhone };
 }
 
 function extractCronJobsFromResult(result: unknown): Record<string, unknown>[] {

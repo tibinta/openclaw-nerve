@@ -81,6 +81,50 @@ describe('cron routes', () => {
     });
   });
 
+  it('keeps the selected phone cron set separate from scheduler fields', async () => {
+    const { app, gatewayRpcCall, tempHome } = await buildApp();
+    const jobs = [
+      { id: 'custom-cron', name: 'Custom', enabled: false, schedule: { kind: 'every', everyMs: 60000 } },
+      { id: 'managed-cron', name: 'Managed', enabled: true, declarationKey: 'managed' },
+    ];
+    gatewayRpcCall.mockImplementation(async (method: string) => method === 'cron.list' ? { jobs } : { ok: true });
+
+    const initial = await app.request('/api/crons');
+    const initialData = await initial.json() as { result: { jobs: Array<Record<string, unknown>> } };
+    expect(initialData.result.jobs.find((job) => job.id === 'custom-cron')).toMatchObject({ availableOnPhone: false, phoneSelectable: true });
+    expect(initialData.result.jobs.find((job) => job.id === 'managed-cron')).toMatchObject({ availableOnPhone: false, phoneSelectable: false });
+
+    const selected = await app.request('/api/crons/custom-cron/phone-selection', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ available: true }),
+    });
+    expect(selected.status).toBe(200);
+    expect(await selected.json()).toMatchObject({ ok: true, availableOnPhone: true });
+    expect(gatewayRpcCall).toHaveBeenCalledWith('cron.list', { includeDisabled: true }, expect.any(Number));
+
+    const blocked = await app.request('/api/crons/managed-cron/phone-selection', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ available: false }),
+    });
+    expect(blocked.status).toBe(403);
+
+    const stored = JSON.parse(await fs.readFile(join(tempHome, '.nerve', 'phone-cron-selection.json'), 'utf8')) as { jobIds: string[] };
+    expect(stored.jobIds).toContain('custom-cron');
+    expect(jobs[0]).toMatchObject({ enabled: false, schedule: { kind: 'every', everyMs: 60000 } });
+
+    const removed = await app.request('/api/crons/custom-cron', { method: 'DELETE' });
+    expect(removed.status).toBe(200);
+    const afterDelete = JSON.parse(await fs.readFile(join(tempHome, '.nerve', 'phone-cron-selection.json'), 'utf8')) as { jobIds: string[] };
+    expect(afterDelete.jobIds).not.toContain('custom-cron');
+  });
+
+  it('does not silently replace an invalid phone selection file with defaults', async () => {
+    const { app, gatewayRpcCall, tempHome } = await buildApp();
+    await fs.mkdir(join(tempHome, '.nerve'), { recursive: true });
+    await fs.writeFile(join(tempHome, '.nerve', 'phone-cron-selection.json'), '{broken', 'utf8');
+    gatewayRpcCall.mockImplementation(async (method: string) => method === 'cron.list' ? { jobs: [] } : { ok: true });
+    const response = await app.request('/api/crons');
+    expect(response.status).toBe(502);
+  });
+
   it('preserves extra cron fields when creating a cron', async () => {
     const { app, invokeGatewayTool } = await buildApp();
 
@@ -106,6 +150,8 @@ describe('cron routes', () => {
           thinkingLevel: 'medium',
           failureAlerts: 'off',
           bestEffortDelivery: true,
+          availableOnPhone: true,
+          phoneSelectable: true,
         },
       }),
     });
@@ -133,6 +179,8 @@ describe('cron routes', () => {
     expect(gatewayJob).not.toHaveProperty('lightContext');
     expect(gatewayJob).not.toHaveProperty('failureAlerts');
     expect(gatewayJob).not.toHaveProperty('bestEffortDelivery');
+    expect(gatewayJob).not.toHaveProperty('availableOnPhone');
+    expect(gatewayJob).not.toHaveProperty('phoneSelectable');
   });
 
   it('moves top-level thinkingLevel into the payload before saving', async () => {

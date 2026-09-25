@@ -106,7 +106,7 @@ describe('Jane mobile cron control', () => {
     expect(gatewayCall.mock.calls.filter(([method]) => method === 'cron.update')).toHaveLength(15);
   });
 
-  it('fails closed when a live allowlisted name changes', async () => {
+  it('keeps selected cron identity when a job is renamed', async () => {
     const changed = jobs();
     changed[0].name = 'Unexpected renamed job';
     const gatewayCall = vi.fn(async (method: string) => {
@@ -116,16 +116,12 @@ describe('Jane mobile cron control', () => {
     const controller = createJaneMobileCronController(gatewayCall as never);
     const frames: Record<string, unknown>[] = [];
 
-    controller.handle(request('set-1', 'nerve.cron.group.setEnabled', {
-      enabled: true,
-      idempotencyKey: 'changed-group-key',
-    }), false, (frame) => frames.push(JSON.parse(frame)));
+    controller.handle(request('status-rename', 'nerve.cron.group.status', {}), false, (frame) => frames.push(JSON.parse(frame)));
     await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'res')).toBe(true));
 
-    expect(frames.find((frame) => frame.type === 'res')).toMatchObject({
-      ok: false,
-      error: { code: 'cron_group_changed' },
-    });
+    expect(frames.find((frame) => frame.type === 'res')).toMatchObject({ ok: true, payload: { available: true } });
+    expect((frames.find((frame) => frame.type === 'res')?.payload as { jobs: Array<{ name: string }> }).jobs[0]?.name)
+      .toBe('Unexpected renamed job');
     expect(gatewayCall).toHaveBeenCalledTimes(1);
   });
 });

@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { config } from '../lib/config.js';
 import { invokeGatewayTool } from '../lib/gateway-client.js';
 import { gatewayRpcCall } from '../lib/gateway-rpc.js';
+import { getPhoneCronSelection, setPhoneCronSelection } from '../lib/jane-mobile-cron-control.js';
 import { rateLimitGeneral } from '../middleware/rate-limit.js';
 
 const scheduleSchema = z.union([
@@ -129,6 +130,8 @@ const CRON_READONLY_KEYS = new Set([
   'lastDeliveryError',
   'lastFailureNotificationDeliveryStatus',
   'clearAgentOverride',
+  'availableOnPhone',
+  'phoneSelectable',
 ]);
 
 type CronMutationInput = {
@@ -491,10 +494,35 @@ app.get('/api/crons', rateLimitGeneral, async (c) => {
     const jobs = getCronJobsFromResult(result);
     const localFallbackJobs = await mergeLocalCronFallbackIntoJobs(jobs);
     const mergedJobs = localFallbackJobs.length > 0 ? await mergeManualRunStateIntoJobs(localFallbackJobs) : localFallbackJobs;
-    return c.json({ ok: true, result: replaceCronJobsInResult(result, mergedJobs) });
+    const selected = new Set(await getPhoneCronSelection());
+    const phoneJobs = mergedJobs.map((job) => ({
+      ...job,
+      availableOnPhone: selected.has(String(job.id || job.jobId || '')),
+      phoneSelectable: job.declarationKey == null && job.systemOwned !== true,
+    }));
+    return c.json({ ok: true, result: replaceCronJobsInResult(result, phoneJobs) });
   } catch (err) {
     console.error('[crons] list error:', (err as Error).message);
     return c.json({ ok: false, error: (err as Error).message }, 502);
+  }
+});
+
+app.post('/api/crons/:id/phone-selection', rateLimitGeneral, async (c) => {
+  const id = c.req.param('id');
+  try {
+    const body = await c.req.json() as { available?: unknown };
+    if (typeof body.available !== 'boolean') return c.json({ ok: false, error: 'available must be a boolean' }, 400);
+    const result = await gatewayRpcCall('cron.list', { includeDisabled: true }, GATEWAY_RUN_TIMEOUT_MS);
+    const job = getCronJobsFromResult(result).find((entry) => String(entry.id || entry.jobId || '') === id);
+    if (!job) return c.json({ ok: false, error: 'Cron job not found' }, 404);
+    if (job.declarationKey != null || job.systemOwned === true) {
+      return c.json({ ok: false, error: 'This cron cannot be selected for phone control' }, 403);
+    }
+    const jobIds = await setPhoneCronSelection(id, body.available);
+    return c.json({ ok: true, availableOnPhone: jobIds.includes(id) });
+  } catch (err) {
+    console.error('[crons] phone selection error:', (err as Error).message);
+    return c.json({ ok: false, error: 'Phone cron selection could not be saved' }, 500);
   }
 });
 
@@ -537,6 +565,11 @@ app.delete('/api/crons/:id', rateLimitGeneral, async (c) => {
     const result = await gatewayRpcCall('cron.remove', {
       jobId: id,
     }, GATEWAY_RUN_TIMEOUT_MS);
+    try {
+      await setPhoneCronSelection(id, false);
+    } catch (selectionError) {
+      console.warn('[crons] removed job phone selection cleanup failed:', (selectionError as Error).message);
+    }
     return c.json({ ok: true, result });
   } catch (err) {
     console.error('[crons] remove error:', (err as Error).message);

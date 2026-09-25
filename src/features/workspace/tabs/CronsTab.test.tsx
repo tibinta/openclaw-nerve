@@ -14,6 +14,7 @@ const mockUseCrons = vi.fn(() => ({
   addJob: vi.fn(),
   updateJob: vi.fn(),
   deleteJob: vi.fn(),
+  setAvailableOnPhone: vi.fn(async () => true),
 }));
 
 vi.mock('../hooks/useCrons', () => ({
@@ -55,6 +56,7 @@ describe('CronsTab', () => {
       addJob: vi.fn(),
       updateJob: vi.fn(),
       deleteJob: vi.fn(),
+      setAvailableOnPhone: vi.fn(async () => true),
     });
 
     render(<CronsTab />);
@@ -79,6 +81,7 @@ describe('CronsTab', () => {
           everyMs: 300000,
           payloadKind: 'agentTurn',
           message: 'Check inbox',
+          availableOnPhone: true,
         },
         {
           id: 'off-1',
@@ -88,6 +91,7 @@ describe('CronsTab', () => {
           everyMs: 86400000,
           payloadKind: 'systemEvent',
           message: 'Send summary',
+          availableOnPhone: false,
         },
       ],
       isLoading: false,
@@ -100,6 +104,7 @@ describe('CronsTab', () => {
       addJob: vi.fn(),
       updateJob: vi.fn(),
       deleteJob: vi.fn(),
+      setAvailableOnPhone: vi.fn(async () => true),
     });
 
     render(<CronsTab />);
@@ -108,5 +113,7 @@ describe('CronsTab', () => {
     expect(screen.getAllByText('Off').length).toBeGreaterThan(0);
     expect(screen.getByText('Morning digest')).toBeInTheDocument();
     expect(screen.getByText('Nightly summary')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Available on phone: Morning digest' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Available on phone: Nightly summary' })).not.toBeChecked();
   });
 });
