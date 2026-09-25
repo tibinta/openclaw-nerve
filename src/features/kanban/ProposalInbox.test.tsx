@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProposalInbox } from './ProposalInbox';
 import type { KanbanTask } from './types';
@@ -22,6 +22,16 @@ function makeTask(overrides: Partial<KanbanTask>): KanbanTask {
 }
 
 describe('ProposalInbox suggested tasks section', () => {
+  it('shows the action error when a failed decision restores a row', () => {
+    render(<ProposalInbox proposals={[{
+      id: 'retry-me', type: 'create', payload: { title: 'Retry me' }, proposedBy: 'agent:codex',
+      proposedAt: Date.now(), status: 'pending', version: 1, actionError: 'Could not approve. Try again.',
+    }]} onApprove={vi.fn()} onReject={vi.fn()} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not approve. Try again.');
+    expect(screen.getByRole('button', { name: 'Approve proposal' })).toBeEnabled();
+  });
+
   it('shows direct proposals first and keeps background proposals collapsed with a count', () => {
     const direct: KanbanProposal = {
       id: 'direct', type: 'create', payload: { title: 'Direct proposal' }, proposedBy: 'agent:codex',
@@ -45,7 +55,7 @@ describe('ProposalInbox suggested tasks section', () => {
       proposedAt: Date.now(), status: 'pending', version: 1,
     };
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const rejectBackground = vi.fn(async (_ids: string[]) => 1);
+    const rejectBackground = vi.fn(async () => 1);
 
     render(
       <ProposalInbox
@@ -85,7 +95,7 @@ describe('ProposalInbox suggested tasks section', () => {
     );
   });
 
-  it('keeps proposal context in one compact row until VIEW (CONV) is clicked', () => {
+  it('keeps proposal context in one compact row until VIEW (CONV) is clicked', async () => {
     const proposal: KanbanProposal = {
       id: 'proposal-1',
       type: 'create',
@@ -111,7 +121,7 @@ describe('ProposalInbox suggested tasks section', () => {
     expect(screen.getByText(/due in two weeks/)).toBeInTheDocument();
     expect(screen.getByText(/We should do this in two weeks/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Approve proposal' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Approve proposal' })); });
     expect(onApprove).toHaveBeenCalledWith('proposal-1');
   });
 

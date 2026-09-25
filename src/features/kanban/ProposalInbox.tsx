@@ -94,7 +94,7 @@ function ProposalSummary({ proposal }: { proposal: KanbanProposal }) {
 }
 
 /* ── Single proposal row ── */
-function ProposalRow({
+const ProposalRow = memo(function ProposalRow({
   proposal,
   onApprove,
   onReject,
@@ -111,18 +111,24 @@ function ProposalRow({
     && !(description.includes('Conversation ID:') && (description.includes('Context:') || description.includes('Relevant excerpt:')));
 
   const handleApprove = async () => {
+    if (acting) return;
     setActing(true);
     try {
       await onApprove(proposal.id);
+    } catch {
+      // The hook restores this row with a visible action error.
     } finally {
       setActing(false);
     }
   };
 
   const handleReject = async () => {
+    if (acting) return;
     setActing(true);
     try {
       await onReject(proposal.id);
+    } catch {
+      // The hook restores this row with a visible action error.
     } finally {
       setActing(false);
     }
@@ -140,6 +146,12 @@ function ProposalRow({
       {missingOmniContext && (
         <p className="text-[0.667rem] leading-relaxed text-orange sm:max-w-48">
           Full source context is unavailable. Recreate this suggestion from Omni Brain before approval.
+        </p>
+      )}
+
+      {proposal.actionError && (
+        <p role="alert" className="text-[0.733rem] text-destructive sm:max-w-44">
+          {proposal.actionError}
         </p>
       )}
 
@@ -171,7 +183,7 @@ function ProposalRow({
       </div>
     </div>
   );
-}
+});
 
 /* ── Label badge (omnibrain gets a distinct tone) ── */
 function LabelBadge({ label }: { label: string }) {
