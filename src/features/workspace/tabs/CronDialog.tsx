@@ -33,6 +33,14 @@ const CRON_READONLY_KEYS = new Set([
   'lastStatus',
   'lastError',
   'lastDeliveryStatus',
+  'scheduledToolPolicy',
+  'configRevision',
+  'nextRunAtMs',
+  'lastRunAtMs',
+  'lastRunStatus',
+  'lastDelivered',
+  'lastDeliveryError',
+  'lastFailureNotificationDeliveryStatus',
 ]);
 
 interface CronFormState {
