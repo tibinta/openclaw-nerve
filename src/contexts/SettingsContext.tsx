@@ -288,8 +288,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(VOICE_UNLOCK_STORAGE_KEY, 'true');
     setSoundEnabled(true);
     localStorage.setItem('oc-sound', 'true');
-    setVoiceReadbackEnabled(true);
-    localStorage.setItem(VOICE_READBACK_STORAGE_KEY, 'true');
     return ok;
   }, []);
 
