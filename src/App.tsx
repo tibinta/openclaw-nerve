@@ -235,7 +235,7 @@ export default function App({ onLogout }: AppProps) {
       // ignore storage errors and fall back to desktop default
     }
 
-    return false;
+    return true;
   })();
 
   // File browser collapse state for mobile optimization
