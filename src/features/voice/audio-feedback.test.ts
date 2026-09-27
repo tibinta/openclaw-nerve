@@ -70,13 +70,10 @@ describe('audio-feedback', () => {
   });
 
   describe('preloading', () => {
-    it('should fetch all 4 sound files on module load', () => {
+    it('should preload only retained sound effects on module load', () => {
       const fetchCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
       const urls = fetchCalls.map((c: string[]) => c[0]);
-      expect(urls).toContain('/sounds/wake.mp3');
-      expect(urls).toContain('/sounds/send.ogg');
-      expect(urls).toContain('/sounds/cancel.ogg');
-      expect(urls).toContain('/sounds/notify.ogg');
+      expect(urls).toEqual(['/sounds/cancel.ogg', '/sounds/notify.ogg']);
     });
 
     it('should decode audio data for each file', () => {
@@ -85,25 +82,16 @@ describe('audio-feedback', () => {
   });
 
   describe('playWakePing', () => {
-    it('should create a buffer source and start it', () => {
+    it('should keep the API callable without playing prerecorded audio', () => {
       playWakePing();
-      expect(mockCreateBufferSource).toHaveBeenCalled();
-      expect(mockConnect).toHaveBeenCalled();
-      expect(mockStart).toHaveBeenCalledWith(0);
-    });
-
-    it('should use default playbackRate of 1', () => {
-      playWakePing();
-      const source = mockCreateBufferSource.mock.results[0].value;
-      expect(source.playbackRate.value).toBe(1);
+      expect(mockCreateBufferSource).not.toHaveBeenCalled();
     });
   });
 
   describe('playSubmitPing', () => {
-    it('should create a buffer source and start it', () => {
+    it('should keep the API callable without playing prerecorded audio', () => {
       playSubmitPing();
-      expect(mockCreateBufferSource).toHaveBeenCalled();
-      expect(mockStart).toHaveBeenCalledWith(0);
+      expect(mockCreateBufferSource).not.toHaveBeenCalled();
     });
   });
 
@@ -124,11 +112,10 @@ describe('audio-feedback', () => {
   });
 
   describe('multiple plays', () => {
-    it('should create a new buffer source each time (not singleton)', () => {
+    it('should not create audio sources for the disabled wake confirmation', () => {
       playWakePing();
       playWakePing();
-      // AudioBufferSourceNode is one-shot — new source per play
-      expect(mockCreateBufferSource).toHaveBeenCalledTimes(2);
+      expect(mockCreateBufferSource).not.toHaveBeenCalled();
     });
   });
 
