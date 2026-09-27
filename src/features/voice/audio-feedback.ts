@@ -35,21 +35,7 @@ function preloadSound(path: string): Promise<AudioBuffer | null> {
   return promise;
 }
 
-function numberedSoundPaths(prefix: string, count: number): string[] {
-  return Array.from({ length: count }, (_, index) => `${prefix}-${String(index + 1).padStart(3, '0')}.mp3`);
-}
-
-// Short spoken confirmations. Keep the legacy single files last as safe fallbacks.
-const WAKE_CONFIRM_PATHS = [
-  ...numberedSoundPaths('/sounds/wake-confirmations/wake', 120),
-  '/sounds/wake-alex.mp3',
-  '/sounds/wake.mp3',
-];
-const SEND_CONFIRM_PATHS = [
-  ...numberedSoundPaths('/sounds/send-confirmations/send', 120),
-  '/sounds/send.ogg',
-];
-const SOUND_PATHS = [...WAKE_CONFIRM_PATHS, ...SEND_CONFIRM_PATHS, '/sounds/cancel.ogg', '/sounds/notify.ogg'];
+const SOUND_PATHS = ['/sounds/cancel.ogg', '/sounds/notify.ogg'];
 if (typeof window !== 'undefined') {
   SOUND_PATHS.forEach(p => void preloadSound(p));
 }
@@ -82,12 +68,6 @@ function playSound(path: string, playbackRate = 1): AudioFeedbackPlayback {
   }
 }
 
-function pickLoaded(paths: string[], fallback: string): string {
-  const loaded = paths.filter((path) => bufferCache.has(path));
-  if (loaded.length === 0) return fallback;
-  return loaded[Math.floor(Math.random() * loaded.length)] || fallback;
-}
-
 /** Initialize or resume the AudioContext (call on user interaction to unlock). */
 export function ensureAudioContext(): void {
   try {
@@ -116,14 +96,14 @@ export async function unlockBrowserAudio(): Promise<boolean> {
   }
 }
 
-/** Play ascending ping when wake-word is detected. */
+/** Kept for callers that still expect the wake-feedback API. */
 export function playWakePing(): AudioFeedbackPlayback {
-  return playSound(pickLoaded(WAKE_CONFIRM_PATHS, '/sounds/wake.mp3'));
+  return { played: false, path: '', durationMs: 0 };
 }
 
-/** Play confirmation sound when voice input is submitted. */
+/** Kept for callers that still expect the submit-feedback API. */
 export function playSubmitPing(): AudioFeedbackPlayback {
-  return playSound(pickLoaded(SEND_CONFIRM_PATHS, '/sounds/send.ogg'));
+  return { played: false, path: '', durationMs: 0 };
 }
 
 /** Play cancel sound when voice input is cancelled. */
