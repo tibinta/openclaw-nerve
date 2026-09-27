@@ -28,8 +28,8 @@ function preloadSound(path: string): Promise<AudioBuffer | null> {
   return promise;
 }
 
-// Preload all sound effects on module load (OGG/Opus — no MP3 encoder delay artifacts)
-const SOUND_PATHS = ['/sounds/wake.mp3', '/sounds/send.ogg', '/sounds/cancel.ogg', '/sounds/notify.ogg'];
+// Preload retained sound effects only.
+const SOUND_PATHS = ['/sounds/cancel.ogg', '/sounds/notify.ogg'];
 if (typeof window !== 'undefined') {
   SOUND_PATHS.forEach(p => void preloadSound(p));
 }
@@ -68,14 +68,12 @@ export function ensureAudioContext(): void {
   }
 }
 
-/** Play ascending ping when wake-word is detected. */
+/** Kept for callers that still expect the wake-feedback API. */
 export function playWakePing(): void {
-  playSound('/sounds/wake.mp3');
 }
 
-/** Play confirmation sound when voice input is submitted. */
+/** Kept for callers that still expect the submit-feedback API. */
 export function playSubmitPing(): void {
-  playSound('/sounds/send.ogg');
 }
 
 /** Play cancel sound when voice input is cancelled. */
